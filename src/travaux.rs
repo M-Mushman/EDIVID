@@ -9,7 +9,9 @@ use serde_json::json;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::carte;
+use crate::courriel;
 use crate::decoupe;
+use crate::drive;
 use crate::etat::EtatPartage;
 use crate::llm;
 use crate::modele::{nouvel_id, EtatRush};
@@ -133,6 +135,31 @@ async fn echec(etat: &EtatPartage, t: &Travail, message: &str) {
             .await;
     }
     etat.emettre(&t.projet, "erreur", json!({"travail": t.genre.libelle(), "message": message}));
+    if let Ok(p) = etat.projet(&t.projet).await {
+        courriel::prevenir(etat, "erreur", &p, &format!("{} : {message}", t.genre.libelle())).await;
+    }
+}
+
+/// Dépose le rendu sur le Drive (si demandé), puis prévient par courriel ; sans bloquer la file.
+pub fn apres_rendu(etat: &EtatPartage, projet: &str, deposer: bool) {
+    let (etat, projet) = (etat.clone(), projet.to_string());
+    tokio::spawn(async move {
+        if deposer {
+            match drive::deposer(&etat, &projet).await {
+                Ok(chemin) => etat.emettre(&projet, "drive", json!({"chemin": chemin})),
+                Err(e) => {
+                    let message = format!("dépôt sur le Google Drive : {e:#}");
+                    etat.emettre(&projet, "erreur", json!({"travail": "Dépôt sur le Drive", "message": message}));
+                    if let Ok(p) = etat.projet(&projet).await {
+                        courriel::prevenir(&etat, "erreur", &p, &message).await;
+                    }
+                }
+            }
+        }
+        if let Ok(p) = etat.projet(&projet).await {
+            courriel::prevenir(&etat, "rendu", &p, "").await;
+        }
+    });
 }
 
 async fn etat_rush(etat: &EtatPartage, projet: &str, rush: &str, e: EtatRush) -> Result<()> {
@@ -187,6 +214,11 @@ async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
             res?;
             etat.oublier_analyse(projet, rush).await;
             etat_rush(etat, projet, rush, EtatRush::Pret).await?;
+            // Chaîne automatique (projet venu du Drive) : le montage part dès que tout est analysé.
+            let p = etat.projet(projet).await?;
+            if p.auto.is_some() && p.montage.is_none() && p.rushs.iter().all(|r| r.etat == EtatRush::Pret) {
+                etat.file.ajouter(etat, projet, Genre::Monter);
+            }
         }
         Genre::Monter => {
             let p = etat.projet(projet).await?;
@@ -202,7 +234,11 @@ async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
                 bail!("aucune parole trouvée dans les rushs");
             }
             let montage = llm::monter(etat, &p, &ps).await?;
-            etat.modifier(projet, |p| p.montage = Some(montage)).await?;
+            etat.modifier(projet, |p| {
+                p.montage = Some(montage);
+                p.notifier_montage = true;
+            })
+            .await?;
             etat.file.ajouter(etat, projet, Genre::Apercu);
         }
         Genre::Apercu | Genre::Rendu => {
@@ -217,6 +253,17 @@ async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
             })
             .await?;
             etat.emettre(projet, "fini", json!({"genre": if apercu { "apercu" } else { "rendu" }}));
+            let p = etat.projet(projet).await?;
+            if apercu && p.notifier_montage {
+                etat.modifier(projet, |p| p.notifier_montage = false).await?;
+                match &p.auto {
+                    Some(a) if a.rendu_final => etat.file.ajouter(etat, projet, Genre::Rendu),
+                    _ => courriel::prevenir(etat, "montage", &p, "").await,
+                }
+            } else if !apercu {
+                let deposer = p.auto.as_ref().map(|a| a.deposer_drive).unwrap_or(false);
+                apres_rendu(etat, projet, deposer);
+            }
         }
     }
     Ok(())

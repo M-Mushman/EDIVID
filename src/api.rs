@@ -19,7 +19,11 @@ use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::acces;
+use crate::bibliotheque;
+use crate::courriel;
 use crate::decoupe;
+use crate::drive;
+use crate::parametres;
 use crate::etat::EtatPartage;
 use crate::llm;
 use crate::modele::{maintenant, nouvel_id, Decision, Echange, EtatRush, Incrustation, Media, Montage, Projet, Rush};
@@ -74,6 +78,15 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/discussion", post(discuter))
         .route("/api/projets/{id}/sorties/{nom}", get(fichier_sortie))
         .route("/api/projets/{id}/evenements", get(evenements))
+        .route("/api/projets/{id}/consignes", post(changer_consignes))
+        .route("/api/projets/{id}/coulisses", get(coulisses))
+        .route("/api/projets/{id}/drive", post(envoyer_drive))
+        .route("/api/parametres", get(voir_parametres).post(changer_parametres))
+        .route("/api/parametres/courriel/essai", post(essai_courriel))
+        .route("/api/parametres/drive/verifier", post(verifier_drive))
+        .route("/api/parametres/drive/maintenant", post(passage_drive))
+        .route("/api/bibliotheque", get(voir_bibliotheque).post(ajouter_demande))
+        .route("/api/bibliotheque/{did}", delete(retirer_demande))
         .merge(televersement)
         .fallback_service(ServeDir::new(&web).fallback(ServeFile::new(web.join("index.html"))))
         .layer(middleware::from_fn_with_state(etat.clone(), acces::garde))
@@ -98,7 +111,8 @@ async fn liste_projets(State(etat): State<EtatPartage>) -> Json<Value> {
     let mut v: Vec<&Projet> = projets.values().collect();
     v.sort_by(|a, b| b.cree.cmp(&a.cree));
     Json(json!(v.iter().map(|p| json!({"id": p.id, "nom": p.nom, "cree": p.cree, "rushs": p.rushs.len(),
-        "monte": p.montage.is_some(), "rendu": p.rendu.is_some()})).collect::<Vec<_>>()))
+        "monte": p.montage.is_some(), "rendu": p.rendu.is_some(), "origine": p.origine,
+        "drive": p.depot_drive.is_some()})).collect::<Vec<_>>()))
 }
 
 #[derive(Deserialize)]
@@ -120,6 +134,11 @@ async fn creer_projet(State(etat): State<EtatPartage>, Json(n): Json<Nom>) -> Re
         discussion: vec![],
         apercu: None,
         rendu: None,
+        consignes: String::new(),
+        auto: None,
+        notifier_montage: false,
+        depot_drive: None,
+        origine: String::new(),
     };
     etat.enregistrer(&p).await?;
     let id = p.id.clone();
@@ -635,4 +654,111 @@ async fn evenements(State(etat): State<EtatPartage>, Path(id): Path<String>)
         }
     });
     Sse::new(flux).keep_alive(KeepAlive::default())
+}
+
+// ---------------------------------------------------------------- consignes, coulisses, Drive du projet
+
+#[derive(Deserialize)]
+struct Texte {
+    texte: String,
+}
+
+async fn changer_consignes(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(t): Json<Texte>) -> Reponse {
+    let texte: String = t.texte.trim().chars().take(4000).collect();
+    etat.modifier(&id, |p| p.consignes = texte).await?;
+    Ok(Json(json!({})))
+}
+
+/// Les consignes réellement envoyées au LLM, pour les lire et s'en inspirer.
+async fn coulisses(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    Ok(Json(json!({
+        "monteur": llm::consigne_monteur(&p, p.rushs.len() > 1),
+        "critique": llm::CONSIGNE_CRITIQUE,
+        "assistant": llm::CONSIGNE_DISCUSSION,
+    })))
+}
+
+async fn envoyer_drive(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    if p.rendu.is_none() {
+        return Err(refus("lancez d'abord le rendu final"));
+    }
+    let e = etat.clone();
+    tokio::spawn(async move {
+        match drive::deposer(&e, &id).await {
+            Ok(chemin) => e.emettre(&id, "drive", json!({"chemin": chemin})),
+            Err(err) => e.emettre(&id, "erreur", json!({"travail": "Envoi sur le Drive", "message": format!("{err:#}")})),
+        }
+    });
+    Ok(Json(json!({})))
+}
+
+// ---------------------------------------------------------------- paramètres
+
+async fn voir_parametres(State(etat): State<EtatPartage>) -> Json<Value> {
+    let p = etat.parametres.read().await.clone();
+    let mut v = parametres::vue(&p);
+    v["etat_drive"] = drive::vue(&etat);
+    v["nvenc"] = json!(etat.nvenc);
+    Json(v)
+}
+
+async fn changer_parametres(State(etat): State<EtatPartage>, Json(recu): Json<Value>) -> Reponse {
+    let nouveau = {
+        let actuels = etat.parametres.read().await.clone();
+        parametres::fusionner(&actuels, &recu)?
+    };
+    parametres::enregistrer(&etat.cfg.donnees, &nouveau)?;
+    *etat.parametres.write().await = nouveau.clone();
+    etat.drive.reveil.notify_one();
+    Ok(Json(parametres::vue(&nouveau)))
+}
+
+async fn essai_courriel(State(etat): State<EtatPartage>) -> Reponse {
+    let p = etat.parametres.read().await.clone();
+    courriel::envoyer(&p.courriel, "EDIVID — courriel d'essai",
+                      &format!("Bonjour,\n\nCe courriel confirme qu'EDIVID sait vous prévenir. Vous recevrez un message \
+                                quand un montage ou une vidéo finale sera prête.\n\n{}\n\n— EDIVID", p.url_publique))
+        .await?;
+    Ok(Json(json!({"message": format!("Courriel envoyé à {}", p.courriel.destinataires.join(", "))})))
+}
+
+async fn verifier_drive(State(etat): State<EtatPartage>) -> Reponse {
+    let d = etat.parametres.read().await.drive.clone();
+    let message = drive::verifier(&d).await?;
+    Ok(Json(json!({"message": message})))
+}
+
+async fn passage_drive(State(etat): State<EtatPartage>) -> Reponse {
+    if !etat.parametres.read().await.drive.actif {
+        return Err(refus("activez d'abord la veille du Drive"));
+    }
+    etat.drive.reveil.notify_one();
+    Ok(Json(json!({})))
+}
+
+// ---------------------------------------------------------------- bibliothèque
+
+async fn voir_bibliotheque(State(etat): State<EtatPartage>) -> Json<Value> {
+    Json(json!({"integree": bibliotheque::integree(), "perso": bibliotheque::perso(&etat.cfg.donnees)}))
+}
+
+#[derive(Deserialize)]
+struct NouvelleDemande {
+    titre: String,
+    texte: String,
+}
+
+async fn ajouter_demande(State(etat): State<EtatPartage>, Json(d): Json<NouvelleDemande>) -> Reponse {
+    if d.texte.trim().is_empty() {
+        return Err(refus("la demande est vide"));
+    }
+    let titre = if d.titre.trim().is_empty() { d.texte.chars().take(40).collect::<String>() } else { d.titre };
+    Ok(Json(json!(bibliotheque::ajouter(&etat.cfg.donnees, &titre, &d.texte)?)))
+}
+
+async fn retirer_demande(State(etat): State<EtatPartage>, Path(did): Path<String>) -> Reponse {
+    bibliotheque::retirer(&etat.cfg.donnees, &did)?;
+    Ok(Json(json!({})))
 }

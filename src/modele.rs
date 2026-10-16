@@ -26,6 +26,27 @@ pub struct Projet {
     pub apercu: Option<Sortie>,
     #[serde(default)]
     pub rendu: Option<Sortie>,
+    /// Consignes de la personne au monteur, ajoutées à celles du LLM.
+    #[serde(default)]
+    pub consignes: String,
+    /// Chaîne automatique (projet venu du Google Drive) : jusqu'où aller sans intervention.
+    #[serde(default)]
+    pub auto: Option<Auto>,
+    /// Le prochain aperçu suit un montage complet : il donne lieu au courriel « montage prêt ».
+    #[serde(default)]
+    pub notifier_montage: bool,
+    /// Chemin du rendu déposé sur le Google Drive.
+    #[serde(default)]
+    pub depot_drive: Option<String>,
+    /// « Google Drive » pour un projet créé par la veille du dossier d'entrée.
+    #[serde(default)]
+    pub origine: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Auto {
+    pub rendu_final: bool,
+    pub deposer_drive: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

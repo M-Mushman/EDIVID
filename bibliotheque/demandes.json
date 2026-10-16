@@ -1,0 +1,87 @@
+{
+  "categories": [
+    {
+      "nom": "Rythme",
+      "demandes": [
+        {"titre": "Plus nerveux", "texte": "Rends le montage plus nerveux, surtout dans [la deuxième partie].", "aide": "Coupes plus serrées et cadres qui alternent davantage."},
+        {"titre": "Laisser respirer un récit", "texte": "Laisse plus respirer le récit [du début] : c'est le moment le plus émouvant.", "aide": "Le passage passe en « respiration » : plan plus large, silences gardés."},
+        {"titre": "Casser la monotonie", "texte": "Le milieu de la vidéo est monotone : casse le rythme avec des phrases choc et des changements de cadre.", "aide": "Le LLM ajoute des impacts et varie les plans."},
+        {"titre": "Ralentir pour le public", "texte": "Ralentis un peu le rythme : le public a plus de 50 ans, il doit suivre sans s'essouffler.", "aide": "Rythme « Équilibré » ou « Ample », moins de coupes internes."}
+      ]
+    },
+    {
+      "nom": "Coupes",
+      "demandes": [
+        {"titre": "Viser une durée", "texte": "Coupe davantage : vise une vidéo d'environ [3 minutes].", "aide": "Demande un nouveau montage complet avec des coupes plus fortes."},
+        {"titre": "Retirer une digression", "texte": "Retire le passage où [elle parle de sa langue maternelle] : c'est une digression.", "aide": "Les phrases concernées sont coupées."},
+        {"titre": "Rétablir un passage", "texte": "Rétablis la phrase sur [son enfance] : elle compte pour moi.", "aide": "Une phrase coupée par le LLM revient dans le montage."},
+        {"titre": "Garder la meilleure prise", "texte": "Elle se répète au début : garde seulement la meilleure prise.", "aide": "Le LLM compare les prises et coupe les autres."},
+        {"titre": "Rester naturel", "texte": "Garde les rires et les petites hésitations naturelles, ne coupe que les vrais blancs.", "aide": "Moins de coupes d'hésitation, l'autocut des silences reste actif."}
+      ]
+    },
+    {
+      "nom": "Zooms et cadres",
+      "demandes": [
+        {"titre": "Plus sobre", "texte": "Moins de zooms, un montage plus sobre.", "aide": "Intensité des zooms abaissée."},
+        {"titre": "Gros plan sur un moment", "texte": "Mets un gros plan sur les yeux quand [elle dit que le sport l'a sauvée].", "aide": "La phrase passe en « impact », cadre sur le regard."},
+        {"titre": "Zooms plus marqués", "texte": "Fais des zooms plus marqués sur les phrases choc.", "aide": "Intensité des zooms « Fort »."},
+        {"titre": "Pas de très gros plans", "texte": "Pas de très gros plans sur les yeux dans cette vidéo.", "aide": "Le cadre « yeux » est désactivé."}
+      ]
+    },
+    {
+      "nom": "Structure et accroche",
+      "demandes": [
+        {"titre": "Discuter l'accroche", "texte": "Pourquoi as-tu choisi cette accroche ? Propose-m'en une plus forte.", "aide": "Le LLM explique son choix et peut en proposer un autre."},
+        {"titre": "Imposer l'accroche", "texte": "Ouvre la vidéo avec la phrase « [le sport, c'est la vie] ».", "aide": "Nouveau montage avec cette accroche."},
+        {"titre": "Changer de ton", "texte": "Refais le montage complet avec un ton plus [chaleureux].", "aide": "Nouveau montage : chaleureux, énergique, sérieux, drôle…"},
+        {"titre": "Revoir les parties", "texte": "Redécoupe les parties de la vidéo et donne-leur des titres plus courts.", "aide": "Nouveau montage des chapitres et de leurs titres."}
+      ]
+    },
+    {
+      "nom": "Son et musique",
+      "demandes": [
+        {"titre": "Ajouter une musique", "texte": "Ajoute [musique.mp3] en musique de fond, discrète.", "aide": "Le son doit être dans l'onglet Médias. Il baisse tout seul sous la voix."},
+        {"titre": "Monter la musique", "texte": "Monte un peu la musique, elle est trop discrète.", "aide": "Volume de la musique relevé."},
+        {"titre": "Enlever un souffle", "texte": "Il y a un souffle dans le son : réduis fortement le bruit.", "aide": "Réduction du bruit « Forte »."},
+        {"titre": "Adoucir les « s »", "texte": "La voix siffle sur les « s » : adoucis-les.", "aide": "Dé-esseur activé."},
+        {"titre": "Voix seule", "texte": "Coupe la musique, garde seulement la voix.", "aide": "Musique de fond retirée."}
+      ]
+    },
+    {
+      "nom": "Effets et incrustations",
+      "demandes": [
+        {"titre": "Poser un GIF", "texte": "Mets le GIF [etoile.gif] en haut à droite quand elle parle [du cinéma avec sa fille].", "aide": "Le GIF doit être dans l'onglet Médias."},
+        {"titre": "Secousse comique", "texte": "Ajoute une secousse comique sur une phrase drôle de ton choix.", "aide": "Effet intégré, aucun média nécessaire."},
+        {"titre": "Moment dramatique", "texte": "Passe en noir et blanc le moment où [elle parle de ses blessures].", "aide": "Effet intégré, le temps de la phrase."},
+        {"titre": "Mème sur fond vert", "texte": "Pose la vidéo [meme.mp4] en plein écran pendant 2 secondes après [la chute], en retirant le fond vert.", "aide": "Pour les effets filmés sur fond vert."},
+        {"titre": "Tout retirer", "texte": "Retire toutes les incrustations.", "aide": "La vidéo revient sans effets posés."}
+      ]
+    },
+    {
+      "nom": "Formats et image",
+      "demandes": [
+        {"titre": "Version YouTube", "texte": "Fais une version horizontale pour YouTube.", "aide": "Format 16:9, le cadre suit le visage."},
+        {"titre": "Version Shorts", "texte": "Passe en vertical pour les Shorts et resserre à environ [60 secondes].", "aide": "Format 9:16 et nouveau montage plus court."},
+        {"titre": "Image plus chaude", "texte": "Donne une couleur plus chaude à l'image.", "aide": "Filtre « Chaud »."},
+        {"titre": "Sous-titres sobres", "texte": "Sous-titres plus sobres, en bas de l'image.", "aide": "Style « Sobre », position basse."}
+      ]
+    },
+    {
+      "nom": "Comprendre",
+      "demandes": [
+        {"titre": "Le montage expliqué", "texte": "Explique-moi en trois phrases comment tu as monté cette vidéo.", "aide": "Le LLM raconte ses choix ; rien ne change."},
+        {"titre": "La phrase la plus forte", "texte": "Quelle est la phrase la plus forte de la vidéo, selon toi ?", "aide": "Utile pour choisir une accroche ou une miniature."},
+        {"titre": "Ce qui fait décrocher", "texte": "Qu'est-ce qui pourrait faire décrocher un spectateur dans ce montage ?", "aide": "Un regard critique, avec des propositions."},
+        {"titre": "Conseil de réglages", "texte": "Quels réglages me conseilles-tu pour une vidéo de coaching ?", "aide": "Le LLM propose, puis applique si vous le lui demandez."}
+      ]
+    }
+  ],
+  "consignes": [
+    {"titre": "Coupes franches", "texte": "Coupes franches uniquement : jamais de glitch ni de fondu."},
+    {"titre": "Public de plus de 50 ans", "texte": "Public de plus de 50 ans : rythme vif mais lisible, jamais plus de deux coupes dans une même phrase."},
+    {"titre": "Garder l'humain", "texte": "Garde toujours les anecdotes personnelles, les rires et les confidences."},
+    {"titre": "Ton bienveillant", "texte": "Ton bienveillant : les impacts sur les messages d'encouragement, jamais sur les chiffres."},
+    {"titre": "Accroche en question", "texte": "Accroche : de préférence une question posée au spectateur, si la vidéo en contient une."},
+    {"titre": "Vidéo courte", "texte": "La vidéo finale ne doit pas dépasser [3 minutes] : coupe en conséquence."}
+  ]
+}

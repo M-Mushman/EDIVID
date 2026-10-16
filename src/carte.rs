@@ -17,6 +17,7 @@ use crate::etat::EtatPartage;
 pub const VRAM_LLM_MO: u64 = 13_000;
 pub const VRAM_TRANSCRIPTION_MO: u64 = 5_000;
 pub const VRAM_NETTETE_MO: u64 = 3_000;
+pub const VRAM_ENCODAGE_MO: u64 = 1_500;
 const INACTIVITE_LLM: Duration = Duration::from_secs(300);
 /// Un bail expire de lui-même à la fin de la durée annoncée : celui du LLM est renouvelé avant.
 const DUREE_BAIL_LLM_S: u64 = 1800;
@@ -91,6 +92,14 @@ impl Carte {
                 }
             }
             tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+    }
+
+    /// Une seule demande, sans attendre : pour un confort (encodage matériel), pas un besoin.
+    pub async fn essayer(&self, genre: &str, vram_mo: u64, duree_s: u64) -> Option<Bail> {
+        match self.demander(genre, vram_mo, duree_s).await {
+            Ok(Ok(bail)) => Some(bail),
+            _ => None,
         }
     }
 

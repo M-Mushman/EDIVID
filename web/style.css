@@ -394,3 +394,8 @@ select.champ { padding: 8px 10px; margin-top: 8px; }
   .lecteur.vertical { height: 70vh; }
   .barre-haut-int .masque-mobile { display: none; }
 }
+
+.pas .rond svg { width: 13px; height: 13px; }
+details summary { list-style-position: outside; }
+h1 svg, h2 svg, h3 svg { width: 20px; height: 20px; flex: none; }
+.pastille svg { width: 12px; height: 12px; }

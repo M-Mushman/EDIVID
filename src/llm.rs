@@ -62,7 +62,7 @@ fn schema_montage() -> Value {
     })
 }
 
-fn consigne_monteur(p: &Projet, plusieurs_rushs: bool) -> String {
+pub fn consigne_monteur(p: &Projet, plusieurs_rushs: bool) -> String {
     let r = &p.reglages;
     let redites = match texte(r, "coupe_redites").as_str() {
         "aucune" => "Ne coupe presque rien : seulement les phrases ratées, inaudibles ou reprises aussitôt.",
@@ -97,6 +97,7 @@ fn consigne_monteur(p: &Projet, plusieurs_rushs: bool) -> String {
     } else {
         "accroche : liste vide (désactivée)."
     };
+    let maison = consignes_maison(p);
     let rushs = if plusieurs_rushs {
         "\nLes phrases viennent de plusieurs rushs (numéro indiqué). Une même idée dite dans plusieurs prises : garde la meilleure, coupe les autres."
     } else {
@@ -126,11 +127,21 @@ Tu choisis aussi :
 - chapitres : les grandes parties, avec le numéro de la phrase où chacune commence et un titre court (2 à 5 mots).
 - notes : deux à quatre phrases courtes qui expliquent tes choix principaux, pour la personne qui monte.
 
-Réponds uniquement en JSON."
+Réponds uniquement en JSON.{maison}"
     )
 }
 
-const CONSIGNE_CRITIQUE: &str = "Tu es chef monteur. Un monteur a proposé le montage ci-dessous pour une vidéo YouTube face \
+/// Consignes de la personne, ajoutées à celles du LLM.
+fn consignes_maison(p: &Projet) -> String {
+    let c = p.consignes.trim();
+    if c.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nCONSIGNES DE LA PERSONNE QUI MONTE (à suivre en priorité, dans le respect des valeurs permises) :\n{c}")
+    }
+}
+
+pub const CONSIGNE_CRITIQUE: &str = "Tu es chef monteur. Un monteur a proposé le montage ci-dessous pour une vidéo YouTube face \
 caméra. Relis-le comme un spectateur exigeant qui décroche à la moindre monotonie, puis rends la version corrigée complète.
 
 Vérifie :
@@ -261,7 +272,7 @@ fn schema_discussion() -> Value {
     })
 }
 
-const CONSIGNE_DISCUSSION: &str = "Tu es EDIVID, l'assistant de montage vidéo. Tu parles avec la personne qui monte sa vidéo \
+pub const CONSIGNE_DISCUSSION: &str = "Tu es EDIVID, l'assistant de montage vidéo. Tu parles avec la personne qui monte sa vidéo \
 YouTube. Tu réponds en français, en deux à quatre phrases simples, sans jargon technique : tu dis ce que tu as fait et, en une \
 phrase, pourquoi c'est un bon choix de montage. Si la demande est floue, tu proposes une option concrète.
 
@@ -315,7 +326,14 @@ fn contexte(p: &Projet, ps: &[Phrase]) -> String {
             .join("\n")
     };
     let notes = p.montage.as_ref().map(|m| m.notes.join(" ")).unwrap_or_default();
-    format!("RÉGLAGES ACTUELS :\n{}\n\nMÉDIATHÈQUE :\n{medias}\n\nINCRUSTATIONS :\n{incrustations}\n\n\
+    let numero = |cle: &str| rang.get(cle).map(|r| r.to_string()).unwrap_or("?".into());
+    let accroche = p.montage.as_ref().map(|m| m.accroche.iter().map(|c| format!("[{}]", numero(c))).collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    let parties = p.montage.as_ref().map(|m| m.chapitres.iter().map(|c| format!("« {} » dès [{}]", c.titre, numero(&c.cle)))
+        .collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    let consignes = if p.consignes.trim().is_empty() { "(aucune)".to_string() } else { p.consignes.trim().to_string() };
+    format!("RÉGLAGES ACTUELS :\n{}\n\nCONSIGNES DE LA PERSONNE : {consignes}\n\nMÉDIATHÈQUE :\n{medias}\n\n\
+             INCRUSTATIONS :\n{incrustations}\n\nACCROCHE CHOISIE PAR LE LLM : {accroche}\nPARTIES : {parties}\n\
              NOTES DU DERNIER MONTAGE : {notes}\n\nPHRASES :\n{phrases}",
             reglages::pour_llm(&p.reglages))
 }

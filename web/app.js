@@ -48,6 +48,12 @@ const TRACES = {
   lune: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   baguette: '<path d="M5 19L16 8M14 6l4 4M18 3v3M21 6h-3M10 3v2M3 10h2"/>',
   alerte: '<path d="M12 3l10 18H2zM12 10v5M12 18v.01"/>',
+  engrenage: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  livre: '<path d="M4 4h6a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-6a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h7z"/>',
+  etoile: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+  nuage: '<path d="M7 18a4 4 0 0 1-.6-8 6 6 0 0 1 11.5 1.5A3.5 3.5 0 0 1 17.5 18z"/>',
+  courriel: '<path d="M4 6h16v12H4z"/><path d="M4 7l8 6 8-6"/>',
+  copier: '<path d="M9 9h11v11H9z"/><path d="M5 15H4V4h11v1"/>',
 };
 
 function icone(nom) {
@@ -178,6 +184,7 @@ async function route() {
   try { session = await api('GET', '/api/session'); } catch { session = { connecte: false }; }
   if (!session.connecte) return afficherConnexion();
   if (!E.catalogue) E.catalogue = await api('GET', '/api/catalogue');
+  if (location.hash === '#/parametres') { fermerFlux(); E.projetId = null; return afficherParametres(); }
   const m = location.hash.match(/^#\/projet\/([a-z0-9]+)/);
   if (m) return ouvrirProjet(m[1]);
   fermerFlux();
@@ -227,7 +234,8 @@ async function afficherAccueil() {
     ['Vous ajustez', 'En discutant avec lui ou d’un clic, puis vous exportez la vidéo finale.'],
   ];
   remplir($app, h('div', { class: 'accueil' },
-    h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } }, logo(), h('span', { class: 'espace' }), boutonTheme()),
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } }, logo(), h('span', { class: 'espace' }),
+      h('a', { class: 'btn petit fantome', href: '#/parametres', title: 'Courriel, Google Drive, encodage' }, icone('engrenage'), 'Paramètres'), boutonTheme()),
     h('div', { style: { display: 'flex', alignItems: 'end', justifyContent: 'space-between', gap: '12px', marginTop: '28px', flexWrap: 'wrap' } },
       h('div', {}, h('h1', {}, 'Vos projets'),
         h('p', { class: 'muet', style: { margin: '4px 0 0' } }, 'Un projet = une vidéo à monter.')),
@@ -246,7 +254,8 @@ async function afficherAccueil() {
             h('div', { class: 'pastilles' },
               h('span', { class: 'pastille' }, `${p.rushs} rush${p.rushs > 1 ? 's' : ''}`),
               p.monte ? h('span', { class: 'pastille accent' }, 'Monté') : null,
-              p.rendu ? h('span', { class: 'pastille ok' }, 'Rendu prêt') : null))))));
+              p.rendu ? h('span', { class: 'pastille ok' }, 'Rendu prêt') : null,
+              p.origine ? h('span', { class: 'pastille' }, icone('nuage'), p.origine) : null))))));
 }
 
 function nouveauProjet() {
@@ -294,6 +303,10 @@ async function ouvrirProjet(id) {
       E.progression = null;
       rafraichir();
     });
+    E.source.addEventListener('drive', (e) => {
+      toast(`Vidéo déposée sur le Google Drive : ${JSON.parse(e.data).donnees.chemin}`, 'ok');
+      rafraichir();
+    });
     E.source.addEventListener('fini', (e) => {
       const d = JSON.parse(e.data).donnees;
       E.progression = null;
@@ -302,6 +315,7 @@ async function ouvrirProjet(id) {
       rafraichir();
     });
   }
+  api('GET', '/api/parametres').then((P) => { E.driveActif = !!(P.drive.actif && P.etat_drive?.rclone); dessinerBarre(); }).catch(() => {});
   await rafraichir();
   await rafraichirEtat();
   if (!lire('edivid_guide_vu')) { stocker('edivid_guide_vu', '1'); afficherGuide(); }
@@ -350,6 +364,7 @@ function construireProjet() {
       n.nom,
       h('span', { class: 'espace' }),
       h('button', { class: 'btn petit fantome', onclick: afficherGuide, title: 'Comment ça marche' }, icone('aide'), h('span', { class: 'masque-mobile' }, 'Guide')),
+      h('a', { class: 'btn icone fantome', href: '#/parametres', title: 'Paramètres : courriel, Google Drive' }, icone('engrenage')),
       boutonTheme(),
       h('button', { class: 'btn icone fantome danger', title: 'Supprimer le projet', onclick: supprimerProjet }, icone('corbeille')))),
     n.parcours,
@@ -395,7 +410,10 @@ function dessinerParcours() {
   const actif = pas.findIndex(([, fait]) => !fait);
   remplir(E.noeuds.parcours, ...pas.map(([t, fait], i) =>
     h('div', { class: `pas ${fait ? 'fait' : ''} ${i === actif ? 'actif' : ''}` },
-      h('span', { class: 'rond' }, fait ? '✓' : i + 1), t)));
+      h('span', { class: 'rond' }, fait ? '✓' : i + 1), t)),
+  p.auto ? h('div', { class: 'pas', title: 'Projet venu du Google Drive : EDIVID enchaîne les étapes tout seul.' },
+    h('span', { class: 'rond' }, icone('nuage')), p.auto.rendu_final ? 'Automatique jusqu’au rendu' : 'Automatique jusqu’à l’aperçu') : null,
+  p.depot_drive ? h('div', { class: 'pas fait', title: p.depot_drive }, h('span', { class: 'rond' }, '✓'), 'Déposé sur le Drive') : null);
 }
 
 // ------------------------------------------------------------------ rushs
@@ -695,7 +713,11 @@ function construirePanneau() {
   n.saisie.addEventListener('input', () => { n.saisie.style.height = 'auto'; n.saisie.style.height = `${Math.min(140, n.saisie.scrollHeight)}px`; });
   n.envoyer = h('button', { class: 'btn primaire icone', title: 'Envoyer', onclick: () => envoyer() }, icone('envoyer'));
   n.suggestions = h('div', { class: 'suggestions' });
-  n.discussion = h('div', { class: 'discussion' }, n.messages, n.suggestions, h('div', { class: 'saisie' }, n.saisie, n.envoyer));
+  n.garder = h('button', { class: 'btn icone fantome', title: 'Enregistrer cette demande dans ma bibliothèque', onclick: enregistrerDemande }, icone('etoile'));
+  n.discussion = h('div', { class: 'discussion' }, n.messages, n.suggestions,
+    h('div', { class: 'saisie' },
+      h('button', { class: 'btn icone fantome', title: 'Bibliothèque de demandes', onclick: () => afficherBibliotheque() }, icone('livre')),
+      n.saisie, n.garder, n.envoyer));
   remplir(n.panneau, n.onglets, n.corpsPanneau);
 }
 
@@ -817,8 +839,31 @@ function controleReglage(r, valeur) {
   return null;
 }
 
+function sectionConsignes(corps) {
+  const p = E.vue.projet;
+  const zone = h('textarea', { class: 'champ', rows: '4', maxlength: '4000', placeholder: 'Par exemple : coupes franches, jamais de glitch ; garder les anecdotes personnelles.', style: { marginTop: '8px', resize: 'vertical' } });
+  zone.value = p.consignes || '';
+  const enregistrer = async () => {
+    if (zone.value === (E.vue.projet.consignes || '')) return;
+    try {
+      await api('POST', `/api/projets/${E.projetId}/consignes`, { texte: zone.value });
+      E.vue.projet.consignes = zone.value;
+      toast('Consignes enregistrées : elles s’appliquent au prochain montage et dans la conversation.');
+    } catch (e) { toast(e.message, 'erreur'); }
+  };
+  zone.addEventListener('blur', enregistrer);
+  const exemples = h('div', { class: 'suggestions', style: { padding: '8px 0 0' } });
+  chargerBibliotheque().then((b) => remplir(exemples, (b.integree.consignes || []).map((c) =>
+    h('button', { title: c.texte, onclick: () => { zone.value = (zone.value.trim() ? `${zone.value.trim()}\n` : '') + c.texte; enregistrer(); } }, `+ ${c.titre}`))));
+  corps.append(h('div', { class: 'section-reglages' }, h('h3', {}, 'Vos consignes au monteur'),
+    h('div', { class: 'reglage-aide' }, 'Vos préférences, en toutes lettres. Le LLM les lit à chaque montage et dans la conversation, en plus de ses propres consignes.'),
+    zone, exemples,
+    h('button', { class: 'btn petit fantome', style: { marginTop: '6px' }, onclick: afficherCoulisses }, icone('livre'), 'Voir les consignes complètes du LLM')));
+}
+
 function dessinerReglages(corps) {
   const p = E.vue.projet;
+  sectionConsignes(corps);
   const sections = [...new Set(E.catalogue.map((r) => r.section))];
   corps.append(h('div', { class: 'aide', style: { marginBottom: '14px' } }, icone('info'),
     h('span', {}, 'Chaque réglage est enregistré aussitôt. Cliquez ensuite sur « Mettre à jour l’aperçu ». Vous pouvez aussi simplement demander à l’assistant.')));
@@ -1029,7 +1074,11 @@ function dessinerBarre() {
       title: 'Pleine définition, netteté IA, son prêt pour YouTube',
       onclick: async () => { try { await api('POST', `/api/projets/${E.projetId}/rendu`); toast('Rendu final lancé. Vous pouvez continuer à travailler.'); } catch (e) { toast(e.message, 'erreur'); } },
     }, icone('film'), h('span', { class: 'long' }, 'Rendu final'), h('span', { class: 'court' }, 'Rendu')),
-    p.rendu ? h('a', { class: 'btn doux', href: `/api/projets/${E.projetId}/sorties/${p.rendu.fichier}`, download: `${p.nom}.mp4` }, icone('telecharger'), 'Télécharger') : null);
+    p.rendu ? h('a', { class: 'btn doux', href: `/api/projets/${E.projetId}/sorties/${p.rendu.fichier}`, download: `${p.nom}.mp4` }, icone('telecharger'), h('span', { class: 'long' }, 'Télécharger'), h('span', { class: 'court' }, 'Fichier')) : null,
+    p.rendu && E.driveActif ? h('button', {
+      class: 'btn doux', title: p.depot_drive ? `Déjà déposée : ${p.depot_drive}` : 'Déposer la vidéo finale dans le dossier de sortie du Drive',
+      onclick: async () => { try { await api('POST', `/api/projets/${E.projetId}/drive`); toast('Envoi sur le Google Drive…'); } catch (e) { toast(e.message, 'erreur'); } },
+    }, icone('nuage'), h('span', { class: 'long' }, p.depot_drive ? 'Redéposer sur Drive' : 'Envoyer sur Drive'), h('span', { class: 'court' }, 'Drive')) : null);
 }
 
 // ------------------------------------------------------------------ guide
@@ -1047,6 +1096,258 @@ function afficherGuide() {
       h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, t), h('p', { class: 'petit muet', style: { margin: '3px 0 0' } }, d))))),
     h('div', { class: 'aide', style: { marginTop: '14px' } }, icone('info'),
       h('span', {}, 'L’aperçu est volontairement rapide (demi-définition, sans netteté IA) : servez-vous-en pour juger le rythme. Le rendu final, plus long, soigne l’image.')),
+    h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('livre'),
+      h('span', {}, 'Le livre à côté de la saisie ouvre la bibliothèque : des demandes toutes prêtes, les vôtres, et les consignes exactes du LLM. L’étoile enregistre la demande que vous venez d’écrire.')),
+    h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('nuage'),
+      h('span', {}, 'Depuis l’iPhone : déposez la vidéo dans le dossier Google Drive « À monter ». EDIVID la monte seul et dépose le résultat dans « Montages » (Paramètres, en haut à droite).')),
     h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '16px' } },
       h('button', { class: 'btn primaire', onclick: fermer }, 'C’est parti'))), { large: true });
+}
+
+// ------------------------------------------------------------------ bibliothèque de demandes
+
+let bibliotheque = null;
+async function chargerBibliotheque(forcer = false) {
+  if (!bibliotheque || forcer) bibliotheque = await api('GET', '/api/bibliotheque');
+  return bibliotheque;
+}
+
+/** Place une demande dans la saisie ; le premier [crochet] est sélectionné, prêt à remplacer. */
+function insererDemande(texte) {
+  const n = E.noeuds;
+  E.onglet = 'assistant';
+  dessinerPanneau();
+  n.saisie.value = texte;
+  n.saisie.dispatchEvent(new Event('input'));
+  n.saisie.focus();
+  const debut = texte.indexOf('[');
+  const fin = texte.indexOf(']', debut);
+  if (debut >= 0 && fin > debut) n.saisie.setSelectionRange(debut, fin + 1);
+  else n.saisie.setSelectionRange(texte.length, texte.length);
+}
+
+function carteDemande(d, fermer, retirer) {
+  const aCompleter = /\[[^\]]+\]/.test(d.texte);
+  return h('div', { class: 'incrustation', style: { gridTemplateColumns: 'minmax(0,1fr) auto' } },
+    h('div', { style: { minWidth: 0 } },
+      h('b', { class: 'petit' }, d.titre),
+      h('div', { class: 'petit', style: { marginTop: '3px' } }, d.texte),
+      d.aide ? h('div', { class: 'tres-petit muet', style: { marginTop: '3px' } }, d.aide) : null),
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+      h('button', { class: 'btn petit doux', onclick: () => { fermer(); insererDemande(d.texte); } }, aCompleter ? 'Compléter' : 'Utiliser'),
+      !aCompleter && E.vue?.projet.montage ? h('button', { class: 'btn petit', onclick: () => { fermer(); envoyer(d.texte); } }, 'Envoyer') : null,
+      retirer ? h('button', { class: 'btn petit fantome danger', onclick: retirer }, 'Retirer') : null));
+}
+
+async function afficherBibliotheque(onglet = 'demandes') {
+  const b = await chargerBibliotheque(true);
+  fenetre('Bibliothèque de demandes', (fermer) => {
+    const zone = h('div');
+    const ongletsB = h('div', { class: 'onglets-petits', style: { marginBottom: '14px', flexWrap: 'wrap' } });
+    const dessiner = async (o) => {
+      onglet = o;
+      remplir(ongletsB, [['demandes', 'Demandes'], ['miennes', `Mes demandes (${b.perso.length})`], ['consignes', 'Consignes'], ['coulisses', 'Coulisses']].map(([v, l]) =>
+        h('button', { class: v === onglet ? 'actif' : '', onclick: () => dessiner(v) }, l)));
+      if (o === 'demandes') {
+        remplir(zone,
+          h('p', { class: 'petit muet', style: { marginTop: 0 } }, 'Des formulations qui marchent bien avec l’assistant. Les [crochets] sont à remplacer par vos mots : « Compléter » place la demande dans la saisie, le crochet sélectionné.'),
+          b.integree.categories.map((c) => h('div', { style: { marginBottom: '14px' } },
+            h('h3', { style: { margin: '0 0 8px' } }, c.nom),
+            c.demandes.map((d) => carteDemande(d, fermer)))));
+      } else if (o === 'miennes') {
+        const titre = h('input', { class: 'champ', placeholder: 'Titre (facultatif)', maxlength: '80' });
+        const texte = h('textarea', { class: 'champ', rows: '2', placeholder: 'Votre demande, telle que vous l’écririez à l’assistant', style: { marginTop: '6px' } });
+        remplir(zone,
+          h('p', { class: 'petit muet', style: { marginTop: 0 } }, 'Vos demandes enregistrées, partagées avec toutes les personnes qui utilisent EDIVID sur cet ordinateur. L’étoile à côté de la saisie enregistre la demande en cours.'),
+          b.perso.length ? b.perso.map((d) => carteDemande(d, fermer, async () => {
+            await api('DELETE', `/api/bibliotheque/${d.id}`);
+            b.perso = b.perso.filter((x) => x.id !== d.id);
+            dessiner('miennes');
+          })) : h('p', { class: 'petit muet' }, 'Aucune demande enregistrée pour l’instant.'),
+          h('div', { class: 'carte carte-corps', style: { marginTop: '10px', boxShadow: 'none' } },
+            h('h3', { style: { margin: '0 0 8px' } }, 'Ajouter une demande'), titre, texte,
+            h('button', { class: 'btn primaire petit', style: { marginTop: '8px' }, onclick: async () => {
+              try {
+                const d = await api('POST', '/api/bibliotheque', { titre: titre.value, texte: texte.value });
+                b.perso.push(d);
+                dessiner('miennes');
+              } catch (e) { toast(e.message, 'erreur'); }
+            } }, icone('plus'), 'Ajouter')));
+      } else if (o === 'consignes') {
+        remplir(zone,
+          h('p', { class: 'petit muet', style: { marginTop: 0 } }, 'Des consignes durables, à placer dans l’onglet Réglages (« Vos consignes au monteur ») : le LLM les suit à chaque montage du projet.'),
+          (b.integree.consignes || []).map((c) => h('div', { class: 'incrustation' },
+            h('div', {}, h('b', { class: 'petit' }, c.titre), h('div', { class: 'petit', style: { marginTop: '3px' } }, c.texte)),
+            E.vue ? h('button', { class: 'btn petit doux', onclick: async () => {
+              const actuelles = (E.vue.projet.consignes || '').trim();
+              const texte = (actuelles ? `${actuelles}\n` : '') + c.texte;
+              await api('POST', `/api/projets/${E.projetId}/consignes`, { texte });
+              E.vue.projet.consignes = texte;
+              toast('Consigne ajoutée au projet.', 'ok');
+            } }, 'Ajouter au projet') : null)));
+      } else {
+        remplir(zone, h('p', { class: 'muet petit' }, 'Chargement…'));
+        const c = E.projetId ? await api('GET', `/api/projets/${E.projetId}/coulisses`) : null;
+        remplir(zone,
+          h('p', { class: 'petit muet', style: { marginTop: 0 } }, 'Les consignes exactes que reçoit le LLM, à lire pour comprendre ses choix ou vous en inspirer. Celles du monteur changent avec vos réglages et vos consignes.'),
+          c ? [['Le monteur (premier montage)', c.monteur], ['Le chef monteur (relecture)', c.critique], ['L’assistant (conversation)', c.assistant]].map(([t, texte]) =>
+            h('details', { style: { marginBottom: '10px' } }, h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, t),
+              h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: '12.5px', background: 'var(--surface-2)', padding: '12px', borderRadius: '10px', marginTop: '8px' } }, texte))) : null);
+      }
+    };
+    dessiner(onglet);
+    return h('div', {}, ongletsB, zone);
+  }, { large: true });
+}
+
+function afficherCoulisses() { afficherBibliotheque('coulisses'); }
+
+function enregistrerDemande() {
+  const texte = E.noeuds.saisie.value.trim();
+  if (!texte) { toast('Écrivez d’abord une demande dans la saisie, puis enregistrez-la.'); return; }
+  fenetre('Enregistrer la demande', (fermer) => {
+    const titre = h('input', { class: 'champ', placeholder: 'Un titre court', maxlength: '80' });
+    setTimeout(() => titre.focus(), 30);
+    return h('form', { onsubmit: async (e) => {
+      e.preventDefault();
+      try { await api('POST', '/api/bibliotheque', { titre: titre.value, texte }); fermer(); toast('Demande ajoutée à votre bibliothèque.', 'ok'); }
+      catch (err) { toast(err.message, 'erreur'); }
+    } },
+    h('p', { class: 'petit muet', style: { marginTop: 0 } }, `« ${texte} »`), titre,
+    h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px' } },
+      h('button', { class: 'btn', type: 'button', onclick: fermer }, 'Annuler'),
+      h('button', { class: 'btn primaire', type: 'submit' }, 'Enregistrer')));
+  });
+}
+
+// ------------------------------------------------------------------ paramètres
+
+function champ(libelle, el, aide) {
+  return h('div', { class: 'ligne-champ' }, h('label', {}, libelle), el, aide ? h('div', { class: 'reglage-aide' }, aide) : null);
+}
+function interrupteurSimple(valeur, rappel) {
+  return h('label', { class: 'interrupteur' }, h('input', { type: 'checkbox', checked: !!valeur, onchange: (e) => rappel(e.target.checked) }), h('span'));
+}
+function ligneInterrupteur(titre, aide, valeur, rappel) {
+  return h('div', { class: 'reglage' }, h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, titre), interrupteurSimple(valeur, rappel)),
+    aide ? h('div', { class: 'reglage-aide' }, aide) : null);
+}
+function blocCommande(texte) {
+  return h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px' } },
+    h('code', { style: { flex: 1, background: 'var(--surface-2)', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', overflowX: 'auto', whiteSpace: 'nowrap' } }, texte),
+    h('button', { class: 'btn icone fantome', title: 'Copier', onclick: async () => { try { await navigator.clipboard.writeText(texte); toast('Commande copiée.'); } catch { toast('Copie impossible : sélectionnez le texte.'); } } }, icone('copier')));
+}
+
+async function afficherParametres() {
+  const P = await api('GET', '/api/parametres');
+  const projets = await api('GET', '/api/projets');
+  const c = P.courriel;
+  const d = P.drive;
+  const enregistrer = async (message = 'Paramètres enregistrés.') => {
+    try {
+      const v = await api('POST', '/api/parametres', { url_publique: P.url_publique, courriel: c, drive: d });
+      c.mot_de_passe = '';
+      c.mot_de_passe_defini = v.courriel.mot_de_passe_defini;
+      toast(message, 'ok');
+      return true;
+    } catch (e) { toast(e.message, 'erreur'); return false; }
+  };
+  const entree = (obj, cle, attrs = {}) => {
+    const el = h('input', { class: 'champ', value: obj[cle] ?? '', ...attrs });
+    el.addEventListener('input', () => { obj[cle] = attrs.type === 'number' ? Number(el.value) : el.value; });
+    return el;
+  };
+  const destinataires = h('input', { class: 'champ', value: (c.destinataires || []).join(', '), placeholder: 'vous@exemple.fr, collegue@exemple.fr' });
+  destinataires.addEventListener('input', () => { c.destinataires = destinataires.value.split(/[,;\s]+/).filter(Boolean); });
+  const securite = h('div', { class: 'segments' });
+  const dessinerSecurite = () => remplir(securite, [['ssl', 'SSL (465)'], ['starttls', 'STARTTLS (587)'], ['aucune', 'Aucune']].map(([v, l]) =>
+    h('button', { class: c.securite === v ? 'actif' : '', onclick: () => { c.securite = v; c.port = v === 'ssl' ? 465 : v === 'starttls' ? 587 : c.port; port.value = c.port; dessinerSecurite(); } }, l)));
+  const port = entree(c, 'port', { type: 'number', min: '1', max: '65535' });
+  dessinerSecurite();
+  const etatDrive = P.etat_drive?.etat || {};
+  const intervalle = h('select', { class: 'champ' }, [[60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([v, l]) =>
+    h('option', { value: v, selected: d.intervalle_s === v }, l)));
+  intervalle.addEventListener('change', () => { d.intervalle_s = Number(intervalle.value); });
+  const modele = h('select', { class: 'champ' }, h('option', { value: '' }, 'Réglages par défaut'),
+    projets.map((p) => h('option', { value: p.id, selected: d.modele === p.id }, p.nom)));
+  modele.addEventListener('change', () => { d.modele = modele.value; });
+
+  remplir($app, h('div', { class: 'accueil', style: { maxWidth: '820px' } },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
+      h('a', { class: 'btn icone fantome', href: '#/', title: 'Retour aux projets' }, icone('retour')), logo(), h('span', { class: 'espace' }), boutonTheme()),
+    h('h1', { style: { margin: '24px 0 4px' } }, 'Paramètres'),
+    h('p', { class: 'muet', style: { marginTop: 0 } }, 'Communs à tous les projets et à toutes les personnes qui utilisent EDIVID sur cet ordinateur.'),
+
+    h('div', { class: 'carte carte-corps', style: { marginTop: '16px' } },
+      h('h2', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, icone('courriel'), 'Prévenir par courriel'),
+      h('p', { class: 'petit muet' }, 'Un message quand un montage est prêt, quand la vidéo finale est prête, ou si quelque chose échoue.'),
+      ligneInterrupteur('Envoyer des courriels', null, c.actif, (v) => { c.actif = v; }),
+      champ('Destinataires', destinataires, 'Une ou plusieurs adresses, séparées par des virgules.'),
+      ligneInterrupteur('Montage prêt', 'Après le premier aperçu d’un montage par le LLM.', c.montage, (v) => { c.montage = v; }),
+      ligneInterrupteur('Vidéo finale prête', 'Après le rendu final (et son dépôt sur le Drive, s’il est prévu).', c.rendu, (v) => { c.rendu = v; }),
+      ligneInterrupteur('Problème', 'Si une analyse, un montage ou un rendu échoue.', c.erreur, (v) => { c.erreur = v; }),
+      h('details', { style: { marginTop: '12px' }, open: !c.serveur },
+        h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, 'Serveur d’envoi'),
+        h('div', { class: 'aide', style: { marginTop: '10px' } }, icone('info'),
+          h('span', {}, 'Les réglages SMTP de votre boîte mail. Par exemple chez Infomaniak : serveur mail.infomaniak.com, SSL (465), identifiant = l’adresse complète. Chez Gmail : smtp.gmail.com, SSL (465), avec un « mot de passe d’application ».')),
+        champ('Serveur', entree(c, 'serveur', { placeholder: 'mail.infomaniak.com' })),
+        champ('Sécurité', securite),
+        champ('Port', port),
+        champ('Identifiant', entree(c, 'identifiant', { autocomplete: 'off' })),
+        champ('Mot de passe', entree(c, 'mot_de_passe', { type: 'password', autocomplete: 'new-password', placeholder: c.mot_de_passe_defini ? '•••••••• (enregistré — laissez vide pour le garder)' : '' })),
+        champ('Expéditeur', entree(c, 'expediteur'), 'Tel qu’il apparaît dans la boîte de réception, par exemple « EDIVID <adresse@exemple.fr> ».')),
+      h('div', { style: { display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn primaire', onclick: () => enregistrer() }, 'Enregistrer'),
+        h('button', { class: 'btn', onclick: async () => {
+          if (!(await enregistrer('Enregistré. Envoi de l’essai…'))) return;
+          try { const r = await api('POST', '/api/parametres/courriel/essai'); toast(r.message, 'ok'); } catch (e) { toast(e.message, 'erreur'); }
+        } }, icone('courriel'), 'Envoyer un essai'))),
+
+    h('div', { class: 'carte carte-corps', style: { marginTop: '16px' } },
+      h('h2', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, icone('nuage'), 'Google Drive : monter depuis l’iPhone'),
+      h('p', { class: 'petit muet' }, 'Déposez une vidéo dans un dossier du Drive depuis l’iPhone : EDIVID la récupère, la monte, la rend, dépose la vidéo finale dans un autre dossier et vous prévient.'),
+      h('div', { class: 'guide-liste' },
+        [['Relier le compte Google (une seule fois)', h('div', {},
+          h('span', { class: 'petit muet' }, 'Dans un terminal sur azoth, lancez la commande ci-dessous, choisissez « n » (nouveau), nommez-le « gdrive », type « drive », laissez les identifiants vides, accès « 1 » (complet), puis acceptez l’ouverture du navigateur pour autoriser.'),
+          blocCommande(P.etat_drive?.rclone ? '~/.local/bin/rclone config' : 'curl https://rclone.org/install.sh | sudo bash'))],
+        ['Préparer les dossiers', h('span', { class: 'petit muet' }, 'Cliquez « Vérifier la liaison » : EDIVID crée « ' + d.entree + ' » et « ' + d.sortie + ' » sur votre Drive.')],
+        ['Envoyer depuis l’iPhone', h('span', { class: 'petit muet' }, 'App Google Drive → dossier « ' + d.entree + ' » → « + » → Importer → choisissez la vidéo. Un sous-dossier avec plusieurs vidéos donne un seul projet aux rushs multiples. Vérifiez sur le premier envoi que la définition est bien celle de l’iPhone (EDIVID l’affiche dans la carte du rush).')],
+        ['Récupérer la vidéo finale', h('span', { class: 'petit muet' }, 'Elle arrive dans « ' + d.sortie + ' », et un courriel vous prévient si vous l’avez activé.')],
+        ].map(([t, x], i) => h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, t), x)))),
+      ligneInterrupteur('Surveiller le dossier d’entrée', 'EDIVID y regarde régulièrement et prend les vidéos dont l’envoi est terminé.', d.actif, (v) => { d.actif = v; }),
+      champ('Compte rclone', entree(d, 'distant', { placeholder: 'gdrive:' }), 'Le nom donné pendant « rclone config », suivi de deux-points.'),
+      champ('Dossier d’entrée', entree(d, 'entree')),
+      champ('Dossier de sortie', entree(d, 'sortie')),
+      champ('Fréquence', intervalle),
+      ligneInterrupteur('Lancer le rendu final tout seul', 'Sinon, EDIVID s’arrête à l’aperçu et vous prévient : vous ajustez, puis lancez le rendu.', d.rendu_final, (v) => { d.rendu_final = v; }),
+      ligneInterrupteur('Déposer la vidéo finale sur le Drive', null, d.deposer, (v) => { d.deposer = v; }),
+      champ('Réglages des projets venus du Drive', modele, 'Choisissez un projet dont vous aimez le montage : ses réglages et ses consignes seront repris.'),
+      h('div', { class: 'aide', style: { marginTop: '12px', background: etatDrive.erreur ? 'var(--erreur-doux)' : 'var(--accent-doux)' } }, icone(etatDrive.erreur ? 'alerte' : 'info'),
+        h('span', {}, !P.etat_drive?.rclone ? 'rclone n’est pas installé sur azoth.'
+          : etatDrive.en_cours ? etatDrive.en_cours
+            : etatDrive.erreur ? `${etatDrive.message} : ${etatDrive.erreur}`
+              : etatDrive.dernier_passage ? `Dernier passage : ${new Date(etatDrive.dernier_passage).toLocaleTimeString('fr-FR')} — ${etatDrive.message}`
+                : d.actif ? 'Premier passage en attente.' : 'Veille désactivée.')),
+      h('div', { style: { display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn primaire', onclick: () => enregistrer() }, 'Enregistrer'),
+        h('button', { class: 'btn', onclick: async () => {
+          if (!(await enregistrer('Enregistré. Vérification…'))) return;
+          try { const r = await api('POST', '/api/parametres/drive/verifier'); toast(r.message, 'ok'); } catch (e) { toast(e.message, 'erreur'); }
+        } }, 'Vérifier la liaison'),
+        h('button', { class: 'btn', onclick: async () => {
+          try { await api('POST', '/api/parametres/drive/maintenant'); toast('Passage lancé.'); setTimeout(afficherParametres, 4000); } catch (e) { toast(e.message, 'erreur'); }
+        } }, 'Regarder maintenant'))),
+
+    h('div', { class: 'carte carte-corps', style: { marginTop: '16px' } },
+      h('h2', {}, 'Lien des courriels'),
+      champ('Adresse de l’interface', entree(P, 'url_publique'), 'Utilisée dans les liens des courriels : l’adresse par laquelle on ouvre EDIVID sur le tailnet.'),
+      h('button', { class: 'btn primaire', style: { marginTop: '12px' }, onclick: () => enregistrer() }, 'Enregistrer')),
+
+    h('div', { class: 'carte carte-corps', style: { marginTop: '16px' } },
+      h('h2', {}, 'Encodage matériel'),
+      P.nvenc
+        ? h('p', { class: 'petit' }, h('span', { class: 'pastille ok' }, 'Disponible'), ' L’encodeur de la carte NVIDIA accélère aperçus et rendus quand la carte a de la place ; sinon EDIVID encode avec le processeur.')
+        : h('div', {}, h('p', { class: 'petit muet' }, 'Absent : EDIVID encode avec le processeur (plus lent, même qualité). Pour l’activer, installez le paquet correspondant au pilote, puis redémarrez EDIVID :'),
+          blocCommande('sudo apt install libnvidia-encode-595-server libnvidia-decode-595-server'),
+          blocCommande('systemctl --user restart edivid')))));
 }

@@ -65,6 +65,31 @@ async fn ffmpeg_simple(args: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// NVENC répond-il ? (il faut le paquet libnvidia-encode du pilote).
+pub async fn nvenc_disponible() -> bool {
+    Command::new("ffmpeg")
+        .args(["-hide_banner", "-v", "error", "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.2", "-c:v", "h264_nvenc", "-f", "null", "-"])
+        .output()
+        .await
+        .map(|s| s.status.success())
+        .unwrap_or(false)
+}
+
+/// Options d'encodage vidéo : NVENC si on l'a, sinon x264.
+fn encodeur(nvenc: bool, usage: &str) -> Vec<String> {
+    let v: &[&str] = match (nvenc, usage) {
+        (true, "plan_apercu") => &["-c:v", "h264_nvenc", "-preset", "p2", "-rc", "vbr", "-cq", "26", "-b:v", "0"],
+        (true, "plan") => &["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "16", "-b:v", "0"],
+        (true, "assemblage_apercu") => &["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "24", "-b:v", "0"],
+        (true, _) => &["-c:v", "h264_nvenc", "-preset", "p6", "-rc", "vbr", "-cq", "19", "-b:v", "0", "-profile:v", "high"],
+        (false, "plan_apercu") => &["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"],
+        (false, "plan") => &["-c:v", "libx264", "-preset", "veryfast", "-crf", "14"],
+        (false, "assemblage_apercu") => &["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"],
+        (false, _) => &["-c:v", "libx264", "-preset", "medium", "-crf", "18"],
+    };
+    v.iter().map(|x| x.to_string()).collect()
+}
+
 pub async fn ffprobe(fichier: &Path) -> Result<Value> {
     let sortie = Command::new("ffprobe")
         .args(["-v", "error", "-show_streams", "-show_format", "-of", "json"])
@@ -299,8 +324,9 @@ fn filtre_plan(p: &Plan, largeur_entree: u32, sortie: (u32, u32), nette: bool) -
     f.join(",")
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, source: (u32, u32), sortie: (u32, u32),
-                     fichier: &Path, apercu: bool) -> Result<()> {
+                     fichier: &Path, apercu: bool, nvenc: bool) -> Result<()> {
     let zone = zone_entiere(p, source);
     let n = (p.duree * IPS).round().max(1.0) as u32;
     let mut args: Vec<String> = Vec::new();
@@ -320,9 +346,9 @@ async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, source: (u32, 
         "-vf".into(), vf,
         "-af".into(), format!("aresample=48000,afade=t=in:d=0.01,afade=t=out:st={:.3}:d=0.01", (p.duree - 0.01).max(0.0)),
         "-frames:v".into(), n.to_string(),
-        "-c:v".into(), "libx264".into(),
-        "-preset".into(), if apercu { "ultrafast" } else { "veryfast" }.into(),
-        "-crf".into(), if apercu { "23" } else { "14" }.into(),
+    ]);
+    args.extend(encodeur(nvenc, if apercu { "plan_apercu" } else { "plan" }));
+    args.extend([
         "-c:a".into(), "pcm_s16le".into(), "-ac".into(), "2".into(),
         fichier.to_string_lossy().into(),
     ]);
@@ -460,8 +486,9 @@ async fn bruitage(etat: &EtatPartage) -> Result<PathBuf> {
     Ok(f)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Path, ass: &Path, sortie: &Path,
-                   apercu: bool) -> Result<()> {
+                   apercu: bool, nvenc: bool) -> Result<()> {
     let r = &p.reglages;
     let (wo, ho) = (prog.largeur, prog.hauteur);
     let total = prog.duree;
@@ -587,9 +614,9 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         "-filter_complex".into(), fc.join(";"),
         "-map".into(), "[v]".into(), "-map".into(), "[a]".into(),
         "-t".into(), format!("{total:.3}"),
-        "-c:v".into(), "libx264".into(),
-        "-preset".into(), if apercu { "veryfast" } else { "medium" }.into(),
-        "-crf".into(), if apercu { "23" } else { "18" }.into(),
+    ]);
+    args.extend(encodeur(nvenc, if apercu { "assemblage_apercu" } else { "assemblage" }));
+    args.extend([
         "-pix_fmt".into(), "yuv420p".into(),
         "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(),
         "-movflags".into(), "+faststart".into(),
@@ -645,6 +672,46 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
         res?;
     }
 
+    // Encodage matériel seulement si la carte nous fait une petite place ; sinon x264.
+    let bail_nvenc = if etat.nvenc { etat.carte.essayer("other:encodage", carte::VRAM_ENCODAGE_MO, 1800).await } else { None };
+    let nvenc = bail_nvenc.is_some();
+    let resultat = rendre_plans_et_assembler(etat, &p, &prog, &analyses, &tmp, &dossier, &nettes, apercu, nvenc).await;
+    if let Some(b) = bail_nvenc {
+        etat.carte.rendre(b).await;
+    }
+    let nom = resultat?;
+    // L'ancienne sortie du même genre est remplacée.
+    let sorties = dossier.join("sorties");
+    let ancienne = if apercu { p.apercu.as_ref() } else { p.rendu.as_ref() }.map(|s| s.fichier.clone());
+    if let Some(a) = ancienne {
+        let _ = tokio::fs::remove_file(sorties.join(a)).await;
+    }
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+    let duree_source: f64 = analyses.iter().map(|(_, a)| a.duree).sum();
+    let mut rapport = decoupe::rapport(&prog, duree_source);
+    rapport["largeur"] = json!(prog.largeur);
+    rapport["hauteur"] = json!(prog.hauteur);
+    rapport["duree_rendu_s"] = json!(debut.elapsed().as_secs());
+    rapport["encodeur"] = json!(if nvenc { "NVENC" } else { "x264" });
+    rapport["plans_detail"] = json!(prog
+        .plans
+        .iter()
+        .map(|pl| json!({"t": (pl.sortie_t0 * 100.0).round() / 100.0, "d": (pl.duree * 100.0).round() / 100.0,
+                         "phrase": pl.phrase, "regime": pl.regime, "cadre": pl.cadre, "accroche": pl.accroche,
+                         "transition": pl.transition}))
+        .collect::<Vec<_>>());
+    Ok(Sortie { fichier: nom, cree: maintenant(), rapport })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Programme,
+                                   analyses: &[(String, std::sync::Arc<crate::modele::Analyse>)], tmp: &Path,
+                                   dossier: &Path, nettes: &std::collections::HashMap<usize, PathBuf>, apercu: bool,
+                                   nvenc: bool) -> Result<String> {
+    let projet = p.id.as_str();
+    let sources: std::collections::HashMap<String, (u32, u32)> =
+        analyses.iter().map(|(id, a)| (id.clone(), (a.largeur, a.hauteur))).collect();
+    let mezz = |rush: &str| etat.dossier_travail(projet, rush).join("mezz.mkv");
     // Plans.
     let sortie_dims = (prog.largeur, prog.hauteur);
     let total = prog.plans.len();
@@ -660,7 +727,7 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
             let nette = nettes.get(&i).cloned();
             let f = fichiers[i].clone();
             let src = sources[&pl.rush];
-            async move { rendre_plan(&pl, &m, nette.as_deref(), src, sortie_dims, &f, apercu).await }
+            async move { rendre_plan(&pl, &m, nette.as_deref(), src, sortie_dims, &f, apercu, nvenc).await }
         })
         .collect();
     let mut flux = stream::iter(taches).buffer_unordered(PLANS_EN_PARALLELE);
@@ -678,24 +745,6 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     let sorties = dossier.join("sorties");
     tokio::fs::create_dir_all(&sorties).await?;
     let nom = format!("{}-{}.mp4", if apercu { "apercu" } else { "rendu" }, chrono::Utc::now().format("%Y%m%d-%H%M%S"));
-    assembler(etat, &p, &prog, &liste, &ass, &sorties.join(&nom), apercu).await?;
-    // L'ancienne sortie du même genre est remplacée.
-    let ancienne = if apercu { p.apercu.as_ref() } else { p.rendu.as_ref() }.map(|s| s.fichier.clone());
-    if let Some(a) = ancienne {
-        let _ = tokio::fs::remove_file(sorties.join(a)).await;
-    }
-    let _ = tokio::fs::remove_dir_all(&tmp).await;
-    let duree_source: f64 = analyses.iter().map(|(_, a)| a.duree).sum();
-    let mut rapport = decoupe::rapport(&prog, duree_source);
-    rapport["largeur"] = json!(prog.largeur);
-    rapport["hauteur"] = json!(prog.hauteur);
-    rapport["duree_rendu_s"] = json!(debut.elapsed().as_secs());
-    rapport["plans_detail"] = json!(prog
-        .plans
-        .iter()
-        .map(|pl| json!({"t": (pl.sortie_t0 * 100.0).round() / 100.0, "d": (pl.duree * 100.0).round() / 100.0,
-                         "phrase": pl.phrase, "regime": pl.regime, "cadre": pl.cadre, "accroche": pl.accroche,
-                         "transition": pl.transition}))
-        .collect::<Vec<_>>());
-    Ok(Sortie { fichier: nom, cree: maintenant(), rapport })
+    assembler(etat, p, prog, &liste, &ass, &sorties.join(&nom), apercu, nvenc).await?;
+    Ok(nom)
 }

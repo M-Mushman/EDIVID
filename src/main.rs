@@ -2,12 +2,16 @@
 
 mod acces;
 mod api;
+mod bibliotheque;
 mod carte;
 mod config;
+mod courriel;
 mod decoupe;
+mod drive;
 mod etat;
 mod llm;
 mod modele;
+mod parametres;
 mod reglages;
 mod rendu;
 mod travaux;
@@ -22,9 +26,12 @@ async fn main() -> Result<()> {
         .init();
     let cfg = config::Config::charger()?;
     let adresses = cfg.ecoute.clone();
-    let etat = etat::Etat::nouveau(cfg).await?;
+    let nvenc = rendu::nvenc_disponible().await;
+    tracing::info!("encodeur matériel NVENC : {}", if nvenc { "disponible" } else { "absent, x264 utilisé" });
+    let etat = etat::Etat::nouveau(cfg, nvenc).await?;
     travaux::demarrer(etat.clone());
     carte::demarrer_veille(etat.clone());
+    drive::demarrer(etat.clone());
     let app = api::routes(etat.clone());
     let mut serveurs = Vec::new();
     for adresse in adresses {

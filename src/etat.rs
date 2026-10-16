@@ -11,6 +11,8 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::carte::Carte;
 use crate::config::Config;
+use crate::drive::Veille;
+use crate::parametres::{self, Parametres};
 use crate::modele::{Analyse, Projet};
 use crate::reglages;
 use crate::travaux::File;
@@ -31,12 +33,16 @@ pub struct Etat {
     pub file: File,
     pub carte: Carte,
     pub http: reqwest::Client,
+    pub parametres: tokio::sync::RwLock<Parametres>,
+    pub drive: Veille,
+    /// Encodeur matériel NVIDIA utilisable (paquet libnvidia-encode présent).
+    pub nvenc: bool,
 }
 
 pub type EtatPartage = Arc<Etat>;
 
 impl Etat {
-    pub async fn nouveau(cfg: Config) -> Result<EtatPartage> {
+    pub async fn nouveau(cfg: Config, nvenc: bool) -> Result<EtatPartage> {
         let mut projets = HashMap::new();
         let dossier = cfg.donnees.join("projets");
         for entree in std::fs::read_dir(&dossier)? {
@@ -52,6 +58,7 @@ impl Etat {
             }
         }
         let (evenements, _) = broadcast::channel(512);
+        let donnees = cfg.donnees.clone();
         let http = reqwest::Client::builder().build()?;
         Ok(Arc::new(Self {
             carte: Carte::nouvelle(&cfg, http.clone()),
@@ -61,6 +68,9 @@ impl Etat {
             evenements,
             file: File::nouvelle(),
             http,
+            parametres: tokio::sync::RwLock::new(parametres::charger(&donnees)),
+            drive: Veille::nouvelle(),
+            nvenc,
         }))
     }
 

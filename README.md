@@ -24,6 +24,16 @@ uv pip install --python .venv/bin/python faster-whisper opencv-python-headless n
 Interface : `http://<machine>:8030` (localhost et adresse du tailnet). Le code d'accès est tiré au
 premier lancement dans `donnees/acces.json`.
 
+## Fonctions
+
+- Bibliothèque de demandes (`bibliotheque/demandes.json`) et demandes enregistrées par les
+  utilisateurs ; consignes au monteur par projet ; « Coulisses » : les consignes réelles du LLM.
+- Courriels (montage prêt, vidéo finale prête, problème) par SMTP, réglés dans Paramètres.
+- Google Drive par rclone (`~/.local/bin/rclone`, compte relié par `rclone config`) : un fichier ou
+  un sous-dossier déposé dans le dossier d'entrée devient un projet monté automatiquement ; la
+  vidéo finale part dans le dossier de sortie.
+- Encodage NVENC si le paquet `libnvidia-encode-<branche>` du pilote est installé, sinon x264.
+
 Avant tout travail sur la carte graphique, EDIVID prend un bail auprès du contrôleur d'admission
 d'azothd (`other:EDIVID`) et le rend ensuite.
 
