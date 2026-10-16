@@ -15,7 +15,7 @@ use crate::reglages::{self, texte, vrai};
 const REGIMES: &[&str] = &["respiration", "rafale", "impact"];
 const CADRES: &[&str] = &["large", "moyen", "visage", "yeux"];
 const TRANSITIONS: &[&str] = &["flash", "fondu", "zoom", "glisse", "glitch"];
-const POSITIONS: &[&str] = &["plein", "centre", "haut_gauche", "haut_droite", "bas_gauche", "bas_droite"];
+const POSITIONS: &[&str] = &["plein", "centre", "haut", "bas", "haut_gauche", "haut_droite", "bas_gauche", "bas_droite"];
 
 pub async fn appeler(etat: &EtatPartage, projet: &str, systeme: &str, contenu: &str, schema: &Value,
                      reflexion: bool) -> Result<Value> {
@@ -243,6 +243,26 @@ pub async fn monter(etat: &EtatPartage, p: &Projet, ps: &[Phrase]) -> Result<Mon
 
 // ---------------------------------------------------------------- conversation
 
+fn schema_incrustations() -> Value {
+    json!({"type": "array", "items": {"type": "object", "properties": {
+        "media": {"type": "string"},
+        "effet": {"type": "string", "enum": ["", "secousse", "noir_blanc"]},
+        "texte": {"type": "string"},
+        "phrase": {"type": "integer"},
+        "decalage": {"type": "number"},
+        "duree": {"type": "number"},
+        "position": {"type": "string", "enum": POSITIONS},
+        "taille": {"type": "number"},
+        "entree": {"type": "string", "enum": ENTREES},
+        "couleur": {"type": "string", "enum": ["blanc", "jaune", "noir"]},
+        "fond": {"type": "string", "enum": ["aucun", "boite", "bandeau"]},
+        "fond_vert": {"type": "boolean"},
+        "son": {"type": "boolean"}},
+        "required": ["media", "effet", "texte", "phrase", "duree", "position", "taille", "entree", "fond_vert", "son"]}})
+}
+
+const ENTREES: &[&str] = &["fondu", "splash", "glisse_gauche", "glisse_droite", "glisse_haut", "machine", "aucune"];
+
 fn schema_discussion() -> Value {
     json!({
         "type": "object",
@@ -254,17 +274,8 @@ fn schema_discussion() -> Value {
                 "garder": {"type": "boolean"},
                 "regime": {"type": "string", "enum": REGIMES},
                 "cadre": {"type": "string", "enum": CADRES}},
-                "required": ["id"]}},
-            "ajouter_incrustations": {"type": "array", "items": {"type": "object", "properties": {
-                "media": {"type": "string"},
-                "effet": {"type": "string", "enum": ["", "secousse", "noir_blanc"]},
-                "phrase": {"type": "integer"},
-                "duree": {"type": "number"},
-                "position": {"type": "string", "enum": POSITIONS},
-                "taille": {"type": "number"},
-                "fond_vert": {"type": "boolean"},
-                "son": {"type": "boolean"}},
-                "required": ["media", "effet", "phrase", "duree", "position", "taille", "fond_vert", "son"]}},
+                "required": ["id", "garder", "regime", "cadre"]}},
+            "ajouter_incrustations": schema_incrustations(),
             "retirer_incrustations": {"type": "array", "items": {"type": "string"}},
             "remonter": {"type": "boolean"}
         },
@@ -278,10 +289,13 @@ phrase, pourquoi c'est un bon choix de montage. Si la demande est floue, tu prop
 
 Tu peux agir sur le montage en remplissant les champs de ta réponse :
 - reglages : seulement les réglages à changer (valeurs permises indiquées), {} sinon ;
-- phrases : changer une phrase (garder/couper, régime, cadre) par son numéro ;
-- ajouter_incrustations : poser un média de la médiathèque (champ media = son nom exact) ou un effet intégré (\"secousse\", \
-\"noir_blanc\" ; media vide) sur une phrase, avec une durée en secondes, une position et une taille (0,1 à 1 de la largeur) ; \
-fond_vert à true si le média a un fond vert à retirer ; son à true pour garder le son d'une vidéo ;
+- phrases : pour chaque phrase à changer, son état complet voulu (garder, régime, cadre) par son numéro ; recopie ce qui \
+ne change pas ;
+- ajouter_incrustations : poser sur une phrase un média de la médiathèque (champ media = son nom exact), un effet intégré \
+(\"secousse\", \"noir_blanc\" ; media vide) ou un texte à l'écran (champ texte ; media et effet vides), avec une durée en \
+secondes, une position, une taille (0,1 à 1), un effet d'entrée (fondu, splash, glisse_gauche, glisse_droite, glisse_haut, \
+machine à écrire, aucune) ; pour un texte, couleur et fond (aucun, boite, bandeau) ; fond_vert à true si le média a un fond \
+vert à retirer ; son à true pour garder le son d'une vidéo ;
 - retirer_incrustations : identifiants des incrustations à enlever ;
 - la musique de fond se choisit par le réglage musique (nom exact d'un son de la médiathèque) et volume_musique \
 (« discrète » : 10 à 15 ; « présente » : 30 à 40) ; jamais par une incrustation ;
@@ -351,4 +365,104 @@ pub async fn discuter(etat: &EtatPartage, p: &Projet, ps: &[Phrase], message: &s
     let contenu = format!("{}\n\nCONVERSATION RÉCENTE :\n{historique}\n\nNOUVEAU MESSAGE DE LA PERSONNE :\n{message}",
                           contexte(p, ps));
     appeler(etat, &p.id, CONSIGNE_DISCUSSION, &contenu, &schema_discussion(), false).await
+}
+
+// ---------------------------------------------------------------- commentaire sur un instant
+
+pub const CONSIGNE_COMMENTAIRE: &str = "Tu es EDIVID, l'assistant de montage vidéo. La personne a mis l'aperçu en pause à un \
+instant précis et décrit ce qu'elle veut corriger à ce moment-là. Tu réponds en français simple.
+
+1. reformulation : en une ou deux phrases, ce que tu as compris, en commençant par « Si je comprends bien, ». Sois concret : \
+quel moment, quel changement, avec les mots de la personne (si elle dit splash, écris splash). Ta reformulation et tes \
+actions disent exactement la même chose.
+2. de, a : la plage de phrases (numéros) sur laquelle porte ta correction. Reste au plus près de l'instant commenté : en général \
+la phrase en cours, parfois une ou deux autour. Ne touche à rien d'autre.
+3. Les actions de la correction, limitées à cette plage :
+- phrases : pour CHAQUE phrase à modifier, son état complet voulu après correction : garder (true/false), régime \
+(respiration, rafale, impact), cadre (large, moyen, visage, yeux) ; recopie tel quel ce qui ne change pas. Vocabulaire : \
+« zoom serré », « gros plan », « zoome » = cadre \"visage\" et régime \"impact\" ; « sur les yeux », « sur le regard » = \
+cadre \"yeux\" et régime \"impact\" ; « dézoome », « plan large » = cadre \"large\" ; « coupe », « enlève » = garder false ; \
+« laisse respirer » = régime \"respiration\" ; « accélère » = régime \"rafale\" ;
+- ajouter_incrustations : un élément par ligne, posé sur une phrase de la plage, avec decalage (secondes après le début \
+de la phrase), durée en secondes, position, taille entre 0,1 et 1 (0,3 petit, 0,5 moyen, 0,8 grand). Trois sortes, jamais \
+mélangées : un TEXTE (champ texte rempli, media et effet vides), un MÉDIA de la médiathèque (media = nom exact, texte et \
+effet vides), ou un EFFET D'IMAGE (effet = secousse ou noir_blanc, texte et media vides). L'effet d'entrée (entree) reprend le \
+mot de la personne : splash, fondu, glisse_gauche, glisse_droite, glisse_haut, machine (machine à écrire), aucune. \
+Positions : « au-dessus de sa tête », « en haut » = haut ; « en bas » = bas ; « au centre » = centre ; coins = haut_gauche, \
+haut_droite, bas_gauche, bas_droite ; « plein écran » = plein. Pour un texte : couleur (blanc, jaune, noir) et fond \
+(aucun, boite, bandeau) ;
+- retirer_incrustations : identifiants d'incrustations de la plage ;
+- reglages : seulement si la demande est vraiment globale (dis-le dans la reformulation), sinon {}.
+4. possible : false si la demande dépasse ces outils ; explique alors dans explication ce que tu peux proposer à la place.
+5. explication : une phrase qui dit pourquoi cette correction répond à la demande.
+Ne prétends jamais faire ce que tes actions ne font pas.";
+
+fn schema_commentaire() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "reformulation": {"type": "string"},
+            "possible": {"type": "boolean"},
+            "de": {"type": "integer"},
+            "a": {"type": "integer"},
+            "explication": {"type": "string"},
+            "reglages": reglages::schema_llm(),
+            "phrases": {"type": "array", "items": {"type": "object", "properties": {
+                "id": {"type": "integer"},
+                "garder": {"type": "boolean"},
+                "regime": {"type": "string", "enum": REGIMES},
+                "cadre": {"type": "string", "enum": CADRES}},
+                "required": ["id", "garder", "regime", "cadre"]}},
+            "ajouter_incrustations": schema_incrustations(),
+            "retirer_incrustations": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["reformulation", "possible", "de", "a", "explication", "reglages", "phrases", "ajouter_incrustations",
+                     "retirer_incrustations"]
+    })
+}
+
+/// Propose une correction pour un instant précis ; tient compte de la proposition précédente si la personne corrige.
+pub async fn commenter(etat: &EtatPartage, p: &Projet, ps: &[Phrase], numero: usize, instant: &str, texte: &str,
+                       precedente: Option<&Value>) -> Result<Value> {
+    let ph = &ps[numero];
+    let decisions: HashMap<&str, &Decision> =
+        p.montage.as_ref().map(|m| m.phrases.iter().map(|d| (d.cle.as_str(), d)).collect()).unwrap_or_default();
+    let autour = ps
+        .iter()
+        .enumerate()
+        .skip(numero.saturating_sub(5))
+        .take(11)
+        .map(|(i, x)| {
+            let etat_phrase = decisions.get(x.cle.as_str())
+                .map(|d| format!("{} {} {}", if d.garder { "gardée" } else { "COUPÉE" }, d.regime, d.cadre))
+                .unwrap_or_else(|| "pas montée".into());
+            let incs: Vec<String> = p.incrustations.iter().filter(|inc| inc.phrase == x.cle).map(|inc| {
+                let quoi = if !inc.texte.is_empty() { format!("texte « {} »", inc.texte) } else if !inc.effet.is_empty() { inc.effet.clone() }
+                    else { p.medias.iter().find(|m| m.id == inc.media).map(|m| m.nom.clone()).unwrap_or_default() };
+                format!("[incrustation {} : {quoi}]", inc.id)
+            }).collect();
+            format!("{}[{i}] {:.1}–{:.1}s | {etat_phrase} | {}{}", if i == numero { "→ " } else { "  " }, x.t0, x.t1, x.texte,
+                    if incs.is_empty() { String::new() } else { format!(" {}", incs.join(" ")) })
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let medias = if p.medias.is_empty() { "(vide)".to_string() }
+        else { p.medias.iter().map(|m| format!("- {} ({})", m.nom, m.genre)).collect::<Vec<_>>().join("\n") };
+    let mut contenu = format!(
+        "RÉGLAGES ACTUELS :\n{}\n\nCONSIGNES DE LA PERSONNE : {}\n\nMÉDIATHÈQUE :\n{medias}\n\n\
+         INSTANT COMMENTÉ : {instant} de la vidéo, pendant la phrase [{numero}] : « {} »\n\n\
+         PHRASES AUTOUR DE L'INSTANT (→ = phrase en cours) :\n{autour}\n\nCOMMENTAIRE DE LA PERSONNE :\n{texte}",
+        reglages::pour_llm(&p.reglages),
+        if p.consignes.trim().is_empty() { "(aucune)" } else { p.consignes.trim() },
+        ph.texte
+    );
+    if let Some(prec) = precedente {
+        contenu.push_str(&format!(
+            "\n\nTA PROPOSITION PRÉCÉDENTE (la personne la corrige avec le commentaire ci-dessus) :\n\
+             commentaire d'origine : {}\nreformulation : {}\nactions : {}",
+            prec["texte"].as_str().unwrap_or(""), prec["reformulation"].as_str().unwrap_or(""), prec["actions"]
+        ));
+    }
+    // Règle de l'orchestrateur : une première proposition va vite ; une correction demande réflexion.
+    appeler(etat, &p.id, CONSIGNE_COMMENTAIRE, &contenu, &schema_commentaire(), precedente.is_some()).await
 }

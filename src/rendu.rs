@@ -178,6 +178,22 @@ pub async fn preparer(etat: &EtatPartage, projet: &str, source: &Path, infos: &I
     ffmpeg(etat, projet, "Préparation du rush", &args, infos.duree).await
 }
 
+/// Version légère du rush pour le navigateur (vidéo d'origine dans l'interface).
+pub async fn proxy(etat: &EtatPartage, projet: &str, mezz: &Path, sortie: &Path, duree: f64) -> Result<()> {
+    let tmp = sortie.with_extension("tmp.mp4");
+    let args: Vec<String> = vec![
+        "-i".into(), mezz.to_string_lossy().into(),
+        "-vf".into(), "scale='if(gt(iw,ih),-2,540)':'if(gt(iw,ih),540,-2)'".into(),
+        "-c:v".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "26".into(),
+        "-g".into(), "30".into(), "-pix_fmt".into(), "yuv420p".into(),
+        "-c:a".into(), "aac".into(), "-b:a".into(), "96k".into(), "-movflags".into(), "+faststart".into(),
+        tmp.to_string_lossy().into(),
+    ];
+    ffmpeg(etat, projet, "Version d'origine pour le lecteur", &args, duree).await?;
+    tokio::fs::rename(&tmp, sortie).await?;
+    Ok(())
+}
+
 /// Genre d'un média de la médiathèque : image, gif, video ou son.
 pub async fn sonder_media(fichier: &Path, nom: &str) -> Result<(String, Option<f64>, bool)> {
     let d = ffprobe(fichier).await?;
@@ -392,6 +408,10 @@ fn sous_titres(prog: &Programme, p: &Projet) -> String {
                 if dynamique { 0 } else { -1 }, m = 0.05 * wo),
         format!("Style: Titre,Anton,{titre_taille:.0},&H00000000,&H00000000,&H0000E5FF,&H0000E5FF,0,0,0,0,100,100,2,0,3,{:.0},0,8,60,60,{:.0},1",
                 0.011 * ho.max(wo), 0.12 * ho),
+        format!("Style: Texte,Anton,{:.0},&H00FFFFFF,&H00FFFFFF,&H00000000,&H78000000,0,0,0,0,100,100,1,0,1,{:.1},2,5,40,40,40,1",
+                0.06 * ho, 0.0035 * ho.max(wo)),
+        format!("Style: TexteBoite,Anton,{:.0},&H00FFFFFF,&H00FFFFFF,&H50000000,&H50000000,0,0,0,0,100,100,1,0,3,{:.1},0,5,40,40,40,1",
+                0.06 * ho, 0.012 * ho.max(wo)),
         String::new(),
         "[Events]".into(),
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text".into(),
@@ -400,6 +420,7 @@ fn sous_titres(prog: &Programme, p: &Projet) -> String {
         l.push(format!("Dialogue: 1,{},{},Titre,,0,0,0,,{{\\fad(120,200)}}{}", temps_ass(t + 0.1), temps_ass(t + 1.9),
                        titre.to_uppercase()));
     }
+    textes(prog, &mut l);
     if !vrai(r, "sous_titres") {
         return l.join("\n") + "\n";
     }
@@ -452,6 +473,76 @@ fn sous_titres(prog: &Programme, p: &Projet) -> String {
         l.push(format!("Dialogue: 0,{},{},Mot,,0,0,0,,{anim}{texte_groupe}", temps_ass(g[0].t0), temps_ass(fin)));
     }
     l.join("\n") + "\n"
+}
+
+/// Position par défaut d'une incrustation (centre 0–1), selon sa position nommée.
+fn centre_nomme(position: &str, texte: bool) -> (f64, f64) {
+    match position {
+        "haut_gauche" => (0.27, 0.16),
+        "haut_droite" => (0.73, 0.16),
+        "bas_gauche" => (0.27, 0.72),
+        "bas_droite" => (0.73, 0.72),
+        "centre" | "plein" => (0.5, 0.5),
+        "haut" => (0.5, 0.18),
+        "bas" => (0.5, 0.7),
+        _ if texte => (0.5, 0.22),
+        _ => (0.5, 0.5),
+    }
+}
+
+fn echapper_ass(t: &str) -> String {
+    t.replace('\\', "/").replace('{', "(").replace('}', ")").replace('\n', "\\N")
+}
+
+/// Textes du module Texte : position, couleur, fond, effet d'entrée.
+fn textes(prog: &Programme, l: &mut Vec<String>) {
+    let (wo, ho) = (prog.largeur as f64, prog.hauteur as f64);
+    for inc in prog.incrustations.iter().filter(|i| !i.texte.trim().is_empty()) {
+        let (cx, cy) = match (inc.x, inc.y) {
+            (Some(x), Some(y)) => (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)),
+            _ => centre_nomme(&inc.position, true),
+        };
+        let (x, y) = (cx * wo, cy * ho);
+        let taille = ho * (0.02 + 0.10 * inc.taille.clamp(0.1, 1.0));
+        let boite = inc.fond == "boite" || inc.fond == "bandeau";
+        let (couleur, cadre) = match (inc.couleur.as_str(), boite) {
+            ("jaune", true) => ("&H0000E5FF&", "&H50000000&"),
+            ("jaune", false) => ("&H0000E5FF&", "&H00000000&"),
+            ("noir", _) => ("&H00000000&", "&H00FFFFFF&"),
+            (_, true) => ("&H00FFFFFF&", "&H50000000&"),
+            _ => ("&H00FFFFFF&", "&H00000000&"),
+        };
+        let marge = if inc.fond == "bandeau" { format!("\\bord{:.0}", 0.03 * ho) } else { String::new() };
+        let duree_ms = ((inc.fin - inc.debut) * 1000.0).max(200.0);
+        let mut tags = format!("\\an5\\fs{taille:.0}\\c{couleur}\\3c{cadre}\\4c{cadre}{marge}");
+        match inc.entree.as_str() {
+            "splash" => tags.push_str("\\pos(X,Y)\\fscx30\\fscy30\\t(0,160,\\fscx115\\fscy115)\\t(160,280,\\fscx100\\fscy100)\\fad(0,200)"),
+            "glisse_gauche" => tags.push_str(&format!("\\move({:.0},{y:.0},{x:.0},{y:.0},0,300)\\fad(0,200)", -0.4 * wo)),
+            "glisse_droite" => tags.push_str(&format!("\\move({:.0},{y:.0},{x:.0},{y:.0},0,300)\\fad(0,200)", 1.4 * wo)),
+            "glisse_haut" => tags.push_str(&format!("\\move({x:.0},{:.0},{x:.0},{y:.0},0,300)\\fad(0,200)", -0.15 * ho)),
+            "aucune" | "machine" => tags.push_str("\\pos(X,Y)"),
+            _ => tags.push_str("\\pos(X,Y)\\fad(250,250)"),
+        }
+        let tags = tags.replace("\\pos(X,Y)", &format!("\\pos({x:.0},{y:.0})"));
+        let corps = if inc.entree == "machine" {
+            // Machine à écrire : chaque lettre apparaît à son tour.
+            let lettres: Vec<char> = inc.texte.trim().chars().collect();
+            let pas = (0.6 * duree_ms / lettres.len().max(1) as f64).min(70.0);
+            lettres
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let a = (i as f64 * pas) as u64;
+                    let lettre = echapper_ass(&c.to_string());
+                    format!("{{\\alpha&HFF&\\t({a},{},\\alpha&H00&)}}{lettre}", a + 1)
+                })
+                .collect::<String>()
+        } else {
+            echapper_ass(inc.texte.trim())
+        };
+        let style = if boite { "TexteBoite" } else { "Texte" };
+        l.push(format!("Dialogue: 2,{},{},{style},,0,0,0,,{{{tags}}}{corps}", temps_ass(inc.debut), temps_ass(inc.fin)));
+    }
 }
 
 // ---------------------------------------------------------------- assemblage
@@ -515,7 +606,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     let mut base = "v0".to_string();
     let mut sons_incrustes: Vec<String> = Vec::new();
     let marge = (0.04 * wo as f64).round() as u32;
-    for (k, inc) in prog.incrustations.iter().filter(|i| i.effet.is_empty()).enumerate() {
+    for (k, inc) in prog.incrustations.iter().filter(|i| i.effet.is_empty() && i.texte.trim().is_empty()).enumerate() {
         let Some(m) = p.medias.iter().find(|m| m.id == inc.media) else { continue };
         let fichier = etat.dossier_projet(&p.id).join("medias").join(&m.fichier);
         let duree = format!("{:.3}", inc.fin - inc.debut);
@@ -526,26 +617,47 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
             _ => continue,
         }
         args.extend(["-i".into(), fichier.to_string_lossy().into()]);
-        let echelle = if inc.position == "plein" {
+        let plein = inc.position == "plein" && inc.x.is_none();
+        let largeur = ((wo as f64 * inc.taille) as u32 / 2 * 2).max(16);
+        let echelle = if plein {
             format!("scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho}")
+        } else if inc.entree == "splash" {
+            // Le média grandit jusqu'à 115 %, puis se pose à sa taille (t est le temps propre du média).
+            format!("scale=w='max(2,trunc({largeur}*if(lt(t,0.21),max(0.1,1.15*t/0.21),if(lt(t,0.3),1.15-0.15*(t-0.21)/0.09,1))/2)*2)':h=-2:eval=frame")
         } else {
-            format!("scale={}:-2", ((wo as f64 * inc.taille) as u32 / 2 * 2).max(16))
+            format!("scale={largeur}:-2")
         };
         let cle = if inc.fond_vert { ",chromakey=0x00FF00:0.13:0.08" } else { "" };
         let d = inc.fin - inc.debut;
-        fc.push(format!(
-            "[{entree}:v]fps=30,{echelle},format=yuva420p{cle},fade=t=in:st=0:d=0.15:alpha=1,fade=t=out:st={:.3}:d=0.15:alpha=1,\
-             setpts=PTS-STARTPTS+{:.3}/TB[inc{k}]",
-            (d - 0.15).max(0.0), inc.debut
-        ));
-        let (x, y) = match inc.position.as_str() {
-            "plein" => ("0".to_string(), "0".to_string()),
-            "haut_gauche" => (format!("{marge}"), format!("{marge}")),
-            "haut_droite" => (format!("W-w-{marge}"), format!("{marge}")),
-            "bas_gauche" => (format!("{marge}"), format!("H-h-{marge}")),
-            "bas_droite" => (format!("W-w-{marge}"), format!("H-h-{marge}")),
-            _ => ("(W-w)/2".to_string(), "(H-h)/2".to_string()),
+        let fondu = if matches!(inc.entree.as_str(), "" | "fondu") {
+            format!(",fade=t=in:st=0:d=0.15:alpha=1,fade=t=out:st={:.3}:d=0.15:alpha=1", (d - 0.15).max(0.0))
+        } else if inc.entree == "aucune" {
+            String::new()
+        } else {
+            format!(",fade=t=out:st={:.3}:d=0.15:alpha=1", (d - 0.15).max(0.0))
         };
+        fc.push(format!("[{entree}:v]fps=30,{echelle},format=yuva420p{cle}{fondu},setpts=PTS-STARTPTS+{:.3}/TB[inc{k}]", inc.debut));
+        let (mut x, mut y) = match (inc.x, inc.y) {
+            _ if plein => ("0".to_string(), "0".to_string()),
+            (Some(cx), Some(cy)) => (format!("{:.1}-w/2", cx.clamp(0.0, 1.0) * wo as f64), format!("{:.1}-h/2", cy.clamp(0.0, 1.0) * ho as f64)),
+            _ => match inc.position.as_str() {
+                "haut_gauche" => (format!("{marge}"), format!("{marge}")),
+                "haut_droite" => (format!("W-w-{marge}"), format!("{marge}")),
+                "bas_gauche" => (format!("{marge}"), format!("H-h-{marge}")),
+                "bas_droite" => (format!("W-w-{marge}"), format!("H-h-{marge}")),
+                "haut" => ("(W-w)/2".to_string(), format!("{marge}")),
+                "bas" => ("(W-w)/2".to_string(), format!("H-h-{}", marge * 6)),
+                _ => ("(W-w)/2".to_string(), "(H-h)/2".to_string()),
+            },
+        };
+        // Glissés : le média arrive du bord en 0,3 s (t est le temps de la vidéo).
+        let reste = format!("pow(max(0,1-(t-{:.3})/0.3),2)", inc.debut);
+        match inc.entree.as_str() {
+            "glisse_gauche" => x = format!("({x})-(({x})+w)*{reste}"),
+            "glisse_droite" => x = format!("({x})+(W-({x}))*{reste}"),
+            "glisse_haut" => y = format!("({y})-(({y})+h)*{reste}"),
+            _ => {}
+        }
         fc.push(format!("[{base}][inc{k}]overlay=x={x}:y={y}:enable='between(t,{:.3},{:.3})':eof_action=pass[vi{k}]",
                         inc.debut, inc.fin));
         base = format!("vi{k}");
@@ -693,13 +805,7 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["hauteur"] = json!(prog.hauteur);
     rapport["duree_rendu_s"] = json!(debut.elapsed().as_secs());
     rapport["encodeur"] = json!(if nvenc { "NVENC" } else { "x264" });
-    rapport["plans_detail"] = json!(prog
-        .plans
-        .iter()
-        .map(|pl| json!({"t": (pl.sortie_t0 * 100.0).round() / 100.0, "d": (pl.duree * 100.0).round() / 100.0,
-                         "phrase": pl.phrase, "regime": pl.regime, "cadre": pl.cadre, "accroche": pl.accroche,
-                         "transition": pl.transition}))
-        .collect::<Vec<_>>());
+    rapport["plans_detail"] = decoupe::plans_json(&prog);
     Ok(Sortie { fichier: nom, cree: maintenant(), rapport })
 }
 

@@ -48,6 +48,8 @@ const TRACES = {
   lune: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   baguette: '<path d="M5 19L16 8M14 6l4 4M18 3v3M21 6h-3M10 3v2M3 10h2"/>',
   alerte: '<path d="M12 3l10 18H2zM12 10v5M12 18v.01"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
+  google: '<path d="M20.5 12.2c0-.6-.1-1.2-.2-1.7H12v3.3h4.8a4.1 4.1 0 0 1-1.8 2.7v2.2h2.9c1.7-1.6 2.6-3.9 2.6-6.5z"/><path d="M12 21c2.4 0 4.5-.8 5.9-2.2l-2.9-2.2c-.8.5-1.8.9-3 .9-2.3 0-4.3-1.6-5-3.7H4v2.3A9 9 0 0 0 12 21z"/><path d="M7 13.8a5.4 5.4 0 0 1 0-3.5V8H4a9 9 0 0 0 0 8.1z"/><path d="M12 6.6c1.3 0 2.5.5 3.4 1.3l2.6-2.6A9 9 0 0 0 4 8l3 2.3c.7-2.1 2.7-3.7 5-3.7z"/>',
   engrenage: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   livre: '<path d="M4 4h6a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-6a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h7z"/>',
   etoile: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
@@ -155,6 +157,28 @@ function confirmer(titre, texte, libelle = 'Confirmer') {
   });
 }
 
+// ------------------------------------------------------------------ panneaux repliables
+
+function estReplie(nom) { return lire(`edivid_replie_${nom}`) === '1'; }
+
+/** En-tête de carte cliquable : replie ou déplie le corps ; l'état est gardé par navigateur. */
+function enteteRepliable(nom, titre, ...extras) {
+  const replie = estReplie(nom);
+  const basculer = () => {
+    stocker(`edivid_replie_${nom}`, estReplie(nom) ? '0' : '1');
+    const carte = tete.parentElement;
+    carte?.classList.toggle('replie', estReplie(nom));
+    chevron.setAttribute('aria-expanded', estReplie(nom) ? 'false' : 'true');
+  };
+  const chevron = h('button', { class: 'btn icone fantome chevron', title: 'Replier ou déplier ce panneau', 'aria-expanded': replie ? 'false' : 'true',
+    onclick: (e) => { e.stopPropagation(); basculer(); } }, icone('chevron'));
+  const tete = h('div', { class: 'carte-tete repliable', onclick: (e) => { if (e.target === tete || e.target.tagName === 'H2') basculer(); } },
+    h('h2', {}, titre), h('span', { class: 'espace' }), ...extras, chevron);
+  return tete;
+}
+
+function appliquerReplie(carte, nom) { carte.classList.toggle('replie', estReplie(nom)); }
+
 // ------------------------------------------------------------------ état
 
 const E = {
@@ -164,6 +188,13 @@ const E = {
   etat: null,
   onglet: 'assistant',
   lecteur: 'apercu',
+  rushLecteur: null,
+  programme: null,
+  proposition: null,
+  commentaire: null,
+  correction: false,
+  voirTlOrigine: lire('edivid_voirTlOrigine') !== '0',
+  voirTlMontage: lire('edivid_voirTlMontage') !== '0',
   filtre: 'toutes',
   progression: null,
   televersements: new Map(),
@@ -182,6 +213,8 @@ route();
 async function route() {
   let session;
   try { session = await api('GET', '/api/session'); } catch { session = { connecte: false }; }
+  E.session = session;
+  messageGoogle();
   if (!session.connecte) return afficherConnexion();
   if (!E.catalogue) E.catalogue = await api('GET', '/api/catalogue');
   if (location.hash === '#/parametres') { fermerFlux(); E.projetId = null; return afficherParametres(); }
@@ -190,6 +223,35 @@ async function route() {
   fermerFlux();
   E.projetId = null;
   afficherAccueil();
+}
+
+/** Après un aller-retour chez Google, l'adresse porte ?google=… : on l'explique, puis on l'efface. */
+function messageGoogle() {
+  const q = new URLSearchParams(location.search);
+  const g = q.get('google');
+  if (!g) return;
+  const messages = {
+    expire: 'La demande de connexion a expiré : recommencez.',
+    annule: 'Connexion avec Google annulée.',
+    session_requise: 'Ouvrez d’abord EDIVID avec le code d’accès pour relier un compte Google.',
+    non_configure: 'La connexion avec Google n’est pas encore configurée (Paramètres).',
+    erreur: `Connexion avec Google impossible : ${q.get('detail') || 'erreur inconnue'}`,
+  };
+  setTimeout(() => toast(messages[g] || 'Connexion avec Google : réponse inattendue.', g === 'annule' ? '' : 'erreur'), 300);
+  history.replaceState(null, '', location.pathname + location.hash);
+}
+
+/** Pastille du compte connecté, avec la déconnexion. */
+function puceCompte() {
+  const c = E.session?.compte;
+  if (!c) return null;
+  const initiale = (c.nom || c.email).trim()[0]?.toUpperCase() || '?';
+  return h('button', { class: 'btn petit fantome puce-compte', title: `${c.nom} — ${c.email}\nCliquer pour se déconnecter`, onclick: async () => {
+    if (!(await confirmer('Se déconnecter ?', `Vous êtes connecté avec ${c.email}.`, 'Se déconnecter'))) return;
+    await api('POST', '/api/deconnexion');
+    location.hash = '#/';
+    location.reload();
+  } }, h('span', { class: 'avatar' }, initiale), h('span', { class: 'masque-mobile' }, c.nom.split(' ')[0]));
 }
 
 function fermerFlux() {
@@ -215,6 +277,10 @@ function afficherConnexion() {
       h('h1', { style: { margin: '22px 0 6px' } }, 'Bienvenue'),
       h('p', { class: 'muet', style: { margin: '0 0 18px' } },
         "EDIVID monte vos vidéos face caméra : vous déposez vos rushs, le LLM propose un montage rythmé, vous l'ajustez en discutant."),
+      E.session?.google ? h('div', {},
+        h('a', { class: 'btn bouton-google', href: '/api/google/connexion?mode=connexion' }, icone('google'), 'Se connecter avec Google'),
+        h('p', { class: 'tres-petit muet', style: { margin: '8px 0 0' } }, 'Votre compte doit avoir été autorisé. La connexion relie aussi votre Google Drive.'),
+        h('div', { class: 'separateur' }, h('span', {}, 'ou'))) : null,
       h('label', { class: 'petit', style: { fontWeight: 600, display: 'block', marginBottom: '6px' } }, "Code d'accès"),
       champ, erreur,
       h('button', { class: 'btn primaire', type: 'submit', style: { width: '100%', marginTop: '10px' } }, 'Entrer'),
@@ -235,7 +301,7 @@ async function afficherAccueil() {
   ];
   remplir($app, h('div', { class: 'accueil' },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } }, logo(), h('span', { class: 'espace' }),
-      h('a', { class: 'btn petit fantome', href: '#/parametres', title: 'Courriel, Google Drive, encodage' }, icone('engrenage'), 'Paramètres'), boutonTheme()),
+      h('a', { class: 'btn petit fantome', href: '#/parametres', title: 'Courriel, Google Drive, encodage' }, icone('engrenage'), 'Paramètres'), puceCompte(), boutonTheme()),
     h('div', { style: { display: 'flex', alignItems: 'end', justifyContent: 'space-between', gap: '12px', marginTop: '28px', flexWrap: 'wrap' } },
       h('div', {}, h('h1', {}, 'Vos projets'),
         h('p', { class: 'muet', style: { margin: '4px 0 0' } }, 'Un projet = une vidéo à monter.')),
@@ -330,7 +396,12 @@ function rafraichirBientot() {
 async function rafraichir() {
   if (!E.projetId) return;
   try {
-    E.vue = await api('GET', `/api/projets/${E.projetId}`);
+    const [vue, programme] = await Promise.all([
+      api('GET', `/api/projets/${E.projetId}`),
+      api('GET', `/api/projets/${E.projetId}/programme`).catch(() => null),
+    ]);
+    E.vue = vue;
+    E.programme = programme;
   } catch (e) {
     if (e.message === 'projet introuvable') { location.hash = '#/'; }
     return;
@@ -365,6 +436,7 @@ function construireProjet() {
       h('span', { class: 'espace' }),
       h('button', { class: 'btn petit fantome', onclick: afficherGuide, title: 'Comment ça marche' }, icone('aide'), h('span', { class: 'masque-mobile' }, 'Guide')),
       h('a', { class: 'btn icone fantome', href: '#/parametres', title: 'Paramètres : courriel, Google Drive' }, icone('engrenage')),
+      puceCompte(),
       boutonTheme(),
       h('button', { class: 'btn icone fantome danger', title: 'Supprimer le projet', onclick: supprimerProjet }, icone('corbeille')))),
     n.parcours,
@@ -373,6 +445,8 @@ function construireProjet() {
       n.panneau),
     h('div', { class: 'barre-actions' }, n.barre));
   construireLecteur();
+  remplir(n.lecteur, enteteRepliable('lecteur', '2. Aperçu du montage', n.ongletsLecteur), n.corpsLecteur);
+  appliquerReplie(n.lecteur, 'lecteur');
   construirePanneau();
 }
 
@@ -498,10 +572,11 @@ function dessinerRushs() {
   };
   const progRush = (r) => (E.progression && ['preparation', 'analyse'].includes(r.etat) && E.etat?.file?.some((t) => t.en_cours && t.projet === E.projetId))
     ? E.progression : null;
-  remplir(E.noeuds.rushs, 
-    h('div', { class: 'carte-tete' },
-      h('h2', {}, '1. Vos rushs'),
-      p.rushs.length > 1 ? h('span', { class: 'tres-petit muet' }, 'Montés dans cet ordre') : null),
+  appliquerReplie(E.noeuds.rushs, 'rushs');
+  remplir(E.noeuds.rushs,
+    enteteRepliable('rushs', '1. Vos rushs',
+      p.rushs.length > 1 ? h('span', { class: 'tres-petit muet' }, 'Montés dans cet ordre') : null,
+      estReplie('rushs') && p.rushs.length ? h('span', { class: 'tres-petit muet' }, `${p.rushs.length} rush${p.rushs.length > 1 ? 's' : ''}`) : null),
     h('div', { class: 'carte-corps' },
       p.rushs.length === 0 ? h('div', { class: 'aide', style: { marginBottom: '12px' } }, icone('info'),
         h('span', {}, "Déposez une vidéo entière, ou plusieurs prises : EDIVID les prépare (rotation, couleurs HDR de l'iPhone, cadence), puis les transcrit et repère le visage. Comptez environ une minute d’analyse pour cinq minutes de vidéo.")) : null,
@@ -534,37 +609,77 @@ function dessinerRushs() {
   dessinerTeleversements();
 }
 
-// ------------------------------------------------------------------ lecteur et rythme
+// ------------------------------------------------------------------ lecteur et timelines
 
 function construireLecteur() {
   const n = E.noeuds;
   n.video = h('video', { controls: true, playsinline: true, preload: 'metadata' });
   n.video.addEventListener('timeupdate', suivreLecture);
-  n.ecran = h('div', { class: 'lecteur' }, n.video);
+  n.video.addEventListener('pause', () => { dessinerOutilsLecteur(); dessinerCalque(); });
+  n.video.addEventListener('play', () => { dessinerOutilsLecteur(); dessinerCalque(); });
+  n.video.addEventListener('seeked', dessinerCalque);
+  n.video.addEventListener('loadedmetadata', dessinerCalque);
+  n.calque = h('div', { class: 'calque' });
+  n.indicateurDepot = h('div', { class: 'indicateur-depot cache' }, 'Déposez ici : la position et l’instant de la vidéo seront retenus');
+  n.ecran = h('div', { class: 'lecteur' }, n.video, n.calque, n.indicateurDepot);
+  n.ecran.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer.types.includes('application/x-edivid')) return;
+    e.preventDefault();
+    n.indicateurDepot.classList.remove('cache');
+  });
+  n.ecran.addEventListener('dragleave', (e) => { if (!n.ecran.contains(e.relatedTarget)) n.indicateurDepot.classList.add('cache'); });
+  n.ecran.addEventListener('drop', deposerSurVideo);
   n.ongletsLecteur = h('div', { class: 'onglets-petits' });
-  n.rythme = h('div', { class: 'rythme' });
-  remplir(n.lecteur, 
-    h('div', { class: 'carte-tete' }, h('h2', {}, '2. Aperçu du montage'), n.ongletsLecteur),
-    h('div', { class: 'carte-corps' }, n.ecran, n.rythme));
+  n.outilsLecteur = h('div', { class: 'outils-lecteur' });
+  n.zoneCommentaire = h('div');
+  n.timelines = h('div', { class: 'timelines' });
+  n.stats = h('div');
+  n.corpsLecteur = h('div', { class: 'carte-corps' }, n.ecran, n.outilsLecteur, n.zoneCommentaire, n.timelines, n.stats);
 }
 
 function sortieAffichee() {
   const p = E.vue.projet;
-  if (E.lecteur === 'rendu' && p.rendu) return p.rendu;
-  return p.apercu || (E.lecteur === 'apercu' ? p.rendu : null);
+  if (E.lecteur === 'rendu') return p.rendu || null;
+  if (E.lecteur === 'apercu') return p.apercu || null;
+  return null;
+}
+
+function rushLecteur() {
+  const p = E.vue.projet;
+  if (!E.rushLecteur || !p.rushs.some((r) => r.id === E.rushLecteur)) E.rushLecteur = p.rushs[0]?.id || null;
+  return E.rushLecteur;
 }
 
 function dessinerLecteur() {
   const p = E.vue.projet;
   const n = E.noeuds;
-  remplir(n.ongletsLecteur, 
-    h('button', { class: E.lecteur === 'apercu' ? 'actif' : '', onclick: () => { E.lecteur = 'apercu'; dessinerLecteur(); } }, 'Aperçu'),
-    h('button', { class: E.lecteur === 'rendu' ? 'actif' : '', disabled: !p.rendu, title: p.rendu ? '' : 'Pas encore de rendu final', onclick: () => { E.lecteur = 'rendu'; dessinerLecteur(); } }, 'Rendu final'));
-  const s = sortieAffichee();
+  if (E.lecteur !== 'origine' && !sortieAffichee()) {
+    // Pas encore de montage : on montre la vidéo d'origine si elle est prête.
+    if (E.lecteur === 'apercu' && !p.apercu && E.vue.proxys?.length) E.lecteur = 'origine';
+  }
+  remplir(n.ongletsLecteur,
+    h('button', { class: E.lecteur === 'origine' ? 'actif' : '', disabled: !E.vue.proxys?.length, title: E.vue.proxys?.length ? 'La vidéo telle que filmée' : 'Version d’origine en préparation', onclick: () => changerLecteur('origine') }, 'Origine'),
+    h('button', { class: E.lecteur === 'apercu' ? 'actif' : '', disabled: !p.apercu, onclick: () => changerLecteur('apercu') }, 'Aperçu'),
+    h('button', { class: E.lecteur === 'rendu' ? 'actif' : '', disabled: !p.rendu, title: p.rendu ? '' : 'Pas encore de rendu final', onclick: () => changerLecteur('rendu') }, 'Rendu final'));
+  let url = null;
+  let vertical = false;
+  if (E.lecteur === 'origine') {
+    const rid = rushLecteur();
+    const r = p.rushs.find((x) => x.id === rid);
+    if (rid && E.vue.proxys?.includes(rid)) url = `/api/projets/${E.projetId}/rushs/${rid}/video`;
+    vertical = r?.source ? r.source.hauteur > r.source.largeur : false;
+  } else {
+    const s = sortieAffichee();
+    if (s) {
+      url = `/api/projets/${E.projetId}/sorties/${s.fichier}`;
+      vertical = (s.rapport.hauteur || 0) > (s.rapport.largeur || 1);
+    }
+  }
   const vide = n.ecran.querySelector('.vide');
-  if (!s) {
+  if (!url) {
     n.video.classList.add('cache');
     n.video.removeAttribute('src');
+    delete n.video.dataset.url;
     const message = !p.rushs.length ? 'Déposez un rush pour commencer.'
       : !E.vue.pret_a_monter ? 'Analyse des rushs en cours…'
         : !p.montage ? 'Les rushs sont prêts. Cliquez sur « Proposer un montage » en bas de l’écran.'
@@ -572,80 +687,445 @@ function dessinerLecteur() {
     if (vide) vide.lastChild.textContent = message;
     else n.ecran.append(h('div', { class: 'vide' }, icone('film'), h('p', {}, message)));
     n.ecran.classList.remove('vertical');
-    remplir(n.rythme);
-    return;
+  } else {
+    vide?.remove();
+    n.video.classList.remove('cache');
+    if (n.video.dataset.url !== url) { n.video.dataset.url = url; n.video.src = url; }
+    n.ecran.classList.toggle('vertical', vertical);
   }
-  vide?.remove();
-  n.video.classList.remove('cache');
-  const url = `/api/projets/${E.projetId}/sorties/${s.fichier}`;
-  if (n.video.dataset.url !== url) { n.video.dataset.url = url; n.video.src = url; }
-  n.ecran.classList.toggle('vertical', (s.rapport.hauteur || 0) > (s.rapport.largeur || 1));
-  dessinerRythme(s);
+  dessinerOutilsLecteur();
+  dessinerTimelines();
+  dessinerStats();
+  dessinerCalque();
 }
 
-function dessinerRythme(s) {
+function changerLecteur(mode, rush) {
+  E.lecteur = mode;
+  if (rush) E.rushLecteur = rush;
+  dessinerLecteur();
+}
+
+function dessinerOutilsLecteur() {
+  const n = E.noeuds;
+  if (!n.outilsLecteur || !E.vue) return;
+  const p = E.vue.projet;
+  const enPause = n.video.paused && !!n.video.dataset.url;
+  const commenter = h('button', {
+    class: `btn petit ${enPause && p.montage ? 'doux' : ''}`, disabled: !enPause || !p.montage || !!E.commentaire,
+    title: !p.montage ? 'Proposez d’abord un montage' : enPause ? 'Dites au LLM ce qu’il faut corriger à cet instant' : 'Mettez la vidéo en pause à l’endroit voulu',
+    onclick: ouvrirCommentaire,
+  }, icone('discussion'), 'Commenter ce moment');
+  const choixRush = E.lecteur === 'origine' && p.rushs.length > 1
+    ? h('select', { class: 'champ', style: { width: 'auto', marginTop: 0, padding: '5px 8px' }, onchange: (e) => changerLecteur('origine', e.target.value) },
+        p.rushs.map((r) => h('option', { value: r.id, selected: r.id === rushLecteur() }, r.nom)))
+    : null;
+  const bascule = (cle, libelle, valeur) => h('label', { class: 'bascule', title: `Afficher ou masquer la ${libelle.toLowerCase()}` },
+    h('input', { type: 'checkbox', checked: valeur, onchange: (e) => { E[cle] = e.target.checked; stocker(`edivid_${cle}`, e.target.checked ? '1' : '0'); dessinerTimelines(); } }),
+    h('span', {}, libelle));
+  remplir(n.outilsLecteur, commenter, choixRush, h('span', { class: 'espace' }),
+    bascule('voirTlOrigine', 'Timeline d’origine', E.voirTlOrigine),
+    bascule('voirTlMontage', 'Timeline du montage', E.voirTlMontage));
+}
+
+const NOMS_REGIME_LONG = { respiration: 'Respiration', rafale: 'Rafale', impact: 'Impact' };
+
+/** Plans de la vidéo affichée (aperçu ou rendu) : ce qui a été réellement rendu. */
+function plansAffiches() {
+  const s = E.lecteur === 'rendu' ? E.vue.projet.rendu : E.vue.projet.apercu;
+  return s?.rapport?.plans_detail || [];
+}
+
+function dessinerTimelines() {
+  const n = E.noeuds;
+  if (!n.timelines || !E.vue) return;
+  const p = E.vue.projet;
+  const prog = E.programme;
+  const blocs = [];
+  const s = p.apercu && E.lecteur !== 'rendu' ? p.apercu : (p.rendu || p.apercu);
+  if (E.voirTlMontage && s) {
+    const plans = s.rapport.plans_detail || [];
+    const total = s.rapport.duree_montage || 1;
+    const bande = h('div', { class: 'bande', role: 'img', 'aria-label': 'Timeline du montage, plan par plan' },
+      plans.map((pl) => h('div', {
+        class: `bloc ${pl.regime} ${pl.accroche ? 'accroche' : ''} ${pl.transition ? 'trans' : ''}`,
+        style: { flexGrow: pl.d, flexBasis: 0 },
+        title: `${minutes(pl.t)} · ${NOMS_REGIME_LONG[pl.regime]} · cadre ${pl.cadre} · ${fr(pl.d)} s${pl.accroche ? ' · accroche' : ''}${pl.transition ? ` · transition ${pl.transition}` : ''}`,
+        onclick: () => { if (E.lecteur === 'origine') changerLecteur(p.apercu ? 'apercu' : 'rendu'); setTimeout(() => { n.video.currentTime = pl.t + 0.01; }, 50); },
+      })));
+    const repere = h('div', { class: 'reperes' });
+    for (const i of prog?.incrustations || []) {
+      const inc = p.incrustations.find((x) => x.id === i.id);
+      repere.append(h('div', { class: 'repere', style: { left: `${(100 * i.debut) / total}%`, width: `${Math.max(0.4, (100 * (i.fin - i.debut)) / total)}%` },
+        title: `${inc?.texte ? `Texte « ${inc.texte} »` : inc?.effet || p.medias.find((m) => m.id === inc?.media)?.nom || 'incrustation'} · ${minutes(i.debut)}` }));
+    }
+    const plage = E.proposition?.plage_sortie;
+    n.teteMontage = h('div', { class: 'tete', style: { left: '0%' } });
+    blocs.push(h('div', { class: 'piste-titre' }, h('b', {}, 'Montage'), h('span', { class: 'muet' }, ` · ${minutes(total)} · ${plans.length} plans`),
+      E.lecteur === 'rendu' ? null : h('span', { class: 'muet' }, ' · dernier aperçu')),
+    h('div', { class: 'piste-montage' }, bande, repere,
+      plage ? h('div', { class: 'plage', style: { left: `${(100 * plage[0]) / total}%`, width: `${(100 * (plage[1] - plage[0])) / total}%` } }) : null,
+      n.teteMontage));
+  } else {
+    n.teteMontage = null;
+  }
+  if (E.voirTlOrigine && prog?.rushs?.length) {
+    n.tetesOrigine = {};
+    for (const r of prog.rushs) {
+      const rush = p.rushs.find((x) => x.id === r.id);
+      const segments = prog.plans.filter((pl) => pl.rush === r.id && !pl.accroche);
+      const garde = segments.reduce((a, pl) => a + pl.d, 0);
+      const plage = E.proposition?.plage_source?.rush === r.id ? E.proposition.plage_source : null;
+      const tete = h('div', { class: 'tete', style: { left: '0%' } });
+      n.tetesOrigine[r.id] = tete;
+      const piste = h('div', {
+        class: 'piste', title: 'Cliquez pour lire la vidéo d’origine à cet endroit',
+        onclick: (e) => {
+          const b = piste.getBoundingClientRect();
+          const t = ((e.clientX - b.left) / b.width) * r.duree;
+          changerLecteur('origine', r.id);
+          const aller = () => { n.video.currentTime = t; };
+          if (n.video.readyState >= 1) setTimeout(aller, 30); else n.video.addEventListener('loadedmetadata', aller, { once: true });
+        },
+      },
+      segments.map((pl) => h('div', { class: `segment ${pl.regime}`, style: { left: `${(100 * pl.src) / r.duree}%`, width: `${Math.max(0.15, (100 * pl.d) / r.duree)}%` } })),
+      plage ? h('div', { class: 'plage', style: { left: `${(100 * plage.debut) / r.duree}%`, width: `${(100 * (plage.fin - plage.debut)) / r.duree}%` } }) : null,
+      tete);
+      blocs.push(h('div', { class: 'piste-titre' }, h('b', {}, prog.rushs.length > 1 ? `Origine — ${rush?.nom || ''}` : 'Origine'),
+        h('span', { class: 'muet' }, ` · ${minutes(r.duree)} filmées · ${minutes(garde)} gardées par le script`)), piste);
+    }
+  } else {
+    n.tetesOrigine = {};
+  }
+  if (blocs.length) {
+    blocs.push(h('div', { class: 'legende' },
+      h('span', {}, h('i', { style: { background: 'var(--impact)' } }), 'Impact'),
+      h('span', {}, h('i', { style: { background: 'var(--rafale)' } }), 'Rafale'),
+      h('span', {}, h('i', { style: { background: 'var(--respiration)' } }), 'Respiration'),
+      h('span', {}, h('i', { style: { background: 'var(--surface-3)', outline: '1px solid var(--bord)' } }), 'Coupé'),
+      h('span', {}, h('i', { style: { background: 'var(--accent)' } }), 'Incrustation'),
+      E.proposition ? h('span', {}, h('i', { style: { background: 'color-mix(in srgb, var(--accent) 35%, transparent)', outline: '1px dashed var(--accent)' } }), 'Plage de la correction') : null));
+  }
+  remplir(n.timelines, blocs);
+  suivreLecture();
+}
+
+function dessinerStats() {
+  const n = E.noeuds;
+  const p = E.vue.projet;
+  const s = p.apercu || p.rendu;
+  if (!s) { remplir(n.stats); return; }
   const r = s.rapport;
-  const plans = r.plans_detail || [];
-  const total = r.duree_montage || 1;
-  const bande = h('div', { class: 'bande', role: 'img', 'aria-label': 'Rythme du montage, plan par plan' },
-    plans.map((pl) => h('div', {
-      class: `bloc ${pl.regime} ${pl.accroche ? 'accroche' : ''} ${pl.transition ? 'trans' : ''}`,
-      style: { flexGrow: pl.d, flexBasis: 0 },
-      title: `${minutes(pl.t)} · ${{ respiration: 'Respiration', rafale: 'Rafale', impact: 'Impact' }[pl.regime]} · cadre ${pl.cadre} · ${fr(pl.d)} s${pl.accroche ? ' · accroche' : ''}${pl.transition ? ` · transition ${pl.transition}` : ''}`,
-      onclick: () => { E.noeuds.video.currentTime = pl.t + 0.01; E.noeuds.video.play(); },
-    })));
-  E.noeuds.tete = h('div', { class: 'tete', style: { left: '0%' } });
-  bande.append(E.noeuds.tete);
-  const notes = E.vue.projet.montage?.notes || [];
-  const avert = r.avertissements || [];
-  remplir(E.noeuds.rythme, 
-    bande,
-    h('div', { class: 'legende' },
-      h('span', {}, h('i', { style: { background: 'var(--impact)' } }), 'Impact : zoom serré, coupe sèche'),
-      h('span', {}, h('i', { style: { background: 'var(--rafale)' } }), 'Rafale : coupes rapides'),
-      h('span', {}, h('i', { style: { background: 'var(--respiration)' } }), 'Respiration : on laisse vivre'),
-      h('span', {}, h('i', { style: { background: 'repeating-linear-gradient(45deg,#999 0 3px,transparent 3px 6px)' } }), 'Accroche')),
+  const notes = p.montage?.notes || [];
+  const avert = E.programme?.avertissements || r.avertissements || [];
+  remplir(n.stats,
     h('div', { class: 'chiffres' },
-      h('div', { class: 'chiffre' }, h('b', {}, minutes(total)), h('span', {}, `sur ${minutes(r.duree_source)} de rushs`)),
+      h('div', { class: 'chiffre' }, h('b', {}, minutes(r.duree_montage)), h('span', {}, `sur ${minutes(r.duree_source)} de rushs`)),
       h('div', { class: 'chiffre' }, h('b', {}, r.plans), h('span', {}, 'plans')),
       h('div', { class: 'chiffre' }, h('b', {}, `${fr(r.duree_moyenne_plan)} s`), h('span', {}, 'par plan en moyenne')),
-      h('div', { class: 'chiffre' }, h('b', {}, r.zooms_animes + r.transitions), h('span', {}, `zooms animés et transitions`))),
+      h('div', { class: 'chiffre' }, h('b', {}, r.zooms_animes + r.transitions), h('span', {}, 'zooms animés et transitions'))),
     avert.length ? h('div', { class: 'aide', style: { marginTop: '12px', background: 'var(--alerte-doux)' } }, icone('alerte'), h('span', {}, avert.join(' · '))) : null,
-    notes.length ? h('div', { class: 'notes' }, h('h3', {}, 'Notes du monteur'), h('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } }, notes.map((t) => h('li', {}, t)))) : null);
+    notes.length ? h('details', { class: 'notes' }, h('summary', { style: { cursor: 'pointer' } }, h('b', {}, 'Notes du monteur')),
+      h('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } }, notes.map((t) => h('li', {}, t)))) : null);
 }
 
-function planCourant() {
-  const s = sortieAffichee();
-  const t = E.noeuds.video.currentTime;
-  return (s?.rapport?.plans_detail || []).find((pl) => t >= pl.t && t < pl.t + pl.d);
+/** Instant affiché → phrase et décalage dans cette phrase (pour poser une incrustation). */
+function instantVersPhrase() {
+  const n = E.noeuds;
+  const t = n.video.currentTime;
+  const phrases = E.vue.phrases;
+  if (E.lecteur === 'origine') {
+    const rid = rushLecteur();
+    const candidates = phrases.filter((ph) => ph.rush === rid);
+    const ph = candidates.find((x) => t >= x.t0 && t <= x.t1) || candidates.reduce((m, x) => (!m || Math.abs(x.t0 - t) < Math.abs(m.t0 - t) ? x : m), null);
+    return ph ? { phrase: ph, decalage: Math.max(0, t - ph.t0) } : null;
+  }
+  const pl = plansAffiches().find((x) => t >= x.t && t < x.t + x.d);
+  if (!pl) return null;
+  if (pl.accroche) return { accroche: true };
+  const ph = phrases.find((x) => x.cle === pl.phrase);
+  if (!ph) return null;
+  const src = (pl.src ?? ph.t0) + (t - pl.t);
+  return { phrase: ph, decalage: Math.max(0, src - ph.t0) };
+}
+
+/** Rectangle réellement occupé par l'image dans le lecteur (object-fit: contain). */
+function rectImage() {
+  const v = E.noeuds.video;
+  const b = E.noeuds.ecran.getBoundingClientRect();
+  const vw = v.videoWidth || 9;
+  const vh = v.videoHeight || 16;
+  const echelle = Math.min(b.width / vw, b.height / vh);
+  const w = vw * echelle;
+  const hh = vh * echelle;
+  return { left: b.left + (b.width - w) / 2, top: b.top + (b.height - hh) / 2, width: w, height: hh, dx: (b.width - w) / 2, dy: (b.height - hh) / 2 };
+}
+
+async function deposerSurVideo(e) {
+  const n = E.noeuds;
+  e.preventDefault();
+  n.indicateurDepot.classList.add('cache');
+  const brut = e.dataTransfer.getData('application/x-edivid');
+  if (!brut) return;
+  if (!n.video.dataset.url) { toast('Ouvrez d’abord l’aperçu ou la vidéo d’origine.'); return; }
+  const objet = JSON.parse(brut);
+  const r = rectImage();
+  const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  const lieu = instantVersPhrase();
+  if (!lieu) { toast('Cet instant n’appartient à aucune phrase : avancez un peu la lecture.'); return; }
+  if (lieu.accroche) { toast('Vous êtes dans l’accroche : posez plutôt l’élément dans le corps de la vidéo.'); return; }
+  const corps = { phrase: lieu.phrase.cle, decalage: Math.round(lieu.decalage * 100) / 100, x, y, position: 'centre', ...objet };
+  try {
+    await api('POST', `/api/projets/${E.projetId}/incrustations`, corps);
+    E.aMettreAJour = true;
+    toast(`${objet.texte ? 'Texte posé' : 'Média posé'} à ${minutes(n.video.currentTime)}. Mettez à jour l’aperçu pour le voir rendu.`, 'ok');
+  } catch (err) { toast(err.message, 'erreur'); }
+}
+
+/** Instant (dans la vue affichée) où une incrustation est visible, ou null. */
+function incrustationVisible(inc, t) {
+  const p = E.vue.projet;
+  const ph = E.vue.phrases.find((x) => x.cle === inc.phrase);
+  if (!ph) return false;
+  if (E.lecteur === 'origine') {
+    if (ph.rush !== rushLecteur()) return false;
+    const debut = ph.t0 + (inc.decalage || 0);
+    return t >= debut && t <= debut + inc.duree;
+  }
+  const placee = (E.programme?.incrustations || []).find((x) => x.id === inc.id);
+  if (placee && E.lecteur === 'apercu' && !E.aMettreAJour) return t >= placee.debut && t <= placee.fin;
+  // Repli : par les plans affichés.
+  const src = ph.t0 + (inc.decalage || 0);
+  const pl = plansAffiches().find((x) => !x.accroche && x.phrase === inc.phrase && src >= x.src && src < x.src + x.d)
+    || plansAffiches().find((x) => !x.accroche && x.phrase === inc.phrase);
+  if (!pl) return false;
+  const debut = pl.t + Math.max(0, src - pl.src);
+  return t >= debut && t <= debut + inc.duree;
+  // (p reste utilisé par les appelants)
+}
+
+const CENTRES_NOMMES = { haut_gauche: [0.27, 0.16], haut_droite: [0.73, 0.16], bas_gauche: [0.27, 0.72], bas_droite: [0.73, 0.72], centre: [0.5, 0.5], plein: [0.5, 0.5], haut: [0.5, 0.18], bas: [0.5, 0.7] };
+
+/** Calque d'édition, en pause : les textes et médias visibles à cet instant, déplaçables. */
+function dessinerCalque() {
+  const n = E.noeuds;
+  if (!n.calque || !E.vue) return;
+  const p = E.vue.projet;
+  if (!n.video.paused || !n.video.dataset.url) { remplir(n.calque); return; }
+  const r = rectImage();
+  Object.assign(n.calque.style, { left: `${r.dx}px`, top: `${r.dy}px`, width: `${r.width}px`, height: `${r.height}px` });
+  const t = n.video.currentTime;
+  const visibles = p.incrustations.filter((i) => !i.effet && incrustationVisible(i, t));
+  remplir(n.calque, visibles.map((inc) => {
+    const [cx, cy] = inc.x != null ? [inc.x, inc.y] : (CENTRES_NOMMES[inc.position] || (inc.texte ? [0.5, 0.22] : [0.5, 0.5]));
+    let contenu;
+    const style = { left: `${cx * 100}%`, top: `${cy * 100}%` };
+    if (inc.texte) {
+      contenu = h('span', { class: `texte-calque couleur-${inc.couleur || 'blanc'} fond-${inc.fond || 'aucun'}`, style: { fontSize: `${r.height * (0.02 + 0.1 * inc.taille)}px` } }, inc.texte);
+    } else {
+      const m = p.medias.find((x) => x.id === inc.media);
+      if (!m) return null;
+      const url = `/api/projets/${E.projetId}/medias/${m.id}`;
+      style.width = inc.position === 'plein' && inc.x == null ? '100%' : `${inc.taille * 100}%`;
+      contenu = m.genre === 'video' ? h('video', { src: url, muted: true, autoplay: true, loop: true, playsinline: true }) : h('img', { src: url, alt: m.nom, draggable: 'false' });
+    }
+    const el = h('div', { class: 'element-calque', style, title: 'Glissez pour déplacer' }, contenu,
+      h('button', { class: 'supprimer-calque', title: 'Retirer', onpointerdown: (e) => e.stopPropagation(), onclick: async (e) => {
+        e.stopPropagation();
+        await api('DELETE', `/api/projets/${E.projetId}/incrustations/${inc.id}`);
+        E.aMettreAJour = true;
+      } }, icone('fermer')));
+    el.addEventListener('pointerdown', (e) => deplacerElement(e, el, inc));
+    return el;
+  }));
+}
+
+function deplacerElement(e, el, inc) {
+  e.preventDefault();
+  const calque = E.noeuds.calque.getBoundingClientRect();
+  el.setPointerCapture(e.pointerId);
+  let x = null;
+  let y = null;
+  const bouger = (ev) => {
+    x = Math.min(1, Math.max(0, (ev.clientX - calque.left) / calque.width));
+    y = Math.min(1, Math.max(0, (ev.clientY - calque.top) / calque.height));
+    el.style.left = `${x * 100}%`;
+    el.style.top = `${y * 100}%`;
+  };
+  const lacher = async () => {
+    el.removeEventListener('pointermove', bouger);
+    el.removeEventListener('pointerup', lacher);
+    if (x === null) return;
+    try {
+      await api('POST', `/api/projets/${E.projetId}/incrustations/${inc.id}`, { x, y });
+      E.aMettreAJour = true;
+      dessinerBarre();
+    } catch (err) { toast(err.message, 'erreur'); }
+  };
+  el.addEventListener('pointermove', bouger);
+  el.addEventListener('pointerup', lacher);
 }
 
 function suivreLecture() {
-  const s = sortieAffichee();
-  if (!s || !E.noeuds.tete) return;
-  E.noeuds.tete.style.left = `${(100 * E.noeuds.video.currentTime) / (s.rapport.duree_montage || 1)}%`;
-  const pl = planCourant();
-  const cle = pl && !pl.accroche ? pl.phrase : null;
-  if (cle === E.phraseJouee) return;
-  E.phraseJouee = cle;
-  E.noeuds.listePhrases?.querySelectorAll('.phrase.joue').forEach((x) => x.classList.remove('joue'));
-  if (cle) {
-    const el = E.noeuds.listePhrases?.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
+  const n = E.noeuds;
+  if (!E.vue || !n.video) return;
+  const t = n.video.currentTime;
+  const p = E.vue.projet;
+  // Têtes de lecture : celle de la vue jouée, et sa correspondance sur l'autre timeline.
+  const sMontage = p.apercu && E.lecteur !== 'rendu' ? p.apercu : (p.rendu || p.apercu);
+  const totalMontage = sMontage?.rapport?.duree_montage || 1;
+  let tMontage = null;
+  let srcRush = null;
+  let srcT = null;
+  if (E.lecteur === 'origine') {
+    srcRush = rushLecteur();
+    srcT = t;
+    const pl = (sMontage?.rapport?.plans_detail || []).find((x) => !x.accroche && x.rush === srcRush && t >= x.src && t < x.src + x.d);
+    if (pl) tMontage = pl.t + (t - pl.src);
+  } else {
+    tMontage = t;
+    const pl = plansAffiches().find((x) => t >= x.t && t < x.t + x.d);
+    if (pl && pl.src != null) { srcRush = pl.rush; srcT = pl.src + (t - pl.t); }
+  }
+  if (n.teteMontage) {
+    n.teteMontage.style.display = tMontage === null ? 'none' : '';
+    if (tMontage !== null) n.teteMontage.style.left = `${(100 * tMontage) / totalMontage}%`;
+  }
+  for (const [rid, tete] of Object.entries(n.tetesOrigine || {})) {
+    const r = E.programme?.rushs?.find((x) => x.id === rid);
+    tete.style.display = rid === srcRush && r ? '' : 'none';
+    if (rid === srcRush && r) tete.style.left = `${(100 * srcT) / r.duree}%`;
+  }
+  // Phrase en cours dans le texte.
+  let cle = null;
+  if (E.lecteur === 'origine') {
+    cle = E.vue.phrases.find((ph) => ph.rush === srcRush && t >= ph.t0 && t <= ph.t1)?.cle || null;
+  } else {
+    const pl = plansAffiches().find((x) => t >= x.t && t < x.t + x.d);
+    cle = pl && !pl.accroche ? pl.phrase : null;
+  }
+  if (cle !== E.phraseJouee) {
+    E.phraseJouee = cle;
+    E.noeuds.listePhrases?.querySelectorAll('.phrase.joue').forEach((x) => x.classList.remove('joue'));
+    const el = cle ? E.noeuds.listePhrases?.querySelector(`[data-cle="${CSS.escape(cle)}"]`) : null;
     if (el) {
       el.classList.add('joue');
       const liste = E.noeuds.listePhrases;
-      if (el.offsetTop < liste.scrollTop || el.offsetTop > liste.scrollTop + liste.clientHeight - 60) {
-        liste.scrollTo({ top: el.offsetTop - 80, behavior: 'smooth' });
-      }
+      if (el.offsetTop < liste.scrollTop || el.offsetTop > liste.scrollTop + liste.clientHeight - 60) liste.scrollTo({ top: el.offsetTop - 80, behavior: 'smooth' });
     }
   }
 }
 
 function allerALaPhrase(cle) {
-  const s = sortieAffichee();
-  const pl = (s?.rapport?.plans_detail || []).find((x) => x.phrase === cle && !x.accroche);
-  if (pl) { E.noeuds.video.currentTime = pl.t + 0.01; E.noeuds.video.play(); }
-  else toast('Cette phrase n’est pas dans l’aperçu actuel (coupée, ou aperçu à mettre à jour).');
+  const n = E.noeuds;
+  const ph = E.vue.phrases.find((x) => x.cle === cle);
+  if (E.lecteur === 'origine' && ph) {
+    changerLecteur('origine', ph.rush);
+    setTimeout(() => { n.video.currentTime = ph.t0; n.video.play(); }, 50);
+    return;
+  }
+  const pl = plansAffiches().find((x) => x.phrase === cle && !x.accroche);
+  if (pl) { n.video.currentTime = pl.t + 0.01; n.video.play(); return; }
+  if (ph && E.vue.proxys?.includes(ph.rush)) {
+    toast('Phrase coupée du montage : lecture dans la vidéo d’origine.');
+    changerLecteur('origine', ph.rush);
+    setTimeout(() => { n.video.currentTime = ph.t0; n.video.play(); }, 80);
+  } else toast('Cette phrase n’est pas dans l’aperçu actuel.');
+}
+
+// ------------------------------------------------------------------ commentaire sur un instant
+
+const EXEMPLES_COMMENTAIRE = ['Coupe cette phrase', 'Zoom serré sur ses yeux ici', 'Ajoute le texte « … » à cet endroit', 'C’est trop long, accélère ce passage', 'Laisse respirer ce moment, c’est émouvant'];
+
+function ouvrirCommentaire() {
+  const n = E.noeuds;
+  const t = n.video.currentTime;
+  E.commentaire = { t, vue: E.lecteur, rush: E.lecteur === 'origine' ? rushLecteur() : '' };
+  E.proposition = null;
+  dessinerCommentaire();
+  dessinerOutilsLecteur();
+}
+
+function fermerCommentaire() {
+  E.commentaire = null;
+  if (E.proposition) api('DELETE', `/api/projets/${E.projetId}/commentaire/${E.proposition.id}`).catch(() => {});
+  E.proposition = null;
+  remplir(E.noeuds.zoneCommentaire);
+  dessinerOutilsLecteur();
+  dessinerTimelines();
+}
+
+function dessinerCommentaire(etape = 'saisie') {
+  const n = E.noeuds;
+  const c = E.commentaire;
+  if (!c) { remplir(n.zoneCommentaire); return; }
+  const prop = E.proposition;
+  const zone = h('textarea', { class: 'champ', rows: '2', placeholder: prop ? 'Précisez ce qui ne va pas dans la proposition…' : 'Que voulez-vous changer à ce moment précis ?' });
+  const envoyerCommentaire = async () => {
+    const texte = zone.value.trim();
+    if (!texte) { zone.focus(); return; }
+    const precedente = E.proposition?.id || null;
+    dessinerCommentaire('attente');
+    try {
+      E.proposition = await api('POST', `/api/projets/${E.projetId}/commentaire`, { t: c.t, vue: c.vue, rush: c.rush, texte, precedente });
+      dessinerCommentaire('proposition');
+      dessinerTimelines();
+    } catch (err) {
+      toast(err.message, 'erreur');
+      dessinerCommentaire(prop ? 'proposition' : 'saisie');
+    }
+  };
+  zone.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); envoyerCommentaire(); } });
+  const entete = h('div', { class: 'commentaire-tete' },
+    h('b', {}, `Commentaire à ${minutes(c.t)}`),
+    h('span', { class: 'muet petit' }, c.vue === 'origine' ? ' · dans la vidéo d’origine' : ' · dans le montage'),
+    h('span', { class: 'espace' }),
+    h('button', { class: 'btn icone fantome', title: 'Fermer', onclick: fermerCommentaire }, icone('fermer')));
+  let corps;
+  if (etape === 'attente') {
+    corps = h('div', { class: 'ecrit', style: { padding: '10px 0' } }, h('i'), h('i'), h('i'), h('span', { style: { marginLeft: '6px' } }, 'EDIVID reformule et prépare une correction…'));
+  } else if (etape === 'proposition' && prop) {
+    const plage = prop.plage_sortie ? `de ${minutes(prop.plage_sortie[0])} à ${minutes(prop.plage_sortie[1])} dans le montage` : `phrases ${prop.de} à ${prop.a}`;
+    corps = h('div', {},
+      h('p', { class: 'reformulation' }, prop.reformulation),
+      prop.explication ? h('p', { class: 'petit muet', style: { margin: '4px 0 8px' } }, prop.explication) : null,
+      !prop.possible ? h('div', { class: 'aide', style: { background: 'var(--alerte-doux)', marginBottom: '8px' } }, icone('alerte'), h('span', {}, 'EDIVID ne peut pas faire exactement cela ; voici ce qu’il propose à la place.')) : null,
+      h('div', { class: 'petit', style: { marginBottom: '6px' } }, h('b', {}, 'Correction proposée '), h('span', { class: 'muet' }, `(${plage}, surlignée sur les timelines)`)),
+      prop.actions.length
+        ? h('ul', { class: 'liste-actions' }, prop.actions.map((a) => h('li', { class: a.startsWith('non appliqué') ? 'non' : '' }, a)))
+        : h('p', { class: 'petit muet' }, 'Aucun changement : précisez votre demande.'),
+      etape === 'proposition' && E.correction ? h('div', { style: { marginTop: '8px' } }, zone) : null,
+      h('div', { class: 'commentaire-boutons' },
+        E.correction
+          ? h('button', { class: 'btn primaire', onclick: () => { E.correction = false; envoyerCommentaire(); } }, icone('envoyer'), 'Reproposer')
+          : h('button', { class: 'btn primaire', disabled: !prop.actions.some((a) => !a.startsWith('non appliqué')), onclick: async () => {
+              try {
+                await api('POST', `/api/projets/${E.projetId}/commentaire/${prop.id}/valider`);
+                toast('Correction appliquée : un nouvel aperçu se prépare.', 'ok');
+                E.proposition = null;
+                E.commentaire = null;
+                remplir(n.zoneCommentaire);
+                dessinerOutilsLecteur();
+                dessinerTimelines();
+              } catch (err) { toast(err.message, 'erreur'); }
+            } }, icone('ok'), 'Valider'),
+        h('button', { class: 'btn', onclick: () => { E.correction = !E.correction; dessinerCommentaire('proposition'); if (E.correction) setTimeout(() => zone.focus(), 30); } }, E.correction ? 'Ne pas corriger' : 'Corriger'),
+        h('button', { class: 'btn fantome', onclick: fermerCommentaire }, 'Annuler')));
+  } else {
+    corps = h('div', {},
+      zone,
+      h('div', { class: 'suggestions', style: { padding: '8px 0 0' } }, EXEMPLES_COMMENTAIRE.map((ex) => h('button', { onclick: () => {
+        zone.value = ex;
+        zone.focus();
+        const d = ex.indexOf('…');
+        if (d >= 0) zone.setSelectionRange(d, d + 1);
+      } }, ex))),
+      h('div', { class: 'commentaire-boutons' },
+        h('button', { class: 'btn primaire', onclick: envoyerCommentaire }, icone('envoyer'), 'Proposer une correction'),
+        h('button', { class: 'btn fantome', onclick: fermerCommentaire }, 'Annuler')));
+    setTimeout(() => zone.focus(), 30);
+  }
+  remplir(n.zoneCommentaire, h('div', { class: 'commentaire' }, entete, corps));
 }
 
 // ------------------------------------------------------------------ transcription
@@ -685,9 +1165,9 @@ function dessinerPhrases() {
         h('button', { class: 'btn icone fantome', title: d && !d.garder ? 'Rétablir cette phrase' : 'Couper cette phrase', onclick: () => changerPhrase(ph.cle, { garder: !(d ? d.garder : true) }) },
           icone(d && !d.garder ? 'relancer' : 'ciseaux'))) : h('span'));
   }));
-  remplir(E.noeuds.phrases, 
-    h('div', { class: 'carte-tete' },
-      h('h2', {}, '3. Le texte de la vidéo'),
+  appliquerReplie(E.noeuds.phrases, 'phrases');
+  remplir(E.noeuds.phrases,
+    enteteRepliable('phrases', '3. Le texte de la vidéo',
       monte ? h('div', { class: 'onglets-petits' },
         [['toutes', 'Toutes'], ['gardees', 'Gardées'], ['coupees', `Coupées (${nbCoupees})`]].map(([v, l]) =>
           h('button', { class: E.filtre === v ? 'actif' : '', onclick: () => { E.filtre = v; dessinerPhrases(); } }, l))) : null),
@@ -728,11 +1208,14 @@ function dessinerPanneau() {
     ['assistant', 'discussion', 'Assistant', 0],
     ['reglages', 'reglages', 'Réglages', 0],
     ['medias', 'image', 'Médias', p.medias.length],
-    ['effets', 'baguette', 'Effets', p.incrustations.length],
+    ['effets', 'baguette', 'Textes', p.incrustations.length],
   ];
+  appliquerReplie(n.panneau, 'panneau');
   remplir(n.onglets, ...onglets.map(([id, ic, l, compte]) =>
     h('button', { role: 'tab', class: E.onglet === id ? 'actif' : '', 'aria-selected': E.onglet === id ? 'true' : 'false',
-      onclick: () => { E.onglet = id; dessinerPanneau(); } }, icone(ic), l, compte ? h('span', { class: 'compte' }, compte) : null)));
+      onclick: () => { E.onglet = id; if (estReplie('panneau')) { stocker('edivid_replie_panneau', '0'); } dessinerPanneau(); } }, icone(ic), l, compte ? h('span', { class: 'compte' }, compte) : null)),
+    h('button', { class: 'chevron-panneau', title: 'Replier ou déplier ce panneau', 'aria-expanded': estReplie('panneau') ? 'false' : 'true',
+      onclick: () => { stocker('edivid_replie_panneau', estReplie('panneau') ? '0' : '1'); dessinerPanneau(); } }, icone('chevron')));
   if (E.onglet === 'assistant') {
     dessinerDiscussion();
     if (n.corpsPanneau.firstChild !== n.discussion) remplir(n.corpsPanneau, n.discussion);
@@ -899,8 +1382,13 @@ function dessinerMedias(corps) {
       h('span', {}, 'Vos images, GIF, vidéos et sons. Les images et vidéos se posent sur une phrase (la baguette dans le texte, ou en le demandant à l’assistant) ; les sons servent de musique de fond (onglet Réglages).')),
     zoneDepot('Ajoutez des médias', 'Images, GIF, vidéos courtes, musiques', 'image/*,video/*,audio/*,.gif', (f) => televerser(f, 'medias')),
     E.noeuds.televersementsMedias,
+    p.medias.some((m) => m.genre !== 'son') ? h('p', { class: 'tres-petit muet', style: { margin: '10px 0 0' } }, 'Astuce : mettez la vidéo en pause, puis glissez une image ou un GIF directement sur la vidéo, à l’endroit voulu.') : null,
     p.medias.length ? h('div', { class: 'grille-medias' }, p.medias.map((m) =>
-      h('div', { class: 'media' },
+      h('div', { class: `media ${m.genre !== 'son' ? 'deplacable' : ''}`, draggable: m.genre !== 'son' ? 'true' : null,
+        ondragstart: (e) => {
+          e.dataTransfer.setData('application/x-edivid', JSON.stringify({ media: m.id, taille: 0.35, duree: Math.min(m.duree || 3, 4) || 3, entree: 'splash' }));
+          e.dataTransfer.effectAllowed = 'copy';
+        } },
         h('div', { class: 'apercu-media' }, vignetteMedia(m)),
         h('div', { class: 'infos' }, h('b', { title: m.nom }, m.nom),
           h('span', { class: 'muet' }, `${GENRES_MEDIA[m.genre] || m.genre}${m.duree ? ` · ${fr(m.duree)} s` : ''}`),
@@ -918,30 +1406,93 @@ function dessinerMedias(corps) {
 }
 
 const POSITIONS = [
-  ['haut_gauche', 'Haut gauche'], ['plein', 'Plein écran'], ['haut_droite', 'Haut droite'],
+  ['haut_gauche', 'Haut gauche'], ['haut', 'Haut'], ['haut_droite', 'Haut droite'],
   ['bas_gauche', 'Bas gauche'], ['centre', 'Centre'], ['bas_droite', 'Bas droite'],
+  ['plein', 'Plein écran'], ['bas', 'Bas'],
 ];
 const NOMS_POSITION = Object.fromEntries(POSITIONS);
 const EFFETS = { secousse: ['Secousse', 'L’image tremble : effet comique, surprise.'], noir_blanc: ['Noir et blanc', 'Le temps d’un instant dramatique.'] };
 
+const EFFETS_TEXTE = [['splash', 'Splash'], ['fondu', 'Fondu'], ['glisse_gauche', 'Glissé gauche'], ['glisse_droite', 'Glissé droite'],
+  ['glisse_haut', 'Glissé haut'], ['machine', 'Machine à écrire'], ['aucune', 'Sans effet']];
+
+function moduleTexte(corps) {
+  const T = E.texteModule = E.texteModule || { texte: '', couleur: 'jaune', fond: 'aucun', taille: 0.45, entree: 'splash', duree: 2.5 };
+  const apercu = h('div', { class: 'bloc-texte-zone' });
+  const dessinerApercu = () => {
+    const bloc = h('div', {
+      class: `bloc-texte texte-calque couleur-${T.couleur} fond-${T.fond} anim-${T.entree}`, draggable: 'true',
+      title: 'Glissez ce bloc sur la vidéo (en pause), à l’endroit voulu',
+      style: { fontSize: `${14 + 26 * T.taille}px` },
+      ondragstart: (e) => {
+        if (!T.texte.trim()) { e.preventDefault(); toast('Écrivez d’abord le texte.'); return; }
+        e.dataTransfer.setData('application/x-edivid', JSON.stringify({ texte: T.texte, couleur: T.couleur, fond: T.fond, taille: T.taille, entree: T.entree, duree: T.duree }));
+        e.dataTransfer.effectAllowed = 'copy';
+      },
+    }, T.texte.trim() || 'Votre texte');
+    remplir(apercu, bloc, h('span', { class: 'poignee tres-petit muet' }, '⠿ glisser sur la vidéo'));
+  };
+  const zone = h('textarea', { class: 'champ', rows: '2', maxlength: '300', placeholder: 'Par exemple : ABONNEZ-VOUS !' });
+  zone.value = T.texte;
+  zone.addEventListener('input', () => { T.texte = zone.value; dessinerApercu(); });
+  const segments = (cle, options) => {
+    const el = h('div', { class: 'segments' });
+    const dessiner = () => remplir(el, options.map(([v, l]) => h('button', { class: T[cle] === v ? 'actif' : '', onclick: () => { T[cle] = v; dessiner(); dessinerApercu(); } }, l)));
+    dessiner();
+    return el;
+  };
+  const effet = h('select', { class: 'champ' }, EFFETS_TEXTE.map(([v, l]) => h('option', { value: v, selected: T.entree === v }, l)));
+  effet.addEventListener('change', () => { T.entree = effet.value; dessinerApercu(); });
+  const libDuree = h('label', {}, `Durée : ${fr(T.duree)} s`);
+  const libTaille = h('label', {}, 'Taille');
+  dessinerApercu();
+  corps.append(h('div', { class: 'section-reglages' },
+    h('h3', {}, 'Composer un texte'),
+    h('div', { class: 'reglage-aide' }, 'Écrivez, choisissez l’allure et l’effet, puis glissez le bloc sur la vidéo mise en pause : l’endroit du dépôt fixe la position, l’instant de la vidéo fixe le moment.'),
+    h('div', { class: 'ligne-champ' }, zone),
+    h('div', { class: 'ligne-champ' }, h('label', {}, 'Couleur'), segments('couleur', [['blanc', 'Blanc'], ['jaune', 'Jaune'], ['noir', 'Noir']])),
+    h('div', { class: 'ligne-champ' }, h('label', {}, 'Fond'), segments('fond', [['aucun', 'Contour'], ['boite', 'Boîte'], ['bandeau', 'Bandeau']])),
+    h('div', { class: 'ligne-champ' }, libTaille, h('input', { type: 'range', min: '0.1', max: '1', step: '0.05', value: T.taille, oninput: (e) => { T.taille = Number(e.target.value); dessinerApercu(); } })),
+    h('div', { class: 'ligne-champ' }, h('label', {}, 'Effet d’entrée'), effet),
+    h('div', { class: 'ligne-champ' }, libDuree, h('input', { type: 'range', min: '0.5', max: '8', step: '0.5', value: T.duree, oninput: (e) => { T.duree = Number(e.target.value); libDuree.textContent = `Durée : ${fr(T.duree)} s`; } })),
+    apercu,
+    h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+      h('button', { class: 'btn petit', onclick: dessinerApercu, title: 'Rejouer l’effet dans l’aperçu' }, icone('lecture'), 'Voir l’effet'),
+      h('button', { class: 'btn petit doux', onclick: async () => {
+        if (!T.texte.trim()) { toast('Écrivez d’abord le texte.'); return; }
+        const n = E.noeuds;
+        if (!n.video.dataset.url || !n.video.paused) { toast('Mettez la vidéo en pause à l’instant voulu.'); return; }
+        const lieu = instantVersPhrase();
+        if (!lieu || lieu.accroche) { toast('Choisissez un instant dans le corps de la vidéo.'); return; }
+        try {
+          await api('POST', `/api/projets/${E.projetId}/incrustations`, { texte: T.texte, couleur: T.couleur, fond: T.fond, taille: T.taille, entree: T.entree,
+            duree: T.duree, phrase: lieu.phrase.cle, decalage: Math.round(lieu.decalage * 100) / 100, x: 0.5, y: 0.22, position: 'centre' });
+          E.aMettreAJour = true;
+          toast(`Texte posé à ${minutes(n.video.currentTime)}.`, 'ok');
+        } catch (e) { toast(e.message, 'erreur'); }
+      } }, icone('plus'), 'Poser à l’instant affiché'))));
+}
+
 function dessinerEffets(corps) {
   const p = E.vue.projet;
+  moduleTexte(corps);
+  corps.append(h('h3', { style: { margin: '4px 0 10px', textTransform: 'uppercase', fontSize: '11.5px', letterSpacing: '.08em', color: 'var(--texte-3)' } }, 'Posés dans la vidéo'));
   const texte = Object.fromEntries(E.vue.phrases.map((ph) => [ph.cle, ph]));
   corps.append(h('div', { class: 'aide', style: { marginBottom: '12px' } }, icone('info'),
     h('span', {}, 'Une incrustation pose une image, un GIF, une vidéo ou un effet sur une phrase précise. Pour en ajouter une : la baguette à côté d’une phrase, ou demandez à l’assistant (« mets le GIF du chat quand elle parle de montgolfière »).')));
   if (!p.incrustations.length) {
-    corps.append(h('p', { class: 'muet petit' }, 'Aucune incrustation pour l’instant.'));
+    corps.append(h('p', { class: 'muet petit' }, 'Rien pour l’instant : composez un texte ci-dessus, glissez un média depuis l’onglet Médias, ou utilisez la baguette à côté d’une phrase.'));
     return;
   }
   for (const inc of p.incrustations) {
     const media = p.medias.find((m) => m.id === inc.media);
-    const quoi = inc.effet ? EFFETS[inc.effet]?.[0] : media?.nom || '(média retiré)';
+    const quoi = inc.texte ? `Texte « ${inc.texte} »` : inc.effet ? EFFETS[inc.effet]?.[0] : media?.nom || '(média retiré)';
     const ph = texte[inc.phrase];
     corps.append(h('div', { class: 'incrustation' },
       h('div', { style: { minWidth: 0 } },
         h('b', { class: 'petit' }, `✦ ${quoi}`),
         h('div', { class: 'tres-petit muet', style: { marginTop: '3px' } }, ph ? `« ${ph.texte.slice(0, 90)}${ph.texte.length > 90 ? '…' : ''} »` : 'phrase introuvable'),
-        h('div', { class: 'tres-petit muet' }, `${inc.decalage ? `après ${fr(inc.decalage)} s · ` : ''}${fr(inc.duree)} s${inc.effet ? '' : ` · ${NOMS_POSITION[inc.position] || inc.position}`}${inc.fond_vert ? ' · fond vert retiré' : ''}`)),
+        h('div', { class: 'tres-petit muet' }, `${inc.decalage ? `après ${fr(inc.decalage)} s · ` : ''}${fr(inc.duree)} s${inc.effet ? '' : inc.x != null ? ' · position libre' : ` · ${NOMS_POSITION[inc.position] || inc.position}`}${inc.entree ? ` · ${(EFFETS_TEXTE.find(([v]) => v === inc.entree) || [, inc.entree])[1].toLowerCase()}` : ''}${inc.fond_vert ? ' · fond vert retiré' : ''}`)),
       h('div', {},
         ph ? h('button', { class: 'btn icone fantome', title: 'Voir ce moment', onclick: () => allerALaPhrase(inc.phrase) }, icone('lecture')) : null,
         h('button', { class: 'btn icone fantome danger', title: 'Retirer', onclick: async () => {
@@ -1096,6 +1647,12 @@ function afficherGuide() {
       h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, t), h('p', { class: 'petit muet', style: { margin: '3px 0 0' } }, d))))),
     h('div', { class: 'aide', style: { marginTop: '14px' } }, icone('info'),
       h('span', {}, 'L’aperçu est volontairement rapide (demi-définition, sans netteté IA) : servez-vous-en pour juger le rythme. Le rendu final, plus long, soigne l’image.')),
+    h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('discussion'),
+      h('span', {}, 'Une retouche précise ? Mettez l’aperçu en pause et cliquez « Commenter ce moment » : le LLM reformule, propose une correction sur la bonne plage (surlignée sur les timelines), vous validez, corrigez ou annulez.')),
+    h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('baguette'),
+      h('span', {}, 'Onglet Textes : écrivez un texte, choisissez son effet, puis glissez-le sur la vidéo en pause, à l’endroit voulu. Les images et GIF de l’onglet Médias se glissent de la même façon. En pause, tout ce qui est posé se déplace à la souris.')),
+    h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('film'),
+      h('span', {}, 'Sous le lecteur, deux timelines : la vidéo d’origine (ce que le script garde, en couleur ; ce qu’il coupe, en gris) et le montage. Chacune s’allume ou s’éteint ; « Origine » relit la vidéo telle que filmée.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('livre'),
       h('span', {}, 'Le livre à côté de la saisie ouvre la bibliothèque : des demandes toutes prêtes, les vôtres, et les consignes exactes du LLM. L’étoile enregistre la demande que vous venez d’écrire.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('nuage'),
@@ -1277,6 +1834,7 @@ async function afficherParametres() {
       h('a', { class: 'btn icone fantome', href: '#/', title: 'Retour aux projets' }, icone('retour')), logo(), h('span', { class: 'espace' }), boutonTheme()),
     h('h1', { style: { margin: '24px 0 4px' } }, 'Paramètres'),
     h('p', { class: 'muet', style: { marginTop: 0 } }, 'Communs à tous les projets et à toutes les personnes qui utilisent EDIVID sur cet ordinateur.'),
+    sectionGoogle(P),
 
     h('div', { class: 'carte carte-corps', style: { marginTop: '16px' } },
       h('h2', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, icone('courriel'), 'Prévenir par courriel'),
@@ -1350,4 +1908,61 @@ async function afficherParametres() {
         : h('div', {}, h('p', { class: 'petit muet' }, 'Absent : EDIVID encode avec le processeur (plus lent, même qualité). Pour l’activer, installez le paquet correspondant au pilote, puis redémarrez EDIVID :'),
           blocCommande('sudo apt install libnvidia-encode-595-server libnvidia-decode-595-server'),
           blocCommande('systemctl --user restart edivid')))));
+}
+
+// ------------------------------------------------------------------ connexion avec Google (Paramètres)
+
+function sectionGoogle(P) {
+  const g = P.google;
+  const https = (P.url_publique || '').startsWith('https://');
+  const retour = `${(P.url_publique || '').replace(/\/$/, '')}/api/google/retour`;
+  const entreeG = (cle, attrs = {}) => {
+    const el = h('input', { class: 'champ', value: g[cle] ?? '', ...attrs });
+    el.addEventListener('input', () => { g[cle] = el.value; });
+    return el;
+  };
+  const comptes = P.comptes || [];
+  return h('div', { class: 'carte carte-corps', style: { marginTop: '16px' } },
+    h('h2', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, icone('google'), 'Connexion avec Google'),
+    h('p', { class: 'petit muet' }, 'Chacun se connecte avec son compte Google, sans code. La connexion relie aussi son Google Drive : les vidéos déposées depuis son iPhone sont montées et lui reviennent sur son Drive.'),
+    g.configure
+      ? h('div', {},
+          comptes.length ? comptes.map((c) => h('div', { class: 'incrustation' },
+            h('div', { style: { minWidth: 0 } },
+              h('b', { class: 'petit' }, c.nom || c.email), h('div', { class: 'tres-petit muet' }, c.email),
+              h('div', { class: 'tres-petit', style: { marginTop: '4px' } }, c.distant ? h('span', { class: 'pastille ok' }, 'Drive relié') : h('span', { class: 'pastille alerte' }, 'Drive non relié'))),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+              c.distant ? h('label', { class: 'bascule', title: 'Surveiller le dossier d’entrée de ce Drive' },
+                h('input', { type: 'checkbox', checked: c.veille, onchange: async (e) => {
+                  try { await api('POST', '/api/comptes', { email: c.email, veille: e.target.checked }); toast(e.target.checked ? 'Veille de ce Drive activée.' : 'Veille de ce Drive arrêtée.', 'ok'); }
+                  catch (err) { toast(err.message, 'erreur'); e.target.checked = !e.target.checked; }
+                } }), h('span', {}, 'Veille')) : null,
+              h('button', { class: 'btn petit fantome danger', onclick: async () => {
+                if (!(await confirmer('Retirer ce compte ?', `${c.email} ne pourra plus se connecter et son Drive sera délié.`, 'Retirer'))) return;
+                await api('DELETE', `/api/comptes/${encodeURIComponent(c.email)}`);
+                afficherParametres();
+              } }, 'Retirer'))))
+            : h('p', { class: 'petit muet' }, 'Aucun compte autorisé pour l’instant.'),
+          h('a', { class: 'btn bouton-google', href: '/api/google/connexion?mode=liaison', style: { marginTop: '10px' } }, icone('google'), 'Autoriser et relier un compte Google'),
+          h('p', { class: 'tres-petit muet' }, 'La personne concernée clique ce bouton sur son propre ordinateur (après être entrée une fois avec le code d’accès), puis accepte chez Google.'))
+      : h('div', { class: 'aide', style: { background: 'var(--alerte-doux)' } }, icone('alerte'), h('span', {}, 'Pas encore configurée : suivez la mise en place ci-dessous (une seule fois).')),
+    h('details', { style: { marginTop: '14px' }, open: !g.configure },
+      h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, 'Mise en place (une seule fois)'),
+      h('div', { class: 'guide-liste' },
+        [['Ouvrir EDIVID en HTTPS sur le tailnet', h('div', {},
+          h('span', { class: 'petit muet' }, 'Google n’accepte qu’une adresse en HTTPS. Dans la console Tailscale (DNS), activez « HTTPS Certificates », puis sur azoth :'),
+          blocCommande('sudo tailscale serve --bg 8030'),
+          h('span', { class: 'petit muet' }, 'EDIVID est alors aussi joignable à https://azoth.tailaae476.ts.net. Mettez cette adresse dans « Lien des courriels » plus bas.'),
+          !https ? h('div', { class: 'tres-petit', style: { color: 'var(--alerte)', marginTop: '4px' } }, `Adresse actuelle : ${P.url_publique} — elle doit commencer par https://`) : null)],
+        ['Créer l’application chez Google', h('span', { class: 'petit muet' },
+          'console.cloud.google.com → nouveau projet « EDIVID » → API et services : activez « Google Drive API ». Écran de consentement OAuth : type Externe, nom EDIVID, champs d’application « …/auth/drive », openid, email, profile ; ajoutez en utilisateurs test les comptes qui se connecteront. Une fois l’essai réussi, passez l’application « En production » : sinon Google coupe la liaison du Drive au bout de 7 jours (un avertissement « application non validée » s’affichera, il suffit de continuer).')],
+        ['Créer l’identifiant', h('div', {}, h('span', { class: 'petit muet' }, 'Identifiants → Créer → ID client OAuth → « Application Web ». URI de redirection autorisé :'), blocCommande(retour))],
+        ['Coller l’identifiant ici', h('div', {},
+          champ('ID client', entreeG('client_id', { placeholder: '…apps.googleusercontent.com' })),
+          champ('Code secret du client', entreeG('client_secret', { type: 'password', autocomplete: 'new-password', placeholder: g.secret_defini ? '•••••••• (enregistré — laissez vide pour le garder)' : '' })),
+          h('button', { class: 'btn primaire', style: { marginTop: '10px' }, onclick: async () => {
+            try { await api('POST', '/api/parametres', { google: { client_id: g.client_id, client_secret: g.client_secret } }); toast('Identifiant Google enregistré.', 'ok'); afficherParametres(); }
+            catch (e) { toast(e.message, 'erreur'); }
+          } }, 'Enregistrer'))],
+        ].map(([t, x], i) => h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, t), x))))));
 }

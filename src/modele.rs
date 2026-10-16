@@ -41,6 +41,9 @@ pub struct Projet {
     /// « Google Drive » pour un projet créé par la veille du dossier d'entrée.
     #[serde(default)]
     pub origine: String,
+    /// Compte Google dont le Drive a fourni le projet : la vidéo y retourne, le courriel lui est envoyé.
+    #[serde(default)]
+    pub compte: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -148,6 +151,23 @@ pub struct Incrustation {
     pub fond_vert: bool,
     #[serde(default)]
     pub son: bool,
+    /// Texte incrusté (module Texte) ; vide pour un média ou un effet.
+    #[serde(default)]
+    pub texte: String,
+    /// blanc, jaune, noir.
+    #[serde(default)]
+    pub couleur: String,
+    /// aucun, boite, bandeau.
+    #[serde(default)]
+    pub fond: String,
+    /// Effet d'entrée : aucune, fondu, splash, glisse_gauche, glisse_droite, glisse_haut, machine.
+    #[serde(default)]
+    pub entree: String,
+    /// Centre choisi par glisser-déposer (0–1) ; à défaut, la position nommée.
+    #[serde(default)]
+    pub x: Option<f64>,
+    #[serde(default)]
+    pub y: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

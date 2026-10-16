@@ -85,7 +85,11 @@ pub async fn prevenir(etat: &EtatPartage, genre: &str, p: &Projet, detail: &str)
         _ => (format!("EDIVID — problème sur « {} »", p.nom),
               format!("Bonjour,\n\nUn travail n'a pas abouti sur « {} » :\n{detail}\n\nLe projet :\n{url}\n\n— EDIVID", p.nom)),
     };
-    let c = c.clone();
+    let mut c = c.clone();
+    // Le compte Google d'où vient le projet est prévenu aussi.
+    if p.compte.contains('@') && !c.destinataires.iter().any(|d| d.eq_ignore_ascii_case(&p.compte)) {
+        c.destinataires.push(p.compte.clone());
+    }
     let nom = p.nom.clone();
     tokio::spawn(async move {
         match envoyer(&c, &sujet, &texte).await {

@@ -23,6 +23,8 @@ pub struct Config {
     pub code_acces: String,
     /// Valeur du témoin de session, dérivée du code.
     pub jeton: String,
+    /// Secret de signature des sessions ouvertes par Google.
+    pub secret: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,6 +77,7 @@ impl Config {
             azothd: env("EDIVID_AZOTHD", "http://127.0.0.1:8016"),
             code_acces: acces.code,
             jeton,
+            secret: acces.sel,
         })
     }
 }

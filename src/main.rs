@@ -9,6 +9,7 @@ mod courriel;
 mod decoupe;
 mod drive;
 mod etat;
+mod google;
 mod llm;
 mod modele;
 mod parametres;
@@ -32,6 +33,7 @@ async fn main() -> Result<()> {
     travaux::demarrer(etat.clone());
     carte::demarrer_veille(etat.clone());
     drive::demarrer(etat.clone());
+    travaux::rattraper_proxys(&etat).await;
     let app = api::routes(etat.clone());
     let mut serveurs = Vec::new();
     for adresse in adresses {

@@ -136,9 +136,38 @@ fn enregistrer_registre(etat: &EtatPartage, r: &Registre) {
     let _ = std::fs::write(etat.cfg.donnees.join("drive.json"), serde_json::to_vec_pretty(r).unwrap_or_default());
 }
 
-/// Un passage de veille : prend les envois terminés et crée leurs projets.
+/// Les Drive à surveiller : celui de chaque compte relié qui l'a demandé, et le Drive réglé à la main.
+async fn sources(etat: &EtatPartage) -> Vec<(Drive, String)> {
+    let p = etat.parametres.read().await.clone();
+    let mut v: Vec<(Drive, String)> = p
+        .comptes
+        .iter()
+        .filter(|c| c.veille && !c.distant.is_empty())
+        .map(|c| (Drive { distant: c.distant.clone(), ..p.drive.clone() }, c.email.clone()))
+        .collect();
+    if p.drive.actif && !v.iter().any(|(d, _)| d.distant == p.drive.distant) {
+        v.push((p.drive.clone(), String::new()));
+    }
+    v
+}
+
+/// Un passage de veille sur tous les Drive surveillés.
 pub async fn passage(etat: &EtatPartage) -> Result<()> {
-    let d = etat.parametres.read().await.drive.clone();
+    let mut derniere_erreur = None;
+    for (d, compte) in sources(etat).await {
+        if let Err(e) = passage_source(etat, &d, &compte).await {
+            derniere_erreur = Some(e);
+        }
+    }
+    match derniere_erreur {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// Un passage sur un Drive : prend les envois terminés et crée leurs projets.
+async fn passage_source(etat: &EtatPartage, d: &Drive, compte: &str) -> Result<()> {
+    let d = d.clone();
     let fichiers = match lister(&d).await {
         Ok(f) => f,
         // Dossier d'entrée absent (premier usage, ou supprimé) : on le recrée, il est vide.
@@ -149,12 +178,19 @@ pub async fn passage(etat: &EtatPartage) -> Result<()> {
         Err(e) => return Err(e),
     };
     let mut registre = charger_registre(etat);
-    let precedents = std::mem::take(&mut *etat.drive.vus.lock().unwrap());
+    // Tailles vues au passage précédent, pour ce Drive seulement.
+    let prefixe = format!("{}#", d.distant);
+    let precedents: HashMap<String, u64> = {
+        let mut vus = etat.drive.vus.lock().unwrap();
+        let (miens, autres): (HashMap<_, _>, HashMap<_, _>) = vus.drain().partition(|(k, _)| k.starts_with(&prefixe));
+        *vus = autres;
+        miens.into_iter().map(|(k, v)| (k[prefixe.len()..].to_string(), v)).collect()
+    };
     let mut groupes: BTreeMap<String, Vec<Fichier>> = BTreeMap::new();
     let mut maintenant_vus = HashMap::new();
     for f in fichiers {
-        maintenant_vus.insert(f.chemin.clone(), f.taille);
-        if registre.pris.contains(&format!("{}#{}", f.chemin, f.taille)) {
+        maintenant_vus.insert(format!("{prefixe}{}", f.chemin), f.taille);
+        if registre.pris.contains(&format!("{}#{}", f.chemin, f.taille)) || registre.pris.contains(&format!("{prefixe}{}#{}", f.chemin, f.taille)) {
             continue;
         }
         let groupe = match f.chemin.split_once('/') {
@@ -163,7 +199,7 @@ pub async fn passage(etat: &EtatPartage) -> Result<()> {
         };
         groupes.entry(groupe).or_default().push(f);
     }
-    *etat.drive.vus.lock().unwrap() = maintenant_vus;
+    etat.drive.vus.lock().unwrap().extend(maintenant_vus);
     let mut attente = 0;
     for (groupe, fichiers) in groupes {
         let stable = fichiers.iter().all(|f| precedents.get(&f.chemin) == Some(&f.taille) && f.taille > 0);
@@ -172,7 +208,7 @@ pub async fn passage(etat: &EtatPartage) -> Result<()> {
             continue;
         }
         etat.drive.occupe(Some(format!("Téléchargement de « {groupe} »")));
-        let res = prendre(etat, &d, &groupe, &fichiers, &mut registre).await;
+        let res = prendre(etat, &d, compte, &groupe, &fichiers, &mut registre).await;
         etat.drive.occupe(None);
         enregistrer_registre(etat, &registre);
         if let Err(e) = res {
@@ -193,7 +229,8 @@ fn nom_de_groupe(groupe: &str) -> String {
     nom.replace(['_', '-'], " ").trim().to_string()
 }
 
-async fn prendre(etat: &EtatPartage, d: &Drive, groupe: &str, fichiers: &[Fichier], registre: &mut Registre) -> Result<()> {
+async fn prendre(etat: &EtatPartage, d: &Drive, compte: &str, groupe: &str, fichiers: &[Fichier], registre: &mut Registre)
+                 -> Result<()> {
     let modele = if d.modele.is_empty() { None } else { etat.projet(&d.modele).await.ok() };
     let id = nouvel_id();
     let mut p = Projet {
@@ -213,6 +250,7 @@ async fn prendre(etat: &EtatPartage, d: &Drive, groupe: &str, fichiers: &[Fichie
         notifier_montage: false,
         depot_drive: None,
         origine: "Google Drive".into(),
+        compte: compte.to_string(),
     };
     let mut tries: Vec<&Fichier> = fichiers.iter().collect();
     tries.sort_by(|a, b| a.chemin.cmp(&b.chemin));
@@ -236,7 +274,7 @@ async fn prendre(etat: &EtatPartage, d: &Drive, groupe: &str, fichiers: &[Fichie
         etat.file.ajouter(etat, &id, Genre::Preparer(r));
     }
     for f in &tries {
-        registre.pris.insert(format!("{}#{}", f.chemin, f.taille));
+        registre.pris.insert(format!("{}#{}#{}", d.distant, f.chemin, f.taille));
         let source = chemin(&d.distant, &format!("{}/{}", d.entree, f.chemin));
         let cible = chemin(&d.distant, &format!("{}/{PRIS_EN_CHARGE}/{}", d.entree, f.chemin));
         if let Err(e) = rclone_cmd(&["moveto", &source, &cible]).await {
@@ -250,8 +288,16 @@ async fn prendre(etat: &EtatPartage, d: &Drive, groupe: &str, fichiers: &[Fichie
 
 /// Dépose le rendu final dans le dossier de sortie ; renvoie son chemin sur le Drive.
 pub async fn deposer(etat: &EtatPartage, projet: &str) -> Result<String> {
-    let d = etat.parametres.read().await.drive.clone();
     let p = etat.projet(projet).await?;
+    // Le rendu retourne au Drive d'où vient le projet ; sinon, au Drive réglé à la main.
+    let d = {
+        let params = etat.parametres.read().await;
+        let mut d = params.drive.clone();
+        if let Some(c) = params.comptes.iter().find(|c| !p.compte.is_empty() && c.email == p.compte && !c.distant.is_empty()) {
+            d.distant = c.distant.clone();
+        }
+        d
+    };
     let rendu = p.rendu.as_ref().ok_or_else(|| anyhow!("pas encore de rendu final"))?;
     let local = etat.dossier_projet(projet).join("sorties").join(&rendu.fichier);
     let nom: String = p.nom.chars().map(|c| if matches!(c, '/' | '\\' | ':') { '-' } else { c }).collect();
@@ -270,7 +316,7 @@ pub fn demarrer(etat: EtatPartage) {
         loop {
             let d = etat.parametres.read().await.drive.clone();
             let attente = Duration::from_secs(d.intervalle_s.max(30));
-            if d.actif {
+            if !sources(&etat).await.is_empty() {
                 if let Err(e) = passage(&etat).await {
                     tracing::warn!("veille du Drive : {e:#}");
                     etat.drive.dire("Le dossier d'entrée n'a pas pu être lu", Some(format!("{e:#}")));

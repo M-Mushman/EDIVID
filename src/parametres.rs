@@ -73,13 +73,34 @@ impl Default for Drive {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Google {
+    pub client_id: String,
+    pub client_secret: String,
+}
+
+/// Compte Google autorisé à se connecter ; son Drive est relié par rclone.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Compte {
+    pub email: String,
+    pub nom: String,
+    /// Distant rclone de son Drive (« edivid_<compte>: »), vide tant qu'il n'est pas relié.
+    pub distant: String,
+    /// Veille du dossier d'entrée de son Drive.
+    pub veille: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Parametres {
-    /// Adresse de l'interface, pour les liens des courriels.
+    /// Adresse de l'interface, pour les liens des courriels et le retour de Google.
     pub url_publique: String,
     pub courriel: Courriel,
     pub drive: Drive,
+    pub google: Google,
+    pub comptes: Vec<Compte>,
 }
 
 impl Default for Parametres {
@@ -88,6 +109,8 @@ impl Default for Parametres {
             url_publique: "http://azoth.tailaae476.ts.net:8030".into(),
             courriel: Courriel::default(),
             drive: Drive::default(),
+            google: Google::default(),
+            comptes: vec![],
         }
     }
 }
@@ -113,6 +136,9 @@ pub fn vue(p: &Parametres) -> Value {
     let mut v = serde_json::to_value(p).unwrap_or_default();
     v["courriel"]["mot_de_passe"] = json!("");
     v["courriel"]["mot_de_passe_defini"] = json!(!p.courriel.mot_de_passe.is_empty());
+    v["google"]["client_secret"] = json!("");
+    v["google"]["secret_defini"] = json!(!p.google.client_secret.is_empty());
+    v["google"]["configure"] = json!(!p.google.client_id.is_empty() && !p.google.client_secret.is_empty());
     v
 }
 
@@ -139,6 +165,15 @@ pub fn fusionner(actuels: &Parametres, recu: &Value) -> Result<Parametres> {
         d.sortie = d.sortie.trim().trim_matches('/').to_string();
         d.intervalle_s = d.intervalle_s.clamp(30, 3600);
         nouveau.drive = d;
+    }
+    if let Some(g) = recu.get("google") {
+        let mut g: Google = serde_json::from_value(g.clone())?;
+        g.client_id = g.client_id.trim().to_string();
+        g.client_secret = g.client_secret.trim().to_string();
+        if g.client_secret.is_empty() {
+            g.client_secret = actuels.google.client_secret.clone();
+        }
+        nouveau.google = g;
     }
     Ok(nouveau)
 }

@@ -37,6 +37,10 @@ pub struct Etat {
     pub drive: Veille,
     /// Encodeur matériel NVIDIA utilisable (paquet libnvidia-encode présent).
     pub nvenc: bool,
+    /// Propositions de correction en attente de validation (commentaires sur un instant).
+    pub propositions: std::sync::Mutex<HashMap<String, Value>>,
+    /// Allers-retours en cours avec Google (connexion).
+    pub google: crate::google::Demandes,
 }
 
 pub type EtatPartage = Arc<Etat>;
@@ -71,6 +75,8 @@ impl Etat {
             parametres: tokio::sync::RwLock::new(parametres::charger(&donnees)),
             drive: Veille::nouvelle(),
             nvenc,
+            propositions: Default::default(),
+            google: Default::default(),
         }))
     }
 

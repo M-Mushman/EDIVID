@@ -21,6 +21,8 @@ use crate::rendu;
 pub enum Genre {
     Preparer(String),
     Analyser(String),
+    /// Version légère du rush pour le lecteur de l'interface.
+    Proxy(String),
     Monter,
     Apercu,
     Rendu,
@@ -31,6 +33,7 @@ impl Genre {
         match self {
             Genre::Preparer(_) => "Préparation d'un rush",
             Genre::Analyser(_) => "Analyse d'un rush",
+            Genre::Proxy(_) => "Vidéo d'origine pour le lecteur",
             Genre::Monter => "Montage par le LLM",
             Genre::Apercu => "Aperçu rapide",
             Genre::Rendu => "Rendu final",
@@ -70,7 +73,7 @@ impl File {
     pub fn ajouter(&self, etat: &EtatPartage, projet: &str, genre: Genre) {
         {
             let mut attente = self.attente.lock().unwrap();
-            let unique = matches!(genre, Genre::Apercu | Genre::Rendu | Genre::Monter);
+            let unique = matches!(genre, Genre::Apercu | Genre::Rendu | Genre::Monter | Genre::Proxy(_));
             if unique && attente.iter().any(|t| t.projet == projet && t.genre == genre) {
                 return;
             }
@@ -194,6 +197,17 @@ async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
             })
             .await?;
             etat.file.ajouter(etat, projet, Genre::Analyser(rush.clone()));
+            etat.file.ajouter(etat, projet, Genre::Proxy(rush.clone()));
+        }
+        Genre::Proxy(rush) => {
+            let p = etat.projet(projet).await?;
+            let Some(r) = p.rushs.iter().find(|x| &x.id == rush) else { return Ok(()) };
+            let dossier = etat.dossier_travail(projet, rush);
+            let duree = r.source.as_ref().map(|s| s.duree).unwrap_or(0.0);
+            if !dossier.join("proxy.mp4").exists() && dossier.join("mezz.mkv").exists() {
+                rendu::proxy(etat, projet, &dossier.join("mezz.mkv"), &dossier.join("proxy.mp4"), duree).await?;
+                etat.emettre(projet, "projet", json!({}));
+            }
         }
         Genre::Analyser(rush) => {
             let p = etat.projet(projet).await?;
@@ -267,4 +281,23 @@ async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Au démarrage : les rushs préparés avant la v0.3 reçoivent leur version pour le lecteur.
+pub async fn rattraper_proxys(etat: &EtatPartage) {
+    let projets: Vec<(String, Vec<String>)> = etat
+        .projets
+        .lock()
+        .await
+        .values()
+        .map(|p| (p.id.clone(), p.rushs.iter().map(|r| r.id.clone()).collect()))
+        .collect();
+    for (pid, rushs) in projets {
+        for rid in rushs {
+            let d = etat.dossier_travail(&pid, &rid);
+            if d.join("mezz.mkv").exists() && !d.join("proxy.mp4").exists() {
+                etat.file.ajouter(etat, &pid, Genre::Proxy(rid));
+            }
+        }
+    }
 }

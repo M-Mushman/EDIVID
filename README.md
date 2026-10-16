@@ -32,6 +32,14 @@ premier lancement dans `donnees/acces.json`.
 - Google Drive par rclone (`~/.local/bin/rclone`, compte relié par `rclone config`) : un fichier ou
   un sous-dossier déposé dans le dossier d'entrée devient un projet monté automatiquement ; la
   vidéo finale part dans le dossier de sortie.
+- Lecteur Origine / Aperçu / Rendu final, deux timelines (vidéo d'origine avec ce que le script garde,
+  montage) que l'on allume ou éteint ; panneaux repliables.
+- Commentaire sur un instant : le LLM reformule, propose une correction sur une plage de phrases,
+  la personne valide, corrige ou annule.
+- Module Texte (effets fondu, splash, glissés, machine à écrire) et glisser-déposer des textes et
+  médias directement sur la vidéo ; calque d'édition en pause.
+- Connexion avec Google (OAuth, application Web, HTTPS du tailnet par `tailscale serve`) : ouvre la
+  session et relie le Drive du compte ; veille par compte, la vidéo montée retourne à son Drive.
 - Encodage NVENC si le paquet `libnvidia-encode-<branche>` du pilote est installé, sinon x264.
 
 Avant tout travail sur la carte graphique, EDIVID prend un bail auprès du contrôleur d'admission

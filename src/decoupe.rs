@@ -137,6 +137,13 @@ pub struct MotSortie {
 
 #[derive(Clone, Debug)]
 pub struct IncrustationPlacee {
+    pub id: String,
+    pub texte: String,
+    pub couleur: String,
+    pub fond: String,
+    pub entree: String,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
     pub media: String,
     pub effet: String,
     pub debut: f64,
@@ -603,6 +610,13 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         };
         let debut = plan.sortie_t0 + (t - plan.t0).clamp(0.0, plan.duree);
         incrustations.push(IncrustationPlacee {
+            id: inc.id.clone(),
+            texte: inc.texte.clone(),
+            couleur: inc.couleur.clone(),
+            fond: inc.fond.clone(),
+            entree: inc.entree.clone(),
+            x: inc.x,
+            y: inc.y,
             media: inc.media.clone(),
             effet: inc.effet.clone(),
             debut,
@@ -636,6 +650,35 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
 pub fn court(t: &str) -> String {
     let t: String = t.chars().take(60).collect();
     t
+}
+
+fn arr(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+
+/// Plans, avec leur place dans le montage (t, d) et dans le rush d'origine (src).
+pub fn plans_json(prog: &Programme) -> Value {
+    json!(prog
+        .plans
+        .iter()
+        .map(|pl| json!({"t": arr(pl.sortie_t0), "d": arr(pl.duree), "src": arr(pl.t0), "rush": pl.rush,
+                         "phrase": pl.phrase, "regime": pl.regime, "cadre": pl.cadre, "accroche": pl.accroche,
+                         "transition": pl.transition}))
+        .collect::<Vec<_>>())
+}
+
+/// Le script courant, tel que les timelines l'affichent (sans attendre un rendu).
+pub fn programme_json(prog: &Programme) -> Value {
+    json!({
+        "duree": arr(prog.duree),
+        "largeur": prog.largeur,
+        "hauteur": prog.hauteur,
+        "plans": plans_json(prog),
+        "titres": prog.titres.iter().map(|(t, titre)| json!({"t": arr(*t), "titre": titre})).collect::<Vec<_>>(),
+        "incrustations": prog.incrustations.iter().map(|i| json!({"id": i.id, "debut": arr(i.debut), "fin": arr(i.fin)}))
+            .collect::<Vec<_>>(),
+        "avertissements": prog.avertissements,
+    })
 }
 
 pub fn rapport(prog: &Programme, duree_source: f64) -> Value {

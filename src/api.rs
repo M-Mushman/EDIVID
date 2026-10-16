@@ -23,6 +23,7 @@ use crate::bibliotheque;
 use crate::courriel;
 use crate::decoupe;
 use crate::drive;
+use crate::google;
 use crate::parametres;
 use crate::etat::EtatPartage;
 use crate::llm;
@@ -58,8 +59,13 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/medias", put(televerser_media))
         .layer(DefaultBodyLimit::disable());
     Router::new()
-        .route("/api/session", get(acces::session))
+        .route("/api/session", get(acces::voir_session))
         .route("/api/connexion", post(acces::connexion))
+        .route("/api/deconnexion", post(acces::deconnexion))
+        .route("/api/google/connexion", get(google::aller))
+        .route("/api/google/retour", get(google::revenir))
+        .route("/api/comptes", post(changer_compte))
+        .route("/api/comptes/{email}", delete(retirer_compte))
         .route("/api/catalogue", get(catalogue))
         .route("/api/etat", get(etat_general))
         .route("/api/projets", get(liste_projets).post(creer_projet))
@@ -71,7 +77,12 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/reglages", post(changer_reglages))
         .route("/api/projets/{id}/phrase", post(changer_phrase))
         .route("/api/projets/{id}/incrustations", post(ajouter_incrustation))
-        .route("/api/projets/{id}/incrustations/{iid}", delete(retirer_incrustation))
+        .route("/api/projets/{id}/incrustations/{iid}", delete(retirer_incrustation).post(modifier_incrustation))
+        .route("/api/projets/{id}/commentaire", post(commenter))
+        .route("/api/projets/{id}/commentaire/{pid}/valider", post(valider_commentaire))
+        .route("/api/projets/{id}/commentaire/{pid}", delete(annuler_commentaire))
+        .route("/api/projets/{id}/programme", get(programme))
+        .route("/api/projets/{id}/rushs/{rid}/video", get(video_origine))
         .route("/api/projets/{id}/monter", post(monter))
         .route("/api/projets/{id}/apercu", post(apercu))
         .route("/api/projets/{id}/rendu", post(rendu_final))
@@ -88,6 +99,7 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/bibliotheque", get(voir_bibliotheque).post(ajouter_demande))
         .route("/api/bibliotheque/{did}", delete(retirer_demande))
         .merge(televersement)
+        .nest_service("/polices", ServeDir::new(etat.cfg.racine.join("modeles").join("polices")))
         .fallback_service(ServeDir::new(&web).fallback(ServeFile::new(web.join("index.html"))))
         .layer(middleware::from_fn_with_state(etat.clone(), acces::garde))
         .with_state(etat)
@@ -139,6 +151,7 @@ async fn creer_projet(State(etat): State<EtatPartage>, Json(n): Json<Nom>) -> Re
         notifier_montage: false,
         depot_drive: None,
         origine: String::new(),
+        compte: String::new(),
     };
     etat.enregistrer(&p).await?;
     let id = p.id.clone();
@@ -177,7 +190,10 @@ async fn voir_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) ->
                               "decision": decisions.get(ph.cle.as_str())}))
         .collect();
     let tous_prets = !p.rushs.is_empty() && p.rushs.iter().all(|r| r.etat == EtatRush::Pret);
+    let proxys: Vec<&str> = p.rushs.iter().filter(|r| etat.dossier_travail(&id, &r.id).join("proxy.mp4").exists())
+        .map(|r| r.id.as_str()).collect();
     Ok(Json(json!({
+        "proxys": proxys,
         "projet": p,
         "phrases": phrases,
         "pret_a_monter": tous_prets,
@@ -409,6 +425,10 @@ fn changer(p: &mut Projet, ps: &[crate::modele::Phrase], c: &ChangementPhrase) -
             d.cadre = k.clone();
             faits.push(format!("cadre {k}"));
         }
+    } else if d.regime == "impact" && (d.cadre == "large" || d.cadre == "moyen") {
+        // Règle du monteur : un impact se joue serré.
+        d.cadre = "visage".into();
+        faits.push("cadre visage".into());
     }
     (!faits.is_empty()).then(|| faits.join(", "))
 }
@@ -423,44 +443,107 @@ async fn changer_phrase(State(etat): State<EtatPartage>, Path(id): Path<String>,
     Ok(Json(json!({"fait": fait})))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct NouvelleIncrustation {
     #[serde(default)]
     media: String,
     #[serde(default)]
     effet: String,
+    #[serde(default)]
+    texte: String,
     phrase: String,
     #[serde(default)]
     decalage: f64,
     duree: f64,
+    #[serde(default)]
     position: String,
     taille: f64,
     #[serde(default)]
     fond_vert: bool,
     #[serde(default)]
     son: bool,
+    #[serde(default)]
+    couleur: String,
+    #[serde(default)]
+    fond: String,
+    #[serde(default)]
+    entree: String,
+    #[serde(default)]
+    x: Option<f64>,
+    #[serde(default)]
+    y: Option<f64>,
 }
 
+const ENTREES: &[&str] = &["", "aucune", "fondu", "splash", "glisse_gauche", "glisse_droite", "glisse_haut", "machine"];
+const POSITIONS: &[&str] = &["plein", "centre", "haut", "bas", "haut_gauche", "haut_droite", "bas_gauche", "bas_droite"];
+
 fn valider_incrustation(p: &Projet, n: NouvelleIncrustation) -> Result<Incrustation, String> {
-    if n.effet.is_empty() && !p.medias.iter().any(|m| m.id == n.media && m.genre != "son") {
-        return Err("choisissez une image, un GIF ou une vidéo de la médiathèque".into());
+    let texte: String = n.texte.trim().chars().take(300).collect();
+    if texte.is_empty() && n.effet.is_empty() && !p.medias.iter().any(|m| m.id == n.media && m.genre != "son") {
+        return Err("choisissez une image, un GIF ou une vidéo de la médiathèque, ou écrivez un texte".into());
     }
     if !["", "secousse", "noir_blanc"].contains(&n.effet.as_str()) {
         return Err("effet inconnu".into());
     }
-    let positions = ["plein", "centre", "haut_gauche", "haut_droite", "bas_gauche", "bas_droite"];
+    let est_texte = !texte.is_empty();
     Ok(Incrustation {
         id: nouvel_id(),
-        media: if n.effet.is_empty() { n.media } else { String::new() },
-        effet: n.effet,
+        media: if est_texte || !n.effet.is_empty() { String::new() } else { n.media },
+        effet: if est_texte { String::new() } else { n.effet },
         phrase: n.phrase,
         decalage: n.decalage.max(0.0),
         duree: n.duree.clamp(0.2, 30.0),
-        position: if positions.contains(&n.position.as_str()) { n.position } else { "centre".into() },
+        position: if POSITIONS.contains(&n.position.as_str()) { n.position } else { "centre".into() },
         taille: n.taille.clamp(0.1, 1.0),
         fond_vert: n.fond_vert,
         son: n.son,
+        texte,
+        couleur: if ["blanc", "jaune", "noir"].contains(&n.couleur.as_str()) { n.couleur } else { "blanc".into() },
+        fond: if ["aucun", "boite", "bandeau"].contains(&n.fond.as_str()) { n.fond } else { "aucun".into() },
+        entree: if ENTREES.contains(&n.entree.as_str()) { n.entree } else { String::new() },
+        x: n.x.map(|v| v.clamp(0.0, 1.0)),
+        y: n.y.map(|v| v.clamp(0.0, 1.0)),
     })
+}
+
+/// Déplacer, raccourcir, réécrire une incrustation (calque d'aperçu, module Texte).
+async fn modifier_incrustation(State(etat): State<EtatPartage>, Path((id, iid)): Path<(String, String)>,
+                               Json(v): Json<Value>) -> Reponse {
+    let trouve = etat
+        .modifier(&id, |p| {
+            let Some(i) = p.incrustations.iter_mut().find(|i| i.id == iid) else { return false };
+            if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+                i.x = Some(x.clamp(0.0, 1.0));
+                i.y = Some(y.clamp(0.0, 1.0));
+            }
+            if let Some(d) = v["duree"].as_f64() {
+                i.duree = d.clamp(0.2, 30.0);
+            }
+            if let Some(d) = v["decalage"].as_f64() {
+                i.decalage = d.max(0.0);
+            }
+            if let Some(t) = v["taille"].as_f64() {
+                i.taille = t.clamp(0.1, 1.0);
+            }
+            if let Some(e) = v["entree"].as_str().filter(|e| ENTREES.contains(e)) {
+                i.entree = e.to_string();
+            }
+            if let Some(t) = v["texte"].as_str().filter(|t| !t.trim().is_empty() && !i.texte.is_empty()) {
+                i.texte = t.trim().chars().take(300).collect();
+            }
+            if let Some(c) = v["couleur"].as_str().filter(|c| ["blanc", "jaune", "noir"].contains(c)) {
+                i.couleur = c.to_string();
+            }
+            if let Some(f) = v["fond"].as_str().filter(|f| ["aucun", "boite", "bandeau"].contains(f)) {
+                i.fond = f.to_string();
+            }
+            true
+        })
+        .await?;
+    if !trouve {
+        return Err(refus("incrustation introuvable"));
+    }
+    Ok(Json(json!({})))
 }
 
 async fn ajouter_incrustation(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(n): Json<NouvelleIncrustation>)
@@ -509,6 +592,95 @@ struct Message {
     message: String,
 }
 
+/// Applique les actions décrites par le LLM (conversation ou commentaire) ; renvoie ce qui a été fait.
+fn appliquer_actions(p: &mut Projet, ps: &[crate::modele::Phrase], v: &Value) -> Vec<String> {
+    let cle_de = |n: &Value| n.as_u64().and_then(|n| ps.get(n as usize)).map(|ph| ph.cle.clone());
+    let rang: HashMap<String, usize> = ps.iter().enumerate().map(|(i, ph)| (ph.cle.clone(), i)).collect();
+    let mut actions = Vec::new();
+    let mut reglages_llm = v["reglages"].as_object().cloned().unwrap_or_default();
+    // Un son posé en incrustation devient la musique de fond : c'est ce que la personne voulait.
+    for i in v["ajouter_incrustations"].as_array().into_iter().flatten() {
+        let nom = i["media"].as_str().unwrap_or("");
+        if p.medias.iter().any(|m| m.genre == "son" && (m.nom.eq_ignore_ascii_case(nom) || m.id == nom)) {
+            reglages_llm.insert("musique".into(), json!(nom));
+        }
+    }
+    let (faits, refus_) = appliquer_reglages(p, &reglages_llm);
+    actions.extend(faits);
+    actions.extend(refus_.into_iter().map(|r| format!("non appliqué : {r}")));
+    for c in v["phrases"].as_array().into_iter().flatten() {
+        let Some(cle) = cle_de(&c["id"]) else { continue };
+        let changement = ChangementPhrase {
+            cle: cle.clone(),
+            garder: c["garder"].as_bool(),
+            regime: c["regime"].as_str().map(String::from),
+            cadre: c["cadre"].as_str().map(String::from),
+        };
+        if let Some(f) = changer(p, ps, &changement) {
+            actions.push(format!("Phrase {} : {f}", rang.get(&cle).copied().unwrap_or(0)));
+        }
+    }
+    for i in v["ajouter_incrustations"].as_array().into_iter().flatten() {
+        let texte = i["texte"].as_str().unwrap_or("").trim().to_string();
+        // Un texte ne porte pas d'effet d'image ; une taille donnée en pourcentage revient entre 0 et 1.
+        let effet = if texte.is_empty() { i["effet"].as_str().unwrap_or("").to_string() } else { String::new() };
+        let taille = i["taille"].as_f64().map(|t| if t > 1.0 { t / 100.0 } else { t }).unwrap_or(0.4);
+        let nom_media = i["media"].as_str().unwrap_or("").to_string();
+        let trouve = p.medias.iter().find(|m| m.nom.eq_ignore_ascii_case(&nom_media) || m.id == nom_media);
+        if texte.is_empty() && trouve.map(|m| m.genre == "son").unwrap_or(false) {
+            continue;
+        }
+        let Some(phrase) = cle_de(&i["phrase"]) else { continue };
+        let numero = rang.get(&phrase).copied().unwrap_or(0);
+        let quoi = if !texte.is_empty() { format!("texte « {texte} »") } else if !effet.is_empty() { effet.clone() } else { format!("« {nom_media} »") };
+        let n = NouvelleIncrustation {
+            media: trouve.map(|m| m.id.clone()).unwrap_or_default(),
+            effet,
+            texte,
+            phrase,
+            decalage: i["decalage"].as_f64().unwrap_or(0.0),
+            duree: i["duree"].as_f64().unwrap_or(2.0),
+            position: i["position"].as_str().unwrap_or("centre").to_string(),
+            taille,
+            fond_vert: i["fond_vert"].as_bool().unwrap_or(false),
+            son: i["son"].as_bool().unwrap_or(false),
+            couleur: i["couleur"].as_str().unwrap_or("").to_string(),
+            fond: i["fond"].as_str().unwrap_or("").to_string(),
+            entree: i["entree"].as_str().unwrap_or("").to_string(),
+            x: None,
+            y: None,
+        };
+        match valider_incrustation(p, n) {
+            Ok(inc) => {
+                actions.push(format!("Incrustation {quoi} sur la phrase {numero}"));
+                p.incrustations.push(inc);
+            }
+            Err(e) => actions.push(format!("non appliqué : {e}")),
+        }
+    }
+    let a_retirer: Vec<String> = v["retirer_incrustations"].as_array().into_iter().flatten()
+        .filter_map(|x| x.as_str().map(String::from)).collect();
+    let avant = p.incrustations.len();
+    p.incrustations.retain(|i| !a_retirer.contains(&i.id));
+    if p.incrustations.len() < avant {
+        actions.push(format!("{} incrustation(s) retirée(s)", avant - p.incrustations.len()));
+    }
+    actions
+}
+
+fn avec_echecs(texte: &str, actions: &[String]) -> String {
+    let echecs: Vec<&str> = actions.iter().filter_map(|a| a.strip_prefix("non appliqué : ")).collect();
+    if echecs.is_empty() {
+        texte.to_string()
+    } else {
+        format!("{texte}\n\nAttention, je n'ai pas pu tout faire : {}.", echecs.join(" ; "))
+    }
+}
+
+fn tous_prets(p: &Projet) -> bool {
+    !p.rushs.is_empty() && p.rushs.iter().all(|r| r.etat == EtatRush::Pret)
+}
+
 async fn discuter(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(m): Json<Message>) -> Reponse {
     let message = m.message.trim().to_string();
     if message.is_empty() {
@@ -529,106 +701,162 @@ async fn discuter(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(
             return Err(refus(texte));
         }
     };
-    let cle_de = |n: &Value| n.as_u64().and_then(|n| ps.get(n as usize)).map(|ph| ph.cle.clone());
-    let mut reglages_llm = v["reglages"].as_object().cloned().unwrap_or_default();
-    // Un son posé en incrustation devient la musique de fond : c'est ce que la personne voulait.
-    for i in v["ajouter_incrustations"].as_array().into_iter().flatten() {
-        let nom = i["media"].as_str().unwrap_or("");
-        if p.medias.iter().any(|m| m.genre == "son" && (m.nom.eq_ignore_ascii_case(nom) || m.id == nom)) {
-            reglages_llm.insert("musique".into(), json!(nom));
-        }
-    }
-    let changements: Vec<ChangementPhrase> = v["phrases"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|c| Some(ChangementPhrase {
-            cle: cle_de(&c["id"])?,
-            garder: c["garder"].as_bool(),
-            regime: c["regime"].as_str().map(String::from),
-            cadre: c["cadre"].as_str().map(String::from),
-        }))
-        .collect();
-    let nouvelles: Vec<(NouvelleIncrustation, String)> = v["ajouter_incrustations"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|i| {
-            let effet = i["effet"].as_str().unwrap_or("").to_string();
-            let nom_media = i["media"].as_str().unwrap_or("").to_string();
-            let trouve = p.medias.iter().find(|m| m.nom.eq_ignore_ascii_case(&nom_media) || m.id == nom_media);
-            if trouve.map(|m| m.genre == "son").unwrap_or(false) {
-                return None;
-            }
-            let media = trouve.map(|m| m.id.clone()).unwrap_or_default();
-            Some((NouvelleIncrustation {
-                media,
-                effet: effet.clone(),
-                phrase: cle_de(&i["phrase"])?,
-                decalage: 0.0,
-                duree: i["duree"].as_f64().unwrap_or(2.0),
-                position: i["position"].as_str().unwrap_or("centre").to_string(),
-                taille: i["taille"].as_f64().unwrap_or(0.4),
-                fond_vert: i["fond_vert"].as_bool().unwrap_or(false),
-                son: i["son"].as_bool().unwrap_or(false),
-            }, if effet.is_empty() { nom_media } else { effet }))
-        })
-        .collect();
-    let a_retirer: Vec<String> = v["retirer_incrustations"].as_array().into_iter().flatten()
-        .filter_map(|x| x.as_str().map(String::from)).collect();
     let remonter = v["remonter"].as_bool().unwrap_or(false);
     let reponse_llm = v["reponse"].as_str().unwrap_or("C'est noté.").to_string();
-    let rang: HashMap<String, usize> = ps.iter().enumerate().map(|(i, ph)| (ph.cle.clone(), i)).collect();
-
-    let ps2 = ps.clone();
-    let actions = etat
+    let (actions, reponse) = etat
         .modifier(&id, move |p| {
-            let mut actions = Vec::new();
-            let (faits, refus_) = appliquer_reglages(p, &reglages_llm);
-            actions.extend(faits);
-            actions.extend(refus_.into_iter().map(|r| format!("non appliqué : {r}")));
-            for c in &changements {
-                if let Some(f) = changer(p, &ps2, c) {
-                    actions.push(format!("Phrase {} : {f}", rang.get(&c.cle).copied().unwrap_or(0)));
-                }
-            }
-            for (n, nom) in nouvelles {
-                let numero = rang.get(&n.phrase).copied().unwrap_or(0);
-                match valider_incrustation(p, n) {
-                    Ok(inc) => {
-                        actions.push(format!("Incrustation « {nom} » sur la phrase {numero}"));
-                        p.incrustations.push(inc);
-                    }
-                    Err(e) => actions.push(format!("non appliqué : {e}")),
-                }
-            }
-            let avant = p.incrustations.len();
-            p.incrustations.retain(|i| !a_retirer.contains(&i.id));
-            if p.incrustations.len() < avant {
-                actions.push(format!("{} incrustation(s) retirée(s)", avant - p.incrustations.len()));
-            }
+            let mut actions = appliquer_actions(p, &ps, &v);
             if remonter {
                 actions.push("Nouveau montage complet par le LLM".into());
             }
-            let echecs: Vec<&str> = actions.iter().filter_map(|a| a.strip_prefix("non appliqué : ")).collect();
-            let reponse = if echecs.is_empty() {
-                reponse_llm
-            } else {
-                format!("{reponse_llm}\n\nAttention, je n'ai pas pu tout faire : {}.", echecs.join(" ; "))
-            };
+            let reponse = avec_echecs(&reponse_llm, &actions);
             p.discussion.push(Echange { role: "edivid".into(), texte: reponse.clone(), quand: maintenant(), actions: actions.clone() });
             (actions, reponse)
         })
         .await?;
-    let (actions, reponse) = actions;
     // Règle de l'orchestrateur : tout changement appliqué donne un nouvel aperçu.
-    let tous_prets = p.rushs.iter().all(|r| r.etat == EtatRush::Pret) && !p.rushs.is_empty();
-    if remonter && tous_prets {
+    if remonter && tous_prets(&p) {
         etat.file.ajouter(&etat, &id, Genre::Monter);
-    } else if actions.iter().any(|a| !a.starts_with("non appliqué")) && tous_prets {
+    } else if actions.iter().any(|a| !a.starts_with("non appliqué")) && tous_prets(&p) {
         etat.file.ajouter(&etat, &id, Genre::Apercu);
     }
     Ok(Json(json!({"reponse": reponse, "actions": actions})))
+}
+
+// ---------------------------------------------------------------- commentaire sur un instant
+
+#[derive(Deserialize)]
+struct Commentaire {
+    /// Instant commenté : dans la vidéo montée (apercu, rendu) ou dans un rush (origine).
+    t: f64,
+    vue: String,
+    #[serde(default)]
+    rush: String,
+    texte: String,
+    /// Proposition précédente, quand la personne corrige.
+    #[serde(default)]
+    precedente: Option<String>,
+}
+
+fn minutes(t: f64) -> String {
+    let s = t.max(0.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+async fn commenter(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(c): Json<Commentaire>) -> Reponse {
+    let texte = c.texte.trim().to_string();
+    if texte.is_empty() {
+        return Err(refus("décrivez la correction voulue"));
+    }
+    let p = etat.projet(&id).await?;
+    let analyses = etat.analyses_du_projet(&p).await?;
+    let ps = decoupe::phrases(&analyses);
+    if ps.is_empty() {
+        return Err(refus("pas encore de transcription"));
+    }
+    // Quelle phrase passe à cet instant ?
+    let (rush, src) = if c.vue == "origine" {
+        (c.rush.clone(), c.t)
+    } else {
+        let sortie = if c.vue == "rendu" { p.rendu.as_ref() } else { p.apercu.as_ref() };
+        let plans = sortie.and_then(|s| s.rapport["plans_detail"].as_array().cloned()).unwrap_or_default();
+        let plan = plans.iter().find(|pl| {
+            let (t0, d) = (pl["t"].as_f64().unwrap_or(0.0), pl["d"].as_f64().unwrap_or(0.0));
+            c.t >= t0 && c.t < t0 + d
+        });
+        match plan {
+            Some(pl) => (pl["rush"].as_str().unwrap_or("").to_string(),
+                         pl["src"].as_f64().unwrap_or(0.0) + c.t - pl["t"].as_f64().unwrap_or(0.0)),
+            None => return Err(refus("cet aperçu est ancien : mettez-le à jour avant de commenter")),
+        }
+    };
+    let numero = ps
+        .iter()
+        .enumerate()
+        .filter(|(_, ph)| ph.rush == rush)
+        .min_by(|(_, a), (_, b)| {
+            let da = if src < a.t0 { a.t0 - src } else if src > a.t1 { src - a.t1 } else { 0.0 };
+            let db = if src < b.t0 { b.t0 - src } else if src > b.t1 { src - b.t1 } else { 0.0 };
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
+        .ok_or_else(|| anyhow!("instant hors des rushs"))?;
+    let precedente = c.precedente.as_ref().and_then(|pid| etat.propositions.lock().unwrap().get(pid).cloned());
+    let v = llm::commenter(&etat, &p, &ps, numero, &minutes(c.t), &texte, precedente.as_ref()).await?;
+    // Essai à blanc sur une copie : ce que la proposition changerait, et sur quelle plage.
+    let mut copie = p.clone();
+    let actions = appliquer_actions(&mut copie, &ps, &v);
+    let de = v["de"].as_u64().map(|n| n as usize).unwrap_or(numero).min(ps.len() - 1);
+    let a = v["a"].as_u64().map(|n| n as usize).unwrap_or(numero).clamp(de, ps.len() - 1);
+    let cles: Vec<&str> = ps[de..=a].iter().map(|ph| ph.cle.as_str()).collect();
+    let prog = decoupe::programme(&copie, &analyses, &ps, true);
+    let plans: Vec<&decoupe::Plan> = prog.plans.iter().filter(|pl| !pl.accroche && cles.contains(&pl.phrase.as_str())).collect();
+    let plage_sortie = (!plans.is_empty()).then(|| {
+        json!([plans.first().unwrap().sortie_t0, plans.last().map(|pl| pl.sortie_t0 + pl.duree).unwrap_or(0.0)])
+    });
+    let pid = nouvel_id();
+    let proposition = json!({
+        "id": pid,
+        "t": c.t, "vue": c.vue, "texte": texte,
+        "phrase": numero, "de": de, "a": a,
+        "plage_source": {"rush": ps[de].rush, "debut": ps[de].t0, "fin": ps[a].t1},
+        "plage_sortie": plage_sortie,
+        "reformulation": v["reformulation"], "explication": v["explication"],
+        "possible": v["possible"].as_bool().unwrap_or(true),
+        "actions": actions,
+        "brut": v,
+    });
+    etat.propositions.lock().unwrap().insert(pid.clone(), proposition.clone());
+    Ok(Json(proposition))
+}
+
+async fn valider_commentaire(State(etat): State<EtatPartage>, Path((id, pid)): Path<(String, String)>) -> Reponse {
+    let proposition = etat.propositions.lock().unwrap().remove(&pid).ok_or_else(|| anyhow!("proposition expirée"))?;
+    let p = etat.projet(&id).await?;
+    let ps = decoupe::phrases(&etat.analyses_du_projet(&p).await?);
+    let v = proposition["brut"].clone();
+    let moi = format!("Commentaire à {} : {}", minutes(proposition["t"].as_f64().unwrap_or(0.0)),
+                      proposition["texte"].as_str().unwrap_or(""));
+    let reformulation = proposition["reformulation"].as_str().unwrap_or("").to_string();
+    let actions = etat
+        .modifier(&id, move |p| {
+            let actions = appliquer_actions(p, &ps, &v);
+            p.discussion.push(Echange { role: "moi".into(), texte: moi, quand: maintenant(), actions: vec![] });
+            p.discussion.push(Echange { role: "edivid".into(), texte: avec_echecs(&format!("{reformulation} C'est appliqué."), &actions),
+                                        quand: maintenant(), actions: actions.clone() });
+            actions
+        })
+        .await?;
+    if actions.iter().any(|a| !a.starts_with("non appliqué")) && tous_prets(&p) {
+        etat.file.ajouter(&etat, &id, Genre::Apercu);
+    }
+    Ok(Json(json!({"actions": actions})))
+}
+
+async fn annuler_commentaire(State(etat): State<EtatPartage>, Path((_id, pid)): Path<(String, String)>) -> Reponse {
+    etat.propositions.lock().unwrap().remove(&pid);
+    Ok(Json(json!({})))
+}
+
+// ---------------------------------------------------------------- script courant, vidéo d'origine
+
+async fn programme(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let analyses = etat.analyses_du_projet(&p).await?;
+    let ps = decoupe::phrases(&analyses);
+    let prog = decoupe::programme(&p, &analyses, &ps, true);
+    let mut v = decoupe::programme_json(&prog);
+    v["rushs"] = json!(analyses.iter().map(|(rid, a)| json!({"id": rid, "duree": a.duree})).collect::<Vec<_>>());
+    Ok(Json(v))
+}
+
+async fn video_origine(State(etat): State<EtatPartage>, Path((id, rid)): Path<(String, String)>, requete: Request)
+                       -> Result<Response, Erreur> {
+    let chemin = etat.dossier_travail(&id, &rid).join("proxy.mp4");
+    if !chemin.exists() {
+        return Err(Erreur(StatusCode::NOT_FOUND, "version d'origine en préparation".into()));
+    }
+    Ok(ServeFile::new(chemin).try_call(requete).await.map_err(|e| anyhow!("{e}"))?.into_response())
 }
 
 async fn fichier_sortie(State(etat): State<EtatPartage>, Path((id, nom)): Path<(String, String)>, requete: Request)
@@ -731,8 +959,9 @@ async fn verifier_drive(State(etat): State<EtatPartage>) -> Reponse {
 }
 
 async fn passage_drive(State(etat): State<EtatPartage>) -> Reponse {
-    if !etat.parametres.read().await.drive.actif {
-        return Err(refus("activez d'abord la veille du Drive"));
+    let p = etat.parametres.read().await.clone();
+    if !p.drive.actif && !p.comptes.iter().any(|c| c.veille) {
+        return Err(refus("activez d'abord la veille d'un Drive"));
     }
     etat.drive.reveil.notify_one();
     Ok(Json(json!({})))
@@ -760,5 +989,41 @@ async fn ajouter_demande(State(etat): State<EtatPartage>, Json(d): Json<Nouvelle
 
 async fn retirer_demande(State(etat): State<EtatPartage>, Path(did): Path<String>) -> Reponse {
     bibliotheque::retirer(&etat.cfg.donnees, &did)?;
+    Ok(Json(json!({})))
+}
+
+// ---------------------------------------------------------------- comptes Google
+
+#[derive(Deserialize)]
+struct ChangementCompte {
+    email: String,
+    veille: bool,
+}
+
+async fn changer_compte(State(etat): State<EtatPartage>, Json(c): Json<ChangementCompte>) -> Reponse {
+    let mut p = etat.parametres.write().await;
+    let compte = p.comptes.iter_mut().find(|x| x.email.eq_ignore_ascii_case(&c.email)).ok_or_else(|| anyhow!("compte inconnu"))?;
+    if c.veille && compte.distant.is_empty() {
+        return Err(refus("le Drive de ce compte n'est pas relié : reconnectez-le avec Google"));
+    }
+    compte.veille = c.veille;
+    parametres::enregistrer(&etat.cfg.donnees, &p)?;
+    drop(p);
+    etat.drive.reveil.notify_one();
+    Ok(Json(json!({})))
+}
+
+async fn retirer_compte(State(etat): State<EtatPartage>, Path(email): Path<String>) -> Reponse {
+    let distant = {
+        let mut p = etat.parametres.write().await;
+        let distant = p.comptes.iter().find(|c| c.email.eq_ignore_ascii_case(&email)).map(|c| c.distant.clone());
+        p.comptes.retain(|c| !c.email.eq_ignore_ascii_case(&email));
+        parametres::enregistrer(&etat.cfg.donnees, &p)?;
+        distant
+    };
+    // Le jeton du Drive est oublié aussi.
+    if let Some(d) = distant.filter(|d| !d.is_empty()) {
+        let _ = tokio::process::Command::new(drive::rclone()).args(["config", "delete", d.trim_end_matches(':')]).output().await;
+    }
     Ok(Json(json!({})))
 }
