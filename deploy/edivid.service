@@ -1,0 +1,19 @@
+[Unit]
+Description=EDIVID — monteur vidéo IA (interface sur le tailnet, port 8030)
+After=network-online.target azothd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projets/edivid
+Environment=EDIVID_RACINE=%h/projets/edivid
+Environment=EDIVID_ECOUTE=127.0.0.1:8030,100.124.48.19:8030
+Environment=RUST_LOG=edivid=info
+# L'adresse du tailnet n'existe qu'une fois Tailscale connecté : on l'attend une minute au plus.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do ip -4 addr show tailscale0 2>/dev/null | grep -q 100.124.48.19 && exit 0; sleep 2; done; exit 0'
+ExecStart=%h/.local/bin/edivid
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

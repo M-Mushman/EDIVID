@@ -1,0 +1,11 @@
+/target
+/.venv
+/donnees
+/rushs
+/modeles/*.pth
+/modeles/*.onnx
+/modeles/*.task
+/p0/*.json
+/p0/*.mp4
+/p0/frames
+__pycache__/
