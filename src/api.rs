@@ -25,6 +25,8 @@ use crate::decoupe;
 use crate::drive;
 use crate::google;
 use crate::parametres;
+use crate::postprod::{self, PostProd};
+use crate::youtube;
 use crate::etat::EtatPartage;
 use crate::llm;
 use crate::modele::{maintenant, nouvel_id, Decision, Echange, EtatRush, Incrustation, Media, Montage, Projet, Rush};
@@ -96,6 +98,15 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/parametres/courriel/essai", post(essai_courriel))
         .route("/api/parametres/drive/verifier", post(verifier_drive))
         .route("/api/parametres/drive/maintenant", post(passage_drive))
+        .route("/api/postprod/looks", get(looks))
+        .route("/api/projets/{id}/postprod", post(changer_postprod))
+        .route("/api/projets/{id}/postprod/image", get(image_postprod))
+        .route("/api/projets/{id}/correction", post(corriger_phrase))
+        .route("/api/projets/{id}/remplacer", post(remplacer_partout))
+        .route("/api/projets/{id}/export", post(lancer_export))
+        .route("/api/projets/{id}/exports/{eid}", delete(retirer_export))
+        .route("/api/projets/{id}/youtube/proposer", post(proposer_youtube))
+        .route("/api/projets/{id}/youtube", post(publier_youtube))
         .route("/api/bibliotheque", get(voir_bibliotheque).post(ajouter_demande))
         .route("/api/bibliotheque/{did}", delete(retirer_demande))
         .merge(televersement)
@@ -152,6 +163,9 @@ async fn creer_projet(State(etat): State<EtatPartage>, Json(n): Json<Nom>) -> Re
         depot_drive: None,
         origine: String::new(),
         compte: String::new(),
+        postprod: Default::default(),
+        corrections: Default::default(),
+        exports: vec![],
     };
     etat.enregistrer(&p).await?;
     let id = p.id.clone();
@@ -180,7 +194,7 @@ async fn supprimer_projet(State(etat): State<EtatPartage>, Path(id): Path<String
 async fn voir_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
     let p = etat.projet(&id).await?;
     let analyses = etat.analyses_du_projet(&p).await.unwrap_or_default();
-    let ps = decoupe::phrases(&analyses);
+    let ps = decoupe::phrases_projet(&p, &analyses);
     let decisions: HashMap<&str, &Decision> =
         p.montage.as_ref().map(|m| m.phrases.iter().map(|d| (d.cle.as_str(), d)).collect()).unwrap_or_default();
     let phrases: Vec<Value> = ps
@@ -358,7 +372,7 @@ fn appliquer_reglages(p: &mut Projet, changements: &serde_json::Map<String, Valu
                 let libelle = match &r.genre {
                     reglages::Genre::Choix(o) => o.iter().find(|(k, _)| Some(*k) == v.as_str()).map(|(_, l)| l.to_string()).unwrap_or_default(),
                     reglages::Genre::Interrupteur => if v.as_bool() == Some(true) { "oui".into() } else { "non".into() },
-                    reglages::Genre::Curseur { .. } => format!("{} %", v.as_f64().unwrap_or(0.0).round()),
+                    reglages::Genre::Curseur { unite, .. } => format!("{} {unite}", v.as_f64().unwrap_or(0.0).round()),
                     reglages::Genre::MediaSon => p.medias.iter().find(|m| Some(m.id.as_str()) == v.as_str()).map(|m| m.nom.clone())
                         .unwrap_or_else(|| "aucune".into()),
                 };
@@ -435,7 +449,7 @@ fn changer(p: &mut Projet, ps: &[crate::modele::Phrase], c: &ChangementPhrase) -
 
 async fn changer_phrase(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(c): Json<ChangementPhrase>) -> Reponse {
     let p = etat.projet(&id).await?;
-    let ps = decoupe::phrases(&etat.analyses_du_projet(&p).await?);
+    let ps = decoupe::phrases_projet(&p, &etat.analyses_du_projet(&p).await?);
     if !ps.iter().any(|ph| ph.cle == c.cle) {
         return Err(refus("phrase introuvable"));
     }
@@ -691,7 +705,7 @@ async fn discuter(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(
         .await?;
     let p = etat.projet(&id).await?;
     let analyses = etat.analyses_du_projet(&p).await.unwrap_or_default();
-    let ps = decoupe::phrases(&analyses);
+    let ps = decoupe::phrases_projet(&p, &analyses);
     let v = match llm::discuter(&etat, &p, &ps, &message).await {
         Ok(v) => v,
         Err(e) => {
@@ -750,7 +764,7 @@ async fn commenter(State(etat): State<EtatPartage>, Path(id): Path<String>, Json
     }
     let p = etat.projet(&id).await?;
     let analyses = etat.analyses_du_projet(&p).await?;
-    let ps = decoupe::phrases(&analyses);
+    let ps = decoupe::phrases_projet(&p, &analyses);
     if ps.is_empty() {
         return Err(refus("pas encore de transcription"));
     }
@@ -813,7 +827,7 @@ async fn commenter(State(etat): State<EtatPartage>, Path(id): Path<String>, Json
 async fn valider_commentaire(State(etat): State<EtatPartage>, Path((id, pid)): Path<(String, String)>) -> Reponse {
     let proposition = etat.propositions.lock().unwrap().remove(&pid).ok_or_else(|| anyhow!("proposition expirée"))?;
     let p = etat.projet(&id).await?;
-    let ps = decoupe::phrases(&etat.analyses_du_projet(&p).await?);
+    let ps = decoupe::phrases_projet(&p, &etat.analyses_du_projet(&p).await?);
     let v = proposition["brut"].clone();
     let moi = format!("Commentaire à {} : {}", minutes(proposition["t"].as_f64().unwrap_or(0.0)),
                       proposition["texte"].as_str().unwrap_or(""));
@@ -843,7 +857,7 @@ async fn annuler_commentaire(State(etat): State<EtatPartage>, Path((_id, pid)): 
 async fn programme(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
     let p = etat.projet(&id).await?;
     let analyses = etat.analyses_du_projet(&p).await?;
-    let ps = decoupe::phrases(&analyses);
+    let ps = decoupe::phrases_projet(&p, &analyses);
     let prog = decoupe::programme(&p, &analyses, &ps, true);
     let mut v = decoupe::programme_json(&prog);
     v["rushs"] = json!(analyses.iter().map(|(rid, a)| json!({"id": rid, "duree": a.duree})).collect::<Vec<_>>());
@@ -928,6 +942,12 @@ async fn voir_parametres(State(etat): State<EtatPartage>) -> Json<Value> {
     let p = etat.parametres.read().await.clone();
     let mut v = parametres::vue(&p);
     v["etat_drive"] = drive::vue(&etat);
+    if let Some(comptes) = v["comptes"].as_array_mut() {
+        for c in comptes.iter_mut() {
+            let email = c["email"].as_str().unwrap_or("").to_string();
+            c["youtube"] = json!(youtube::autorise(&etat, &email));
+        }
+    }
     v["nvenc"] = json!(etat.nvenc);
     Json(v)
 }
@@ -1021,9 +1041,197 @@ async fn retirer_compte(State(etat): State<EtatPartage>, Path(email): Path<Strin
         parametres::enregistrer(&etat.cfg.donnees, &p)?;
         distant
     };
-    // Le jeton du Drive est oublié aussi.
+    // Les jetons du Drive et de YouTube sont oubliés aussi.
+    youtube::oublier(&etat, &email);
     if let Some(d) = distant.filter(|d| !d.is_empty()) {
         let _ = tokio::process::Command::new(drive::rclone()).args(["config", "delete", d.trim_end_matches(':')]).output().await;
     }
+    Ok(Json(json!({})))
+}
+
+// ---------------------------------------------------------------- PostProd
+
+async fn looks() -> Json<Value> {
+    Json(json!({
+        "looks": postprod::looks()["looks"],
+        "couleurs": postprod::COULEURS.iter().map(|(c, n, _)| json!({"cle": c, "nom": n})).collect::<Vec<_>>(),
+    }))
+}
+
+async fn changer_postprod(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(mut pp): Json<PostProd>) -> Reponse {
+    pp.borner();
+    etat.modifier(&id, |p| p.postprod = pp).await?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct InstantImage {
+    t: f64,
+    #[serde(default)]
+    vue: String,
+    #[serde(default)]
+    rush: String,
+    #[serde(default)]
+    avant: bool,
+}
+
+/// Image de la source à l'instant affiché, sans ou avec la PostProd du projet.
+async fn image_postprod(State(etat): State<EtatPartage>, Path(id): Path<String>, Query(q): Query<InstantImage>)
+                        -> Result<Response, Erreur> {
+    let p = etat.projet(&id).await?;
+    let (rush, src) = if q.vue == "origine" {
+        (q.rush.clone(), q.t)
+    } else {
+        let sortie = if q.vue == "rendu" { p.rendu.as_ref() } else { p.apercu.as_ref() };
+        let plans = sortie.and_then(|s| s.rapport["plans_detail"].as_array().cloned()).unwrap_or_default();
+        let pl = plans.iter().find(|pl| {
+            let (t0, d) = (pl["t"].as_f64().unwrap_or(0.0), pl["d"].as_f64().unwrap_or(0.0));
+            q.t >= t0 && q.t < t0 + d
+        }).ok_or_else(|| anyhow!("instant hors de l'aperçu"))?;
+        (pl["rush"].as_str().unwrap_or("").to_string(), pl["src"].as_f64().unwrap_or(0.0) + q.t - pl["t"].as_f64().unwrap_or(0.0))
+    };
+    let rush = if rush.is_empty() { p.rushs.first().map(|r| r.id.clone()).unwrap_or_default() } else { rush };
+    let mezz = etat.dossier_travail(&id, &rush).join("mezz.mkv");
+    let jpeg = rendu::image_postprod(&mezz, src, &p.postprod, !q.avant).await?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg"), (axum::http::header::CACHE_CONTROL, "no-store")], jpeg).into_response())
+}
+
+// ---------------------------------------------------------------- corrections de transcription
+
+#[derive(Deserialize)]
+struct Correction {
+    cle: String,
+    texte: String,
+}
+
+async fn corriger_phrase(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(c): Json<Correction>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let analyses = etat.analyses_du_projet(&p).await?;
+    let origine = decoupe::phrases(&analyses).into_iter().find(|ph| ph.cle == c.cle).ok_or_else(|| anyhow!("phrase introuvable"))?;
+    let texte: String = c.texte.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cle = c.cle.clone();
+    etat.modifier(&id, move |p| {
+        if texte.is_empty() || texte == origine.texte {
+            p.corrections.remove(&cle);
+        } else {
+            p.corrections.insert(cle, texte);
+        }
+    })
+    .await?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct Remplacement {
+    cherche: String,
+    remplace: String,
+    #[serde(default)]
+    casse: bool,
+}
+
+/// Remplace un mot ou une expression dans toute la transcription (erreur répétée de Whisper).
+async fn remplacer_partout(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(r): Json<Remplacement>) -> Reponse {
+    let cherche = r.cherche.trim().to_string();
+    if cherche.is_empty() {
+        return Err(refus("indiquez le texte à chercher"));
+    }
+    let p = etat.projet(&id).await?;
+    let ps = decoupe::phrases_projet(&p, &etat.analyses_du_projet(&p).await?);
+    let mut changements = Vec::new();
+    for ph in &ps {
+        let nouveau = if r.casse {
+            ph.texte.replace(&cherche, r.remplace.trim())
+        } else {
+            remplacer_sans_casse(&ph.texte, &cherche, r.remplace.trim())
+        };
+        if nouveau != ph.texte {
+            changements.push((ph.cle.clone(), nouveau));
+        }
+    }
+    let n = changements.len();
+    etat.modifier(&id, move |p| {
+        for (cle, texte) in changements {
+            p.corrections.insert(cle, texte);
+        }
+    })
+    .await?;
+    Ok(Json(json!({"phrases": n})))
+}
+
+fn remplacer_sans_casse(texte: &str, cherche: &str, remplace: &str) -> String {
+    let bas = texte.to_lowercase();
+    let cible = cherche.to_lowercase();
+    let mut sortie = String::new();
+    let mut i = 0;
+    while let Some(pos) = bas[i..].find(&cible) {
+        let debut = i + pos;
+        // Les minuscules gardent ici la même longueur en octets (cas du français courant).
+        if !texte.is_char_boundary(debut) || !texte.is_char_boundary(debut + cible.len()) {
+            return texte.to_string();
+        }
+        sortie.push_str(&texte[i..debut]);
+        sortie.push_str(remplace);
+        i = debut + cible.len();
+    }
+    sortie.push_str(&texte[i..]);
+    sortie
+}
+
+// ---------------------------------------------------------------- export et YouTube
+
+#[derive(Deserialize)]
+struct DemandeExport {
+    preset: String,
+}
+
+async fn lancer_export(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(d): Json<DemandeExport>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    if p.rendu.is_none() {
+        return Err(refus("lancez d'abord le rendu final"));
+    }
+    if !rendu::PRESETS.iter().any(|(k, _)| *k == d.preset) {
+        return Err(refus("préréglage inconnu"));
+    }
+    etat.file.ajouter(&etat, &id, Genre::Export(d.preset));
+    Ok(Json(json!({})))
+}
+
+async fn retirer_export(State(etat): State<EtatPartage>, Path((id, eid)): Path<(String, String)>) -> Reponse {
+    let fichier = etat
+        .modifier(&id, |p| {
+            let f = p.exports.iter().find(|e| e.id == eid).map(|e| e.fichier.clone());
+            p.exports.retain(|e| e.id != eid);
+            f
+        })
+        .await?;
+    if let Some(f) = fichier {
+        let _ = tokio::fs::remove_file(etat.dossier_projet(&id).join("sorties").join(f)).await;
+    }
+    Ok(Json(json!({})))
+}
+
+async fn proposer_youtube(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    Ok(Json(youtube::proposer(&etat, &id).await?))
+}
+
+async fn publier_youtube(State(etat): State<EtatPartage>, Path(id): Path<String>, entetes: axum::http::HeaderMap,
+                         Json(mut pub_): Json<youtube::Publication>) -> Reponse {
+    // Le compte : celui demandé, sinon celui de la session, sinon le seul compte autorisé pour YouTube.
+    if pub_.compte.is_empty() {
+        let session = acces::session(&etat, &entetes).await.and_then(|s| s.email);
+        let comptes = etat.parametres.read().await.comptes.clone();
+        pub_.compte = session
+            .filter(|e| youtube::autorise(&etat, e))
+            .or_else(|| comptes.iter().map(|c| c.email.clone()).find(|e| youtube::autorise(&etat, e)))
+            .unwrap_or_default();
+    }
+    if pub_.compte.is_empty() || !youtube::autorise(&etat, &pub_.compte) {
+        return Err(refus("aucun compte Google n'a autorisé YouTube : connectez-vous avec Google (Paramètres) et acceptez l'accès à YouTube"));
+    }
+    let p = etat.projet(&id).await?;
+    if !p.exports.iter().any(|e| e.id == pub_.export) {
+        return Err(refus("export introuvable"));
+    }
+    youtube::lancer(&etat, &id, pub_);
     Ok(Json(json!({})))
 }

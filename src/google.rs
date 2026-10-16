@@ -23,7 +23,7 @@ use crate::parametres::{self, Compte};
 const AUTORISATION: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const JETON: &str = "https://oauth2.googleapis.com/token";
 const IDENTITE: &str = "https://openidconnect.googleapis.com/v1/userinfo";
-const PORTEES: &str = "openid email profile https://www.googleapis.com/auth/drive";
+const PORTEES: &str = "openid email profile https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/youtube.upload";
 
 pub struct Demande {
     mode: String,
@@ -139,6 +139,11 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
     let distant = format!("edivid_{}", email.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect::<String>());
     let mut drive_relie = false;
     if let Some(rafraichir) = jetons["refresh_token"].as_str() {
+        // Gardé aussi pour YouTube, que rclone ne sait pas servir.
+        crate::youtube::garder(etat, &email, crate::youtube::Jetons {
+            refresh_token: rafraichir.to_string(),
+            portees: jetons["scope"].as_str().unwrap_or("").to_string(),
+        })?;
         let expire = chrono::Utc::now() + chrono::Duration::seconds(jetons["expires_in"].as_i64().unwrap_or(3600));
         let jeton_rclone = json!({"access_token": acces_jeton, "token_type": "Bearer", "refresh_token": rafraichir,
                                   "expiry": expire.to_rfc3339()})

@@ -26,6 +26,8 @@ pub enum Genre {
     Monter,
     Apercu,
     Rendu,
+    /// Version exportée du rendu final (youtube, leger, max).
+    Export(String),
 }
 
 impl Genre {
@@ -37,6 +39,7 @@ impl Genre {
             Genre::Monter => "Montage par le LLM",
             Genre::Apercu => "Aperçu rapide",
             Genre::Rendu => "Rendu final",
+            Genre::Export(_) => "Export",
         }
     }
 }
@@ -73,7 +76,7 @@ impl File {
     pub fn ajouter(&self, etat: &EtatPartage, projet: &str, genre: Genre) {
         {
             let mut attente = self.attente.lock().unwrap();
-            let unique = matches!(genre, Genre::Apercu | Genre::Rendu | Genre::Monter | Genre::Proxy(_));
+            let unique = matches!(genre, Genre::Apercu | Genre::Rendu | Genre::Monter | Genre::Proxy(_) | Genre::Export(_));
             if unique && attente.iter().any(|t| t.projet == projet && t.genre == genre) {
                 return;
             }
@@ -243,7 +246,7 @@ async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
                 bail!("tous les rushs doivent être analysés avant le montage");
             }
             let analyses = etat.analyses_du_projet(&p).await?;
-            let ps = decoupe::phrases(&analyses);
+            let ps = decoupe::phrases_projet(&p, &analyses);
             if ps.is_empty() {
                 bail!("aucune parole trouvée dans les rushs");
             }
@@ -254,6 +257,11 @@ async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
             })
             .await?;
             etat.file.ajouter(etat, projet, Genre::Apercu);
+        }
+        Genre::Export(preset) => {
+            let ex = rendu::exporter(etat, projet, preset).await?;
+            etat.modifier(projet, |p| p.exports.push(ex)).await?;
+            etat.emettre(projet, "fini", json!({"genre": "export"}));
         }
         Genre::Apercu | Genre::Rendu => {
             let apercu = t.genre == Genre::Apercu;

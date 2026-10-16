@@ -40,6 +40,13 @@ premier lancement dans `donnees/acces.json`.
   médias directement sur la vidéo ; calque d'édition en pause.
 - Connexion avec Google (OAuth, application Web, HTTPS du tailnet par `tailscale serve`) : ouvre la
   session et relie le Drive du compte ; veille par compte, la vidéo montée retourne à son Drive.
+- Synchronisation son/image vérifiée au témoin flash + bip (latence d'afftdn compensée), calage
+  manuel ± 300 ms, encodage final strictement compatible iPhone.
+- Export YouTube (débits recommandés), léger (720p) ou qualité maximale ; publication sur YouTube
+  (API Data v3, envoi reprenable) avec titre, description à chapitres et mots-clés proposés par le LLM.
+- Transcription modifiable en place et « rechercher et remplacer » ; les sous-titres suivent.
+- Onglet PostProd (couleur, lissage du teint, diffusion, netteté, grain, vignette, bandes cinéma) et
+  bibliothèque de looks mode et beauté (`bibliotheque/looks.json`) ; avant/après sur l'image affichée.
 - Encodage NVENC si le paquet `libnvidia-encode-<branche>` du pilote est installé, sinon x264.
 
 Avant tout travail sur la carte graphique, EDIVID prend un bail auprès du contrôleur d'admission

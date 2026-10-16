@@ -48,6 +48,7 @@ const TRACES = {
   lune: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
   baguette: '<path d="M5 19L16 8M14 6l4 4M18 3v3M21 6h-3M10 3v2M3 10h2"/>',
   alerte: '<path d="M12 3l10 18H2zM12 10v5M12 18v.01"/>',
+  crayon: '<path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4"/>',
   chevron: '<path d="M6 9l6 6 6-6"/>',
   google: '<path d="M20.5 12.2c0-.6-.1-1.2-.2-1.7H12v3.3h4.8a4.1 4.1 0 0 1-1.8 2.7v2.2h2.9c1.7-1.6 2.6-3.9 2.6-6.5z"/><path d="M12 21c2.4 0 4.5-.8 5.9-2.2l-2.9-2.2c-.8.5-1.8.9-3 .9-2.3 0-4.3-1.6-5-3.7H4v2.3A9 9 0 0 0 12 21z"/><path d="M7 13.8a5.4 5.4 0 0 1 0-3.5V8H4a9 9 0 0 0 0 8.1z"/><path d="M12 6.6c1.3 0 2.5.5 3.4 1.3l2.6-2.6A9 9 0 0 0 4 8l3 2.3c.7-2.1 2.7-3.7 5-3.7z"/>',
   engrenage: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
@@ -373,9 +374,15 @@ async function ouvrirProjet(id) {
       toast(`Vidéo déposée sur le Google Drive : ${JSON.parse(e.data).donnees.chemin}`, 'ok');
       rafraichir();
     });
+    E.source.addEventListener('youtube', (e) => {
+      toast(`Vidéo en ligne sur YouTube : ${JSON.parse(e.data).donnees.lien}`, 'ok');
+      E.progression = null;
+      rafraichir();
+    });
     E.source.addEventListener('fini', (e) => {
       const d = JSON.parse(e.data).donnees;
       E.progression = null;
+      if (d.genre === 'export') { toast('Export prêt : téléchargez-le ou publiez-le depuis « Exporter ».', 'ok'); rafraichir(); return; }
       if (d.genre === 'rendu') { E.lecteur = 'rendu'; toast('Le rendu final est prêt : vous pouvez le télécharger.', 'ok'); }
       else { E.lecteur = 'apercu'; E.aMettreAJour = false; toast('Nouvel aperçu prêt.', 'ok'); }
       rafraichir();
@@ -1152,18 +1159,24 @@ function dessinerPhrases() {
   E.noeuds.listePhrases = h('div', { class: 'phrases' }, visibles.map((ph) => {
     const d = ph.decision;
     const classe = d ? (d.garder ? d.regime : 'coupee') : '';
+    const corrigee = !!p.corrections?.[ph.cle];
+    if (E.edition === ph.cle) return ligneEdition(ph, corrigee);
     return h('div', { class: `phrase ${classe}`, 'data-cle': ph.cle },
       h('div', { class: 'temps' }, minutes(ph.t0)),
       h('div', { style: { minWidth: 0 } },
-        h('div', { class: 'texte', style: { cursor: monte ? 'pointer' : 'default' }, title: monte ? 'Écouter ce passage dans l’aperçu' : '', onclick: () => monte && allerALaPhrase(ph.cle) }, ph.texte),
+        h('div', { class: 'texte', style: { cursor: 'pointer' }, title: 'Clic : écouter ce passage — double-clic : corriger le texte',
+          onclick: () => allerALaPhrase(ph.cle), ondblclick: () => { E.edition = ph.cle; dessinerPhrases(); } },
+          ph.texte, corrigee ? h('span', { class: 'marque-corrige', title: 'Texte corrigé à la main' }, 'corrigé') : null),
         d && d.garder ? h('div', { class: 'etiquettes' },
           h('button', { class: `puce ${d.regime}`, title: 'Régime de la phrase — cliquez pour changer', onclick: () => changerPhrase(ph.cle, { regime: REGIMES[(REGIMES.indexOf(d.regime) + 1) % 3] }) }, NOMS_REGIME[d.regime]),
           h('button', { class: 'puce', title: 'Cadre — cliquez pour changer', onclick: () => changerPhrase(ph.cle, { cadre: CADRES[(CADRES.indexOf(d.cadre) + 1) % 4] }) }, NOMS_CADRE[d.cadre]),
           p.incrustations.filter((i) => i.phrase === ph.cle).length ? h('span', { class: 'puce', style: { cursor: 'default' } }, `✦ ${p.incrustations.filter((i) => i.phrase === ph.cle).length} incrustation(s)`) : null) : null),
       monte ? h('div', { class: 'boutons' },
+        h('button', { class: 'btn icone fantome', title: 'Corriger le texte (orthographe, mot mal transcrit)', onclick: () => { E.edition = ph.cle; dessinerPhrases(); } }, icone('crayon')),
         h('button', { class: 'btn icone fantome', title: 'Ajouter une incrustation (image, GIF, vidéo, effet)', onclick: () => dialogueIncrustation(ph) }, icone('baguette')),
         h('button', { class: 'btn icone fantome', title: d && !d.garder ? 'Rétablir cette phrase' : 'Couper cette phrase', onclick: () => changerPhrase(ph.cle, { garder: !(d ? d.garder : true) }) },
-          icone(d && !d.garder ? 'relancer' : 'ciseaux'))) : h('span'));
+          icone(d && !d.garder ? 'relancer' : 'ciseaux'))) : h('div', { class: 'boutons' },
+        h('button', { class: 'btn icone fantome', title: 'Corriger le texte', onclick: () => { E.edition = ph.cle; dessinerPhrases(); } }, icone('crayon'))));
   }));
   appliquerReplie(E.noeuds.phrases, 'phrases');
   remplir(E.noeuds.phrases,
@@ -1174,7 +1187,8 @@ function dessinerPhrases() {
     h('div', { class: 'carte-corps' },
       phrases.length === 0 ? h('p', { class: 'muet petit', style: { margin: 0 } }, 'La transcription apparaîtra ici après l’analyse.')
         : !monte ? h('div', { class: 'aide', style: { marginBottom: '10px' } }, icone('info'), h('span', {}, 'Voici ce qui est dit dans vos rushs. Proposez un montage : le LLM décidera, phrase par phrase, ce qu’il garde, le rythme et le cadre.'))
-          : h('p', { class: 'tres-petit muet', style: { margin: '0 0 8px' } }, 'Cliquez une phrase pour l’écouter ; ses étiquettes pour changer le régime ou le cadre ; les ciseaux pour la couper ; la baguette pour une incrustation.'),
+          : h('p', { class: 'tres-petit muet', style: { margin: '0 0 8px' } }, 'Cliquez une phrase pour l’écouter, double-cliquez pour corriger son texte ; ses étiquettes changent le régime ou le cadre ; les ciseaux la coupent ; la baguette pose une incrustation.'),
+      phrases.length ? zoneRemplacer() : null,
       E.noeuds.listePhrases));
   E.noeuds.listePhrases.scrollTop = debut;
   E.phraseJouee = null;
@@ -1209,6 +1223,7 @@ function dessinerPanneau() {
     ['reglages', 'reglages', 'Réglages', 0],
     ['medias', 'image', 'Médias', p.medias.length],
     ['effets', 'baguette', 'Textes', p.incrustations.length],
+    ['postprod', 'etincelles', 'PostProd', 0],
   ];
   appliquerReplie(n.panneau, 'panneau');
   remplir(n.onglets, ...onglets.map(([id, ic, l, compte]) =>
@@ -1225,6 +1240,7 @@ function dessinerPanneau() {
   if (E.onglet === 'reglages') dessinerReglages(corps);
   if (E.onglet === 'medias') dessinerMedias(corps);
   if (E.onglet === 'effets') dessinerEffets(corps);
+  if (E.onglet === 'postprod') dessinerPostProd(corps);
   const defilement = n.corpsPanneau.firstChild?.scrollTop || 0;
   remplir(n.corpsPanneau, corps);
   corps.scrollTop = defilement;
@@ -1307,10 +1323,11 @@ function controleReglage(r, valeur) {
       r.options.map((o) => h('option', { value: o.valeur, selected: o.valeur === valeur }, o.libelle)));
   }
   if (r.genre === 'curseur') {
-    const sortie = h('b', { class: 'petit' }, `${valeur} %`);
+    const unite = r.bornes.unite || '%';
+    const sortie = h('b', { class: 'petit', style: { minWidth: '62px', textAlign: 'right' } }, `${valeur > 0 && unite === 'ms' ? '+' : ''}${valeur} ${unite}`);
     return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' } },
-      h('input', { type: 'range', min: r.bornes.min, max: r.bornes.max, step: '5', value: valeur, 'aria-label': r.titre,
-        oninput: (e) => { sortie.textContent = `${e.target.value} %`; }, onchange: (e) => changer(Number(e.target.value)) }), sortie);
+      h('input', { type: 'range', min: r.bornes.min, max: r.bornes.max, step: unite === 'ms' ? '10' : '5', value: valeur, 'aria-label': r.titre,
+        oninput: (e) => { sortie.textContent = `${e.target.value > 0 && unite === 'ms' ? '+' : ''}${e.target.value} ${unite}`; }, onchange: (e) => changer(Number(e.target.value)) }), sortie);
   }
   if (r.genre === 'media_son') {
     const sons = E.vue.projet.medias.filter((m) => m.genre === 'son');
@@ -1626,6 +1643,8 @@ function dessinerBarre() {
       onclick: async () => { try { await api('POST', `/api/projets/${E.projetId}/rendu`); toast('Rendu final lancé. Vous pouvez continuer à travailler.'); } catch (e) { toast(e.message, 'erreur'); } },
     }, icone('film'), h('span', { class: 'long' }, 'Rendu final'), h('span', { class: 'court' }, 'Rendu')),
     p.rendu ? h('a', { class: 'btn doux', href: `/api/projets/${E.projetId}/sorties/${p.rendu.fichier}`, download: `${p.nom}.mp4` }, icone('telecharger'), h('span', { class: 'long' }, 'Télécharger'), h('span', { class: 'court' }, 'Fichier')) : null,
+    p.rendu ? h('button', { class: 'btn doux', title: 'Versions prêtes pour YouTube, pour l’iPhone ou l’archive ; publication sur YouTube', onclick: afficherExport },
+      icone('televerser'), h('span', { class: 'long' }, 'Exporter'), h('span', { class: 'court' }, 'Export')) : null,
     p.rendu && E.driveActif ? h('button', {
       class: 'btn doux', title: p.depot_drive ? `Déjà déposée : ${p.depot_drive}` : 'Déposer la vidéo finale dans le dossier de sortie du Drive',
       onclick: async () => { try { await api('POST', `/api/projets/${E.projetId}/drive`); toast('Envoi sur le Google Drive…'); } catch (e) { toast(e.message, 'erreur'); } },
@@ -1653,6 +1672,10 @@ function afficherGuide() {
       h('span', {}, 'Onglet Textes : écrivez un texte, choisissez son effet, puis glissez-le sur la vidéo en pause, à l’endroit voulu. Les images et GIF de l’onglet Médias se glissent de la même façon. En pause, tout ce qui est posé se déplace à la souris.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('film'),
       h('span', {}, 'Sous le lecteur, deux timelines : la vidéo d’origine (ce que le script garde, en couleur ; ce qu’il coupe, en gris) et le montage. Chacune s’allume ou s’éteint ; « Origine » relit la vidéo telle que filmée.')),
+    h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('etincelles'),
+      h('span', {}, 'Onglet PostProd : un look en un clic (Beauté naturelle, Glow peau, Éditorial mode…), puis teint, lumière, grain à doser ; « Comparer » montre l’avant/après sur l’image affichée.')),
+    h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('televerser'),
+      h('span', {}, 'Après le rendu final, « Exporter » donne une version prête pour YouTube (ou légère pour l’iPhone) et la publie sur votre chaîne si votre compte Google l’autorise.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('livre'),
       h('span', {}, 'Le livre à côté de la saisie ouvre la bibliothèque : des demandes toutes prêtes, les vôtres, et les consignes exactes du LLM. L’étoile enregistre la demande que vous venez d’écrire.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('nuage'),
@@ -1965,4 +1988,258 @@ function sectionGoogle(P) {
             catch (e) { toast(e.message, 'erreur'); }
           } }, 'Enregistrer'))],
         ].map(([t, x], i) => h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, t), x))))));
+}
+
+// ------------------------------------------------------------------ transcription modifiable
+
+function ligneEdition(ph, corrigee) {
+  const zone = h('textarea', { class: 'champ', rows: '2', 'aria-label': 'Texte de la phrase' });
+  zone.value = ph.texte;
+  const enregistrer = async (texte) => {
+    try {
+      await api('POST', `/api/projets/${E.projetId}/correction`, { cle: ph.cle, texte });
+      E.edition = null;
+      E.aMettreAJour = true;
+      toast('Texte corrigé : les sous-titres en tiendront compte au prochain aperçu.', 'ok');
+    } catch (e) { toast(e.message, 'erreur'); }
+  };
+  zone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enregistrer(zone.value); }
+    if (e.key === 'Escape') { E.edition = null; dessinerPhrases(); }
+  });
+  setTimeout(() => { zone.focus(); zone.setSelectionRange(zone.value.length, zone.value.length); }, 20);
+  return h('div', { class: 'phrase edition', 'data-cle': ph.cle },
+    h('div', { class: 'temps' }, minutes(ph.t0)),
+    h('div', { style: { minWidth: 0 } }, zone,
+      h('div', { style: { display: 'flex', gap: '6px', marginTop: '6px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn petit primaire', onclick: () => enregistrer(zone.value) }, icone('ok'), 'Enregistrer'),
+        h('button', { class: 'btn petit', onclick: () => { E.edition = null; dessinerPhrases(); } }, 'Annuler'),
+        corrigee ? h('button', { class: 'btn petit fantome', title: 'Revenir au texte transcrit', onclick: () => enregistrer('') }, 'Texte d’origine') : null,
+        h('span', { class: 'tres-petit muet', style: { alignSelf: 'center' } }, 'Entrée pour enregistrer, Échap pour annuler'))),
+    h('span'));
+}
+
+function zoneRemplacer() {
+  if (!E.voirRemplacer) {
+    return h('button', { class: 'btn petit fantome', style: { marginBottom: '6px' }, onclick: () => { E.voirRemplacer = true; dessinerPhrases(); } },
+      icone('crayon'), 'Rechercher et remplacer dans tout le texte');
+  }
+  const cherche = h('input', { class: 'champ', placeholder: 'Mot mal transcrit (ex. : mon moyenne)' });
+  const remplace = h('input', { class: 'champ', placeholder: 'Remplacer par (ex. : mon moyen)' });
+  const lancer = async () => {
+    try {
+      const r = await api('POST', `/api/projets/${E.projetId}/remplacer`, { cherche: cherche.value, remplace: remplace.value });
+      toast(r.phrases ? `${r.phrases} phrase(s) corrigée(s).` : 'Rien trouvé.', r.phrases ? 'ok' : '');
+      if (r.phrases) E.aMettreAJour = true;
+    } catch (e) { toast(e.message, 'erreur'); }
+  };
+  return h('div', { class: 'remplacer' }, cherche, remplace,
+    h('button', { class: 'btn petit primaire', onclick: lancer }, 'Remplacer partout'),
+    h('button', { class: 'btn icone fantome', title: 'Fermer', onclick: () => { E.voirRemplacer = false; dessinerPhrases(); } }, icone('fermer')));
+}
+
+// ------------------------------------------------------------------ PostProd
+
+let catalogueLooks = null;
+let minuteriePostProd = null;
+
+function dessinerPostProd(corps) {
+  const p = E.vue.projet;
+  const pp = E.postprod = { ...p.postprod };
+  if (!catalogueLooks) {
+    remplir(corps, h('p', { class: 'muet petit' }, 'Chargement…'));
+    api('GET', '/api/postprod/looks').then((c) => { catalogueLooks = c; dessinerPanneau(); });
+    return;
+  }
+  const enregistrer = () => {
+    clearTimeout(minuteriePostProd);
+    minuteriePostProd = setTimeout(async () => {
+      try {
+        await api('POST', `/api/projets/${E.projetId}/postprod`, E.postprod);
+        E.aMettreAJour = true;
+        dessinerBarre();
+        if (E.comparaison) comparer();
+      } catch (e) { toast(e.message, 'erreur'); }
+    }, 450);
+  };
+  const curseur = (cle, titre, aide, min, max) => {
+    const sortie = h('b', { class: 'petit', style: { minWidth: '38px', textAlign: 'right' } }, `${pp[cle] > 0 && min < 0 ? '+' : ''}${pp[cle]}`);
+    return h('div', { class: 'reglage' },
+      h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, titre), sortie),
+      aide ? h('div', { class: 'reglage-aide' }, aide) : null,
+      h('input', { type: 'range', min, max, step: '1', value: pp[cle], 'aria-label': titre,
+        oninput: (e) => { pp[cle] = Number(e.target.value); E.postprod.look = ''; sortie.textContent = `${pp[cle] > 0 && min < 0 ? '+' : ''}${pp[cle]}`; enregistrer(); } }));
+  };
+  const couleur = h('select', { class: 'champ' }, catalogueLooks.couleurs.map((c) => h('option', { value: c.cle, selected: pp.couleur === c.cle }, c.nom)));
+  couleur.addEventListener('change', () => { pp.couleur = couleur.value; pp.look = ''; enregistrer(); });
+  E.noeuds.comparaison = h('div', { class: 'comparaison' });
+  const horizontal = (p.apercu?.rapport?.largeur || 0) > (p.apercu?.rapport?.hauteur || 1);
+  corps.append(
+    h('div', { class: 'aide', style: { marginBottom: '14px' } }, icone('info'),
+      h('span', {}, 'Le traitement de l’image sur toute la vidéo : couleur, teint, lumière, grain. Choisissez un look, ajustez, puis comparez avant/après sur l’image affichée. Les textes et sous-titres restent nets.')),
+    h('div', { class: 'section-reglages' }, h('h3', {}, 'Looks'),
+      h('div', { class: 'grille-looks' }, catalogueLooks.looks.map((l) => h('button', {
+        class: `look ${pp.look === l.cle ? 'choisi' : ''}`, title: l.description,
+        onclick: async () => {
+          Object.assign(E.postprod, l.reglages, { look: l.cle });
+          try {
+            await api('POST', `/api/projets/${E.projetId}/postprod`, E.postprod);
+            E.vue.projet.postprod = { ...E.postprod };
+            E.aMettreAJour = true;
+            toast(`Look « ${l.nom} » appliqué. Mettez à jour l’aperçu pour le voir dans la vidéo.`, 'ok');
+            dessinerPanneau();
+            if (E.comparaison) comparer();
+          } catch (e) { toast(e.message, 'erreur'); }
+        },
+      }, h('b', {}, l.nom), h('span', {}, l.description))))),
+    h('div', { class: 'section-reglages' }, h('h3', {}, 'Avant / après'),
+      h('div', { class: 'reglage-aide' }, 'Sur l’image d’origine, à l’instant affiché dans le lecteur (mettez en pause là où le visage est bien visible).'),
+      h('button', { class: 'btn petit doux', style: { marginTop: '8px' }, onclick: () => { E.comparaison = true; comparer(); } }, icone('image'), 'Comparer à l’instant affiché'),
+      E.noeuds.comparaison),
+    h('div', { class: 'section-reglages' }, h('h3', {}, 'Couleur'),
+      h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Colorimétrie'), h('div', { class: 'reglage-aide' }, 'L’ambiance générale des couleurs.'), couleur),
+      curseur('exposition', 'Exposition', 'Plus clair ou plus sombre.', -100, 100),
+      curseur('contraste', 'Contraste', null, -100, 100),
+      curseur('saturation', 'Saturation', 'Intensité des couleurs.', -100, 100),
+      curseur('temperature', 'Température', 'Vers le bleu (froid) ou l’ambre (chaud).', -100, 100)),
+    h('div', { class: 'section-reglages' }, h('h3', {}, 'Peau et lumière'),
+      curseur('lissage', 'Lissage du teint', 'Adoucit la peau et gomme les petites imperfections, sans flouter les yeux ni les contours.', 0, 100),
+      curseur('diffusion', 'Diffusion (glow)', 'Un halo doux dans les lumières, comme un filtre « Pro-Mist » : peau lumineuse, image rêveuse.', 0, 100),
+      curseur('nettete', 'Netteté', 'Relève les détails (cheveux, regard). À doser avec le lissage.', 0, 100)),
+    h('div', { class: 'section-reglages' }, h('h3', {}, 'Texture et cadre'),
+      curseur('grain', 'Grain', 'Une texture de pellicule fine et vivante.', 0, 100),
+      curseur('vignette', 'Vignette', 'Assombrit doucement les bords pour guider le regard au centre.', 0, 100),
+      h('div', { class: 'reglage' }, h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, 'Bandes cinéma'),
+        interrupteurSimple(pp.bandes, (v) => { pp.bandes = v; pp.look = ''; enregistrer(); })),
+        h('div', { class: 'reglage-aide' }, horizontal ? 'Bandes noires au format 2,39:1, comme au cinéma.' : 'Pour les vidéos horizontales seulement : sans effet en vertical.'))),
+    h('button', { class: 'btn petit fantome', onclick: async () => {
+      E.postprod = { look: '', couleur: 'naturel', exposition: 0, contraste: 0, saturation: 0, temperature: 0, lissage: 0, diffusion: 0, nettete: 0, grain: 0, vignette: 0, bandes: false };
+      await api('POST', `/api/projets/${E.projetId}/postprod`, E.postprod);
+      E.vue.projet.postprod = { ...E.postprod };
+      E.aMettreAJour = true;
+      dessinerPanneau();
+    } }, icone('relancer'), 'Tout remettre à zéro'));
+  if (E.comparaison) comparer();
+}
+
+function comparer() {
+  const n = E.noeuds;
+  if (!n.comparaison) return;
+  if (!n.video.dataset.url) { remplir(n.comparaison, h('p', { class: 'petit muet' }, 'Ouvrez d’abord l’aperçu ou la vidéo d’origine dans le lecteur.')); return; }
+  const base = `/api/projets/${E.projetId}/postprod/image?t=${n.video.currentTime.toFixed(2)}&vue=${E.lecteur}&rush=${E.lecteur === 'origine' ? rushLecteur() : ''}&_=${Date.now()}`;
+  const image = (avant) => h('figure', {}, h('img', { src: `${base}&avant=${avant ? "true" : "false"}`, alt: avant ? 'Avant' : 'Après', loading: 'lazy',
+    onerror: (e) => { e.target.replaceWith(h('p', { class: 'petit muet' }, 'Image indisponible à cet instant.')); } }),
+    h('figcaption', {}, avant ? 'Avant' : 'Après'));
+  remplir(n.comparaison, image(true), image(false));
+}
+
+// ------------------------------------------------------------------ export et YouTube
+
+const PRESETS_EXPORT = [
+  ['youtube', 'YouTube', 'Recommandé. Réglages conseillés par YouTube : débit élevé, image fixe à 30 i/s, son AAC 384 kb/s. La meilleure qualité une fois en ligne.'],
+  ['leger', 'Léger', 'Pour l’iPhone, WhatsApp ou un courriel : 720p, fichier environ quatre fois plus petit.'],
+  ['max', 'Qualité maximale', 'Pour l’archive ou une retouche ailleurs : fichier lourd, aucune perte visible.'],
+];
+
+async function afficherExport() {
+  let P = null;
+  try { P = await api('GET', '/api/parametres'); } catch { /* sans comptes */ }
+  fenetre('Exporter la vidéo', (fermer) => {
+    const zone = h('div');
+    const dessiner = () => {
+      const p = E.vue.projet;
+      const exports = [...(p.exports || [])].reverse();
+      remplir(zone,
+        h('p', { class: 'petit muet', style: { marginTop: 0 } }, `À partir du rendu final (${p.rendu.rapport.largeur}×${p.rendu.rapport.hauteur}, ${minutes(p.rendu.rapport.duree_montage)}). L’export prend une à quelques minutes.`),
+        h('div', { class: 'grille-medias', style: { gridTemplateColumns: 'repeat(3, 1fr)' } }, PRESETS_EXPORT.map(([cle, nom, aide]) =>
+          h('div', { class: `look ${cle === 'youtube' ? 'choisi' : ''}`, style: { cursor: 'default' } },
+            h('b', {}, nom), h('span', {}, aide),
+            h('button', { class: `btn petit ${cle === 'youtube' ? 'primaire' : ''}`, style: { marginTop: '8px' }, onclick: async () => {
+              try { await api('POST', `/api/projets/${E.projetId}/export`, { preset: cle }); toast(`Export ${nom} lancé.`); fermer(); }
+              catch (e) { toast(e.message, 'erreur'); }
+            } }, 'Exporter')))),
+        h('h3', { style: { margin: '18px 0 8px' } }, 'Vos exports'),
+        exports.length ? exports.map((x) => h('div', { class: 'incrustation' },
+          h('div', { style: { minWidth: 0 } },
+            h('b', { class: 'petit' }, (PRESETS_EXPORT.find(([k]) => k === x.preset) || [, x.preset])[1]),
+            h('div', { class: 'tres-petit muet' }, `${x.largeur}×${x.hauteur} · ${taille(x.taille)} · ${new Date(x.cree).toLocaleString('fr-FR')}`),
+            x.youtube ? h('a', { class: 'tres-petit', href: x.youtube, target: '_blank', rel: 'noopener' }, `Sur YouTube : ${x.youtube}`) : null),
+          h('div', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'flex-end' } },
+            h('a', { class: 'btn petit doux', href: `/api/projets/${E.projetId}/sorties/${x.fichier}`, download: `${p.nom} (${x.preset}).mp4` }, icone('telecharger'), 'Télécharger'),
+            h('button', { class: 'btn petit', onclick: () => { fermer(); dialogueYoutube(x, P); } }, 'Publier sur YouTube'),
+            h('button', { class: 'btn icone fantome danger', title: 'Supprimer cet export', onclick: async () => {
+              await api('DELETE', `/api/projets/${E.projetId}/exports/${x.id}`);
+              await rafraichir();
+              dessiner();
+            } }, icone('corbeille')))))
+          : h('p', { class: 'petit muet' }, 'Aucun export pour l’instant.'));
+    };
+    dessiner();
+    return zone;
+  }, { large: true });
+}
+
+function dialogueYoutube(x, P) {
+  const comptes = (P?.comptes || []).filter((c) => c.youtube);
+  const p = E.vue.projet;
+  const f = { titre: p.nom, description: '', mots_cles: '', visibilite: 'private', categorie: '26', compte: comptes[0]?.email || '' };
+  fenetre('Publier sur YouTube', (fermer) => {
+    const zone = h('div');
+    const champTexte = (cle, attrs = {}, multi = false) => {
+      const el = h(multi ? 'textarea' : 'input', { class: 'champ', ...attrs });
+      el.value = f[cle];
+      el.addEventListener('input', () => { f[cle] = el.value; });
+      return el;
+    };
+    const dessiner = () => {
+      if (!comptes.length) {
+        remplir(zone, h('div', { class: 'aide', style: { background: 'var(--alerte-doux)' } }, icone('alerte'),
+          h('span', {}, 'Aucun compte Google n’a autorisé YouTube. Dans Paramètres, connectez votre compte avec Google (il demande aussi l’accès à YouTube), puis revenez ici.')),
+          h('a', { class: 'btn primaire', href: '#/parametres', style: { marginTop: '12px' }, onclick: fermer }, 'Ouvrir les Paramètres'));
+        return;
+      }
+      const visibilite = h('div', { class: 'segments' });
+      const dessinerVis = () => remplir(visibilite, [['private', 'Privée'], ['unlisted', 'Non répertoriée'], ['public', 'Publique']].map(([v, l]) =>
+        h('button', { class: f.visibilite === v ? 'actif' : '', onclick: () => { f.visibilite = v; dessinerVis(); } }, l)));
+      dessinerVis();
+      const categorie = h('select', { class: 'champ' }, [['26', 'Vie pratique et style'], ['22', 'Personnes et blogs'], ['27', 'Éducation'], ['17', 'Sport'], ['24', 'Divertissement']].map(([v, l]) =>
+        h('option', { value: v, selected: f.categorie === v }, l)));
+      categorie.addEventListener('change', () => { f.categorie = categorie.value; });
+      const compte = h('select', { class: 'champ' }, comptes.map((c) => h('option', { value: c.email, selected: f.compte === c.email }, `${c.nom} — ${c.email}`)));
+      compte.addEventListener('change', () => { f.compte = compte.value; });
+      const proposer = h('button', { class: 'btn petit doux', onclick: async () => {
+        proposer.disabled = true;
+        proposer.lastChild.textContent = 'Le LLM rédige…';
+        try {
+          const v = await api('POST', `/api/projets/${E.projetId}/youtube/proposer`);
+          f.titre = v.titre || f.titre;
+          f.description = v.description || f.description;
+          f.mots_cles = (v.mots_cles || []).join(', ');
+          dessiner();
+        } catch (e) { toast(e.message, 'erreur'); proposer.disabled = false; }
+      } }, icone('etincelles'), h('span', {}, 'Proposer titre, description et mots-clés'));
+      remplir(zone,
+        proposer,
+        champ('Chaîne (compte Google)', compte),
+        champ('Titre', champTexte('titre', { maxlength: '100' })),
+        champ('Description', champTexte('description', { rows: '6' }, true), 'Les chapitres horodatés, s’il y en a, rendent la vidéo plus facile à parcourir.'),
+        champ('Mots-clés', champTexte('mots_cles', { placeholder: 'séparés par des virgules' })),
+        champ('Visibilité', visibilite, 'Commencez en « Privée » pour vérifier, puis publiez depuis YouTube Studio.'),
+        champ('Catégorie', categorie),
+        h('div', { class: 'aide', style: { marginTop: '12px' } }, icone('info'),
+          h('span', {}, 'Tant que votre application Google n’a pas passé l’audit de l’API YouTube, Google garde en privé les vidéos envoyées par EDIVID. La demande d’audit se fait dans la console Google Cloud.')),
+        h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' } },
+          h('button', { class: 'btn', onclick: fermer }, 'Annuler'),
+          h('button', { class: 'btn primaire', onclick: async () => {
+            try {
+              await api('POST', `/api/projets/${E.projetId}/youtube`, { export: x.id, compte: f.compte, titre: f.titre, description: f.description,
+                mots_cles: f.mots_cles.split(',').map((m) => m.trim()).filter(Boolean), visibilite: f.visibilite, categorie: f.categorie });
+              toast('Envoi sur YouTube lancé : la progression s’affiche en bas.', 'ok');
+              fermer();
+            } catch (e) { toast(e.message, 'erreur'); }
+          } }, icone('televerser'), 'Publier')));
+    };
+    dessiner();
+    return zone;
+  }, { large: true });
 }

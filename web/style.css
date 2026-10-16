@@ -513,3 +513,25 @@ html, body { overflow-x: hidden; }
   .carte-tete .onglets-petits button { flex: 1; }
   .outils-lecteur .bascule span { font-size: 12px; }
 }
+
+/* ---------- v0.4 ---------- */
+.marque-corrige { font-size: 11px; color: var(--ok); background: var(--ok-doux); border-radius: 6px; padding: 0 6px; margin-left: 6px; font-weight: 600; }
+.phrase.edition { background: var(--accent-doux); }
+.remplacer { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 6px; margin-bottom: 8px; align-items: center; }
+@media (max-width: 720px) { .remplacer { grid-template-columns: 1fr; } }
+.grille-looks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.look { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px 11px; border-radius: 11px; border: 1px solid var(--bord); background: var(--surface); cursor: pointer; }
+.look:hover { border-color: var(--accent); }
+.look b { font-size: 13.5px; }
+.look span { font-size: 12px; color: var(--texte-2); line-height: 1.35; }
+.look.choisi { border-color: var(--accent); background: var(--accent-doux); }
+.comparaison { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.comparaison figure { margin: 0; }
+.comparaison img { width: 100%; border-radius: 9px; display: block; background: var(--surface-3); min-height: 120px; }
+.comparaison figcaption { font-size: 12px; color: var(--texte-2); text-align: center; margin-top: 4px; }
+/* Cinq onglets : icône au-dessus du libellé. */
+.onglets button { flex-direction: column; gap: 2px; padding: 6px 2px; font-size: 11.5px; line-height: 1.2; position: relative; }
+.onglets button svg { width: 17px; height: 17px; }
+.onglets .compte { position: absolute; top: 3px; right: 6px; font-size: 10px; line-height: 15px; padding: 0 5px; }
+.chevron-panneau { flex: 0 0 30px !important; }
+.onglets { flex-shrink: 0; }

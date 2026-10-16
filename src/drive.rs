@@ -251,6 +251,9 @@ async fn prendre(etat: &EtatPartage, d: &Drive, compte: &str, groupe: &str, fich
         depot_drive: None,
         origine: "Google Drive".into(),
         compte: compte.to_string(),
+        postprod: modele.as_ref().map(|m| m.postprod.clone()).unwrap_or_default(),
+        corrections: Default::default(),
+        exports: vec![],
     };
     let mut tries: Vec<&Fichier> = fichiers.iter().collect();
     tries.sort_by(|a, b| a.chemin.cmp(&b.chemin));

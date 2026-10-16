@@ -44,6 +44,30 @@ pub struct Projet {
     /// Compte Google dont le Drive a fourni le projet : la vidéo y retourne, le courriel lui est envoyé.
     #[serde(default)]
     pub compte: String,
+    /// Traitements d'image sur le montage entier (onglet PostProd).
+    #[serde(default)]
+    pub postprod: crate::postprod::PostProd,
+    /// Textes de phrases corrigés à la main (orthographe, erreurs de transcription), par clé de phrase.
+    #[serde(default)]
+    pub corrections: std::collections::BTreeMap<String, String>,
+    /// Versions exportées du rendu final.
+    #[serde(default)]
+    pub exports: Vec<Export>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Export {
+    pub id: String,
+    /// youtube, leger ou max.
+    pub preset: String,
+    pub fichier: String,
+    pub cree: String,
+    pub taille: u64,
+    pub largeur: u32,
+    pub hauteur: u32,
+    /// Lien de la vidéo publiée sur YouTube.
+    #[serde(default)]
+    pub youtube: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

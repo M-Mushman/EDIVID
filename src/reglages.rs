@@ -10,7 +10,7 @@ pub type Reglages = BTreeMap<String, Value>;
 pub enum Genre {
     Choix(&'static [(&'static str, &'static str)]),
     Interrupteur,
-    Curseur { min: f64, max: f64 },
+    Curseur { min: f64, max: f64, unite: &'static str },
     /// Un son de la médiathèque, ou "" pour aucun.
     MediaSon,
 }
@@ -169,22 +169,6 @@ pub const CATALOGUE: &[Reglage] = &[
     },
     Reglage {
         section: "Image",
-        cle: "filtre",
-        titre: "Filtre",
-        aide: "Couleur générale de la vidéo.",
-        genre: Genre::Choix(&[
-            ("naturel", "Naturel"),
-            ("eclatant", "Éclatant"),
-            ("chaud", "Chaud"),
-            ("froid", "Froid"),
-            ("cinema", "Cinéma"),
-            ("noir_blanc", "Noir et blanc"),
-            ("vintage", "Vintage"),
-        ]),
-        defaut: || json!("naturel"),
-    },
-    Reglage {
-        section: "Image",
         cle: "nettete_ia",
         titre: "Netteté IA",
         aide: "Recrée de la définition sur les plans zoomés (Real-ESRGAN). L'option « visage » restaure aussi les traits (GFPGAN), au risque de les retoucher un peu. Appliquée au rendu final seulement : l'aperçu reste rapide.",
@@ -207,6 +191,14 @@ pub const CATALOGUE: &[Reglage] = &[
             ("carre", "Carré 1:1"),
         ]),
         defaut: || json!("auto"),
+    },
+    Reglage {
+        section: "Image",
+        cle: "definition",
+        titre: "Définition du rendu final",
+        aide: "1080p convient à presque tout. 4K seulement si vos rushs sont en 4K (iPhone) : le rendu est plus long et plus lourd.",
+        genre: Genre::Choix(&[("1080", "1080p (Full HD)"), ("2160", "2160p (4K)")]),
+        defaut: || json!("1080"),
     },
     Reglage {
         section: "Son",
@@ -234,6 +226,14 @@ pub const CATALOGUE: &[Reglage] = &[
     },
     Reglage {
         section: "Son",
+        cle: "calage_son",
+        titre: "Calage son/image",
+        aide: "Si la voix et les lèvres sont décalées dans vos rushs eux-mêmes (micro externe, vidéo exportée d'une application) : un nombre positif retarde le son, négatif l'avance.",
+        genre: Genre::Curseur { min: -300.0, max: 300.0, unite: "ms" },
+        defaut: || json!(0),
+    },
+    Reglage {
+        section: "Son",
         cle: "musique",
         titre: "Musique de fond",
         aide: "Un son de la médiathèque, joué en boucle sous la voix.",
@@ -245,7 +245,7 @@ pub const CATALOGUE: &[Reglage] = &[
         cle: "volume_musique",
         titre: "Volume de la musique",
         aide: "La musique baisse toute seule quand la personne parle.",
-        genre: Genre::Curseur { min: 0.0, max: 100.0 },
+        genre: Genre::Curseur { min: 0.0, max: 100.0, unite: "%" },
         defaut: || json!(20),
     },
 ];
@@ -273,7 +273,7 @@ pub fn valider(cle: &str, valeur: &Value) -> Result<Value, String> {
             .as_bool()
             .map(Value::Bool)
             .ok_or_else(|| format!("« {} » attend oui ou non", r.titre)),
-        Genre::Curseur { min, max } => valeur
+        Genre::Curseur { min, max, .. } => valeur
             .as_f64()
             .map(|v| json!(v.clamp(*min, *max).round()))
             .ok_or_else(|| format!("« {} » attend un nombre", r.titre)),
@@ -323,7 +323,7 @@ pub fn catalogue_json() -> Value {
                         Value::Null,
                     ),
                     Genre::Interrupteur => ("interrupteur", vec![], Value::Null),
-                    Genre::Curseur { min, max } => ("curseur", vec![], json!({"min": min, "max": max})),
+                    Genre::Curseur { min, max, unite } => ("curseur", vec![], json!({"min": min, "max": max, "unite": unite})),
                     Genre::MediaSon => ("media_son", vec![], Value::Null),
                 };
                 json!({"section": r.section, "cle": r.cle, "titre": r.titre, "aide": r.aide, "genre": genre,
@@ -342,7 +342,7 @@ pub fn pour_llm(actuels: &Reglages) -> String {
             let permis = match &r.genre {
                 Genre::Choix(o) => o.iter().map(|(v, _)| *v).collect::<Vec<_>>().join(" | "),
                 Genre::Interrupteur => "true | false".into(),
-                Genre::Curseur { min, max } => format!("nombre de {min} à {max}"),
+                Genre::Curseur { min, max, unite } => format!("nombre de {min} à {max} ({unite})"),
                 Genre::MediaSon => "nom d'un son de la médiathèque, ou \"\" pour aucun".into(),
             };
             format!(

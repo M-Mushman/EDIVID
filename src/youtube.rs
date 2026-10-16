@@ -1,0 +1,233 @@
+//! Publication sur YouTube (API YouTube Data v3, envoi reprenable). Les jetons de rafraîchissement
+//! Google sont gardés sur azoth (`<donnees>/comptes.json`, droits 600).
+
+use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
+use std::time::{Duration, Instant};
+
+use anyhow::{anyhow, bail, Context, Result};
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tokio_util::io::ReaderStream;
+
+use crate::courriel;
+use crate::decoupe;
+use crate::etat::EtatPartage;
+use crate::llm;
+use crate::modele::{maintenant, Echange};
+
+pub const PORTEE: &str = "https://www.googleapis.com/auth/youtube.upload";
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Jetons {
+    pub refresh_token: String,
+    pub portees: String,
+}
+
+fn chemin(etat: &EtatPartage) -> std::path::PathBuf {
+    etat.cfg.donnees.join("comptes.json")
+}
+
+pub fn charger(etat: &EtatPartage) -> HashMap<String, Jetons> {
+    std::fs::read_to_string(chemin(etat)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+pub fn garder(etat: &EtatPartage, email: &str, jetons: Jetons) -> Result<()> {
+    let mut tous = charger(etat);
+    tous.insert(email.to_lowercase(), jetons);
+    let f = chemin(etat);
+    std::fs::write(&f, serde_json::to_vec_pretty(&tous)?)?;
+    std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+pub fn oublier(etat: &EtatPartage, email: &str) {
+    let mut tous = charger(etat);
+    if tous.remove(&email.to_lowercase()).is_some() {
+        let _ = std::fs::write(chemin(etat), serde_json::to_vec_pretty(&tous).unwrap_or_default());
+    }
+}
+
+/// Ce compte a-t-il autorisé l'envoi sur YouTube ?
+pub fn autorise(etat: &EtatPartage, email: &str) -> bool {
+    charger(etat).get(&email.to_lowercase()).map(|j| j.portees.contains(PORTEE) && !j.refresh_token.is_empty()).unwrap_or(false)
+}
+
+async fn jeton_acces(etat: &EtatPartage, email: &str) -> Result<String> {
+    let j = charger(etat).get(&email.to_lowercase()).cloned().ok_or_else(|| anyhow!("compte Google non relié"))?;
+    let g = etat.parametres.read().await.google.clone();
+    let v: Value = etat
+        .http
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[("client_id", g.client_id.as_str()), ("client_secret", g.client_secret.as_str()),
+                ("refresh_token", j.refresh_token.as_str()), ("grant_type", "refresh_token")])
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await?
+        .json()
+        .await?;
+    v["access_token"].as_str().map(String::from).ok_or_else(|| anyhow!("Google refuse le renouvellement du jeton : {v}"))
+}
+
+#[derive(Deserialize)]
+pub struct Publication {
+    pub export: String,
+    #[serde(default)]
+    pub compte: String,
+    pub titre: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub mots_cles: Vec<String>,
+    /// private, unlisted ou public.
+    #[serde(default)]
+    pub visibilite: String,
+    /// 22 (personnes et blogs), 26 (vie pratique et style), 27 (éducation)…
+    #[serde(default)]
+    pub categorie: String,
+}
+
+/// Envoie un export sur YouTube ; renvoie le lien de la vidéo.
+pub async fn publier(etat: &EtatPartage, projet: &str, pub_: &Publication) -> Result<String> {
+    let p = etat.projet(projet).await?;
+    let ex = p.exports.iter().find(|e| e.id == pub_.export).ok_or_else(|| anyhow!("export introuvable"))?;
+    let fichier = etat.dossier_projet(projet).join("sorties").join(&ex.fichier);
+    let taille = tokio::fs::metadata(&fichier).await?.len();
+    let jeton = jeton_acces(etat, &pub_.compte).await?;
+    let visibilite = if ["private", "unlisted", "public"].contains(&pub_.visibilite.as_str()) { pub_.visibilite.as_str() } else { "private" };
+    let titre: String = pub_.titre.trim().chars().take(100).collect();
+    if titre.is_empty() {
+        bail!("le titre est obligatoire");
+    }
+    let meta = json!({
+        "snippet": {
+            "title": titre,
+            "description": pub_.description.chars().take(5000).collect::<String>(),
+            "tags": pub_.mots_cles.iter().take(30).collect::<Vec<_>>(),
+            "categoryId": if pub_.categorie.is_empty() { "22" } else { pub_.categorie.as_str() },
+            "defaultLanguage": "fr", "defaultAudioLanguage": "fr",
+        },
+        "status": {"privacyStatus": visibilite, "selfDeclaredMadeForKids": false},
+    });
+    let session = etat
+        .http
+        .post("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status")
+        .bearer_auth(&jeton)
+        .header("X-Upload-Content-Type", "video/mp4")
+        .header("X-Upload-Content-Length", taille.to_string())
+        .json(&meta)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await?;
+    if !session.status().is_success() {
+        let texte = session.text().await.unwrap_or_default();
+        bail!("YouTube refuse l'envoi : {}", court(&texte));
+    }
+    let adresse = session.headers().get("location").and_then(|v| v.to_str().ok()).ok_or_else(|| anyhow!("YouTube n'a pas ouvert d'envoi"))?.to_string();
+    // Envoi du fichier, avec la progression dans l'interface.
+    let f = tokio::fs::File::open(&fichier).await?;
+    let (e, pid) = (etat.clone(), projet.to_string());
+    let mut envoye = 0u64;
+    let mut dernier = Instant::now();
+    let flux = ReaderStream::with_capacity(f, 1 << 20).map(move |morceau| {
+        if let Ok(m) = &morceau {
+            envoye += m.len() as u64;
+            if dernier.elapsed().as_millis() > 700 {
+                e.signaler(&pid, "Envoi sur YouTube", 100.0 * envoye as f64 / taille.max(1) as f64);
+                dernier = Instant::now();
+            }
+        }
+        morceau
+    });
+    let reponse = etat
+        .http
+        .put(&adresse)
+        .bearer_auth(&jeton)
+        .header("Content-Type", "video/mp4")
+        .header("Content-Length", taille.to_string())
+        .body(reqwest::Body::wrap_stream(flux))
+        .timeout(Duration::from_secs(6 * 3600))
+        .send()
+        .await
+        .context("envoi interrompu")?;
+    let v: Value = reponse.json().await?;
+    let id = v["id"].as_str().ok_or_else(|| anyhow!("YouTube n'a pas confirmé l'envoi : {}", court(&v.to_string())))?;
+    Ok(format!("https://youtu.be/{id}"))
+}
+
+fn court(t: &str) -> String {
+    t.chars().take(300).collect()
+}
+
+/// Lance la publication sans bloquer ; consigne le résultat et prévient par courriel.
+pub fn lancer(etat: &EtatPartage, projet: &str, pub_: Publication) {
+    let (etat, projet) = (etat.clone(), projet.to_string());
+    tokio::spawn(async move {
+        match publier(&etat, &projet, &pub_).await {
+            Ok(lien) => {
+                let (l, eid, titre, vis) = (lien.clone(), pub_.export.clone(), pub_.titre.clone(), pub_.visibilite.clone());
+                let _ = etat
+                    .modifier(&projet, move |p| {
+                        if let Some(e) = p.exports.iter_mut().find(|e| e.id == eid) {
+                            e.youtube = Some(l.clone());
+                        }
+                        p.discussion.push(Echange { role: "edivid".into(), quand: maintenant(), actions: vec![],
+                            texte: format!("« {titre} » est en ligne sur YouTube ({}) : {l}",
+                                           match vis.as_str() { "public" => "publique", "unlisted" => "non répertoriée", _ => "privée" }) });
+                    })
+                    .await;
+                etat.emettre(&projet, "youtube", json!({"lien": lien}));
+                if let Ok(p) = etat.projet(&projet).await {
+                    courriel::prevenir(&etat, "rendu", &p, "").await;
+                }
+            }
+            Err(err) => {
+                let message = format!("{err:#}");
+                etat.emettre(&projet, "erreur", json!({"travail": "Publication sur YouTube", "message": message}));
+                if let Ok(p) = etat.projet(&projet).await {
+                    courriel::prevenir(&etat, "erreur", &p, &format!("publication sur YouTube : {message}")).await;
+                }
+            }
+        }
+    });
+}
+
+/// Titre, description (avec chapitres horodatés) et mots-clés proposés par le LLM.
+pub async fn proposer(etat: &EtatPartage, projet: &str) -> Result<Value> {
+    let p = etat.projet(projet).await?;
+    let analyses = etat.analyses_du_projet(&p).await?;
+    let ps = decoupe::phrases_projet(&p, &analyses);
+    let prog = decoupe::programme(&p, &analyses, &ps, false);
+    let gardees: Vec<String> = prog.plans.iter().filter(|pl| !pl.accroche).map(|pl| pl.phrase.clone()).collect();
+    let texte: String = ps.iter().filter(|ph| gardees.contains(&ph.cle)).map(|ph| ph.texte.as_str()).collect::<Vec<_>>().join(" ");
+    // Chapitres YouTube : « 0:00 » en premier, au moins trois, dix secondes chacun au minimum.
+    let mut chapitres: Vec<(f64, String)> = Vec::new();
+    for (t, titre) in &prog.titres {
+        if chapitres.last().map(|(d, _)| t - d >= 10.0).unwrap_or(true) {
+            chapitres.push((*t, titre.clone()));
+        }
+    }
+    if chapitres.first().map(|(t, _)| *t > 0.5).unwrap_or(false) {
+        chapitres.insert(0, (0.0, "Introduction".into()));
+    }
+    let liste_chapitres = if chapitres.len() >= 3 {
+        chapitres.iter().map(|(t, ti)| format!("{}:{:02} {ti}", (*t as u64) / 60, (*t as u64) % 60)).collect::<Vec<_>>().join("\n")
+    } else {
+        String::new()
+    };
+    let schema = json!({"type": "object", "properties": {
+        "titre": {"type": "string"}, "description": {"type": "string"},
+        "mots_cles": {"type": "array", "items": {"type": "string"}}},
+        "required": ["titre", "description", "mots_cles"]});
+    let consigne = "Tu prépares la publication YouTube d'une vidéo face caméra en français. À partir de son texte, propose : \
+un titre accrocheur et honnête (60 caractères au plus, sans majuscules partout ni promesse mensongère) ; une description de \
+trois à cinq phrases courtes qui donnent envie de regarder et disent ce qu'on y apprend (sans les chapitres, ajoutés à part) ; \
+huit à douze mots-clés. Réponds en JSON.";
+    let mut v = llm::appeler(etat, projet, consigne, &texte.chars().take(12000).collect::<String>(), &schema, false).await?;
+    if !liste_chapitres.is_empty() {
+        let d = v["description"].as_str().unwrap_or("").to_string();
+        v["description"] = json!(format!("{d}\n\nChapitres :\n{liste_chapitres}"));
+    }
+    Ok(v)
+}

@@ -18,6 +18,10 @@ use crate::modele::{maintenant, InfosSource, Projet, Sortie};
 use crate::reglages::{nombre, texte, vrai};
 
 const PLANS_EN_PARALLELE: usize = 6;
+/// Étiquetage couleur Rec.709 écrit dans le flux (les options -color_* seules ne suffisent pas avec x264).
+const BT709: &str = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709";
+/// Latence fixe du filtre de réduction du bruit afftdn, en échantillons à 48 kHz.
+const LATENCE_AFFTDN: u32 = 1200;
 const ZOOM_TRANSITION: f64 = 1.4;
 
 /// Lance ffmpeg ; la progression (0–100) suit le temps encodé rapporté à `duree`.
@@ -159,6 +163,7 @@ pub async fn preparer(etat: &EtatPartage, projet: &str, source: &Path, infos: &I
     }
     vf.push(format!("fps={IPS}"));
     vf.push("format=yuv420p".into());
+    vf.push(BT709.into());
     let mut args: Vec<String> = vec!["-i".into(), source.to_string_lossy().into()];
     if !a_son {
         args.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"].map(String::from));
@@ -547,18 +552,6 @@ fn textes(prog: &Programme, l: &mut Vec<String>) {
 
 // ---------------------------------------------------------------- assemblage
 
-fn filtre_couleur(nom: &str) -> Option<&'static str> {
-    Some(match nom {
-        "eclatant" => "eq=contrast=1.06:saturation=1.18:gamma=0.98,unsharp=5:5:0.35:5:5:0",
-        "chaud" => "colortemperature=temperature=5200:mix=0.6,eq=saturation=1.08",
-        "froid" => "colortemperature=temperature=8000:mix=0.5",
-        "cinema" => "eq=contrast=1.1:saturation=0.9,colorbalance=rs=-0.05:bs=0.08:rh=0.08:bh=-0.06,vignette=PI/5",
-        "noir_blanc" => "hue=s=0,eq=contrast=1.15",
-        "vintage" => "curves=preset=vintage,noise=alls=8:allf=t,vignette=PI/4",
-        _ => return None,
-    })
-}
-
 fn fenetres(intervalles: &[(f64, f64)]) -> String {
     intervalles.iter().map(|(a, b)| format!("between(t,{a:.3},{b:.3})")).collect::<Vec<_>>().join("+")
 }
@@ -587,11 +580,10 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     let mut entree = 1usize;
     let mut fc: Vec<String> = Vec::new();
 
-    // Image.
+    // Image : cadence fixe, puis PostProd (couleur, teint, diffusion, netteté, grain…), puis les effets ponctuels.
+    fc.push(format!("[0:v]setpts=N/({IPS}*TB)[ppe]"));
+    fc.push(p.postprod.filtre("ppe", "pps", wo, ho));
     let mut v = vec![];
-    if let Some(c) = filtre_couleur(&texte(r, "filtre")) {
-        v.push(c.to_string());
-    }
     let effets = |nom: &str| prog.incrustations.iter().filter(|i| i.effet == nom).map(|i| (i.debut, i.fin)).collect::<Vec<_>>();
     let secousses = effets("secousse");
     if !secousses.is_empty() {
@@ -602,7 +594,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     if !nb.is_empty() {
         v.push(format!("hue=s=0:enable='{}'", fenetres(&nb)));
     }
-    fc.push(format!("[0:v]{}[v0]", if v.is_empty() { "null".to_string() } else { v.join(",") }));
+    fc.push(format!("[pps]{}[v0]", if v.is_empty() { "null".to_string() } else { v.join(",") }));
     let mut base = "v0".to_string();
     let mut sons_incrustes: Vec<String> = Vec::new();
     let marge = (0.04 * wo as f64).round() as u32;
@@ -669,22 +661,33 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         entree += 1;
     }
     let polices = etat.cfg.racine.join("modeles").join("polices");
-    fc.push(format!("[{base}]subtitles=f={}:fontsdir={}[v]", ass.to_string_lossy(), polices.to_string_lossy()));
+    fc.push(format!("[{base}]subtitles=f={}:fontsdir={},{BT709}[v]", ass.to_string_lossy(), polices.to_string_lossy()));
 
     // Son.
-    let mut a = vec![];
+    // asetpts : le son suit son propre compte d'échantillons, sans hériter des arrondis de la concaténation.
+    let mut a: Vec<String> = vec!["aresample=48000".into(), "asetpts=N/SR/TB".into()];
+    // afftdn retarde le son d'exactement 1 200 échantillons (mesuré au témoin flash + bip) : on les retire.
+    let compensation = format!(",atrim=start_sample={LATENCE_AFFTDN},asetpts=PTS-STARTPTS,apad=pad_len={LATENCE_AFFTDN}");
     match texte(r, "debruitage").as_str() {
-        "leger" => a.push("afftdn=nr=10:nf=-40:tn=1"),
-        "fort" => a.push("afftdn=nr=22:nf=-35:tn=1"),
+        "leger" => a.push(format!("afftdn=nr=10:nf=-40:tn=1{compensation}")),
+        "fort" => a.push(format!("afftdn=nr=22:nf=-35:tn=1{compensation}")),
         _ => {}
     }
     if vrai(r, "voix") {
-        a.push("highpass=f=80,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=3,acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2");
+        a.push("highpass=f=80,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=3,acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2".into());
     }
     if vrai(r, "deesseur") {
-        a.push("deesser=i=0.4");
+        a.push("deesser=i=0.4".into());
     }
-    fc.push(format!("[0:a]{}[voix]", if a.is_empty() { "anull".to_string() } else { a.join(",") }));
+    // Calage demandé par la personne : positif = son retardé, négatif = son avancé.
+    let calage = nombre(r, "calage_son").round() as i64;
+    if calage > 0 {
+        a.push(format!("adelay=delays={calage}:all=1"));
+    } else if calage < 0 {
+        let n = (-calage) * 48;
+        a.push(format!("atrim=start_sample={n},asetpts=PTS-STARTPTS,apad=pad_len={n}"));
+    }
+    fc.push(format!("[0:a]{}[voix]", a.join(",")));
     let mut melange = vec!["voix".to_string()];
     let musique = texte(r, "musique");
     if let Some(m) = p.medias.iter().find(|m| m.id == musique && nombre(r, "volume_musique") > 0.0) {
@@ -730,7 +733,9 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     args.extend(encodeur(nvenc, if apercu { "assemblage_apercu" } else { "assemblage" }));
     args.extend([
         "-pix_fmt".into(), "yuv420p".into(),
-        "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(),
+        "-r".into(), format!("{IPS}"), "-fps_mode".into(), "cfr".into(),
+        "-colorspace".into(), "bt709".into(), "-color_primaries".into(), "bt709".into(), "-color_trc".into(), "bt709".into(),
+        "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
         "-movflags".into(), "+faststart".into(),
         sortie.to_string_lossy().into(),
     ]);
@@ -745,7 +750,7 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     if analyses.is_empty() {
         bail!("aucun rush analysé");
     }
-    let ps = decoupe::phrases(&analyses);
+    let ps = decoupe::phrases_projet(&p, &analyses);
     let prog = decoupe::programme(&p, &analyses, &ps, apercu);
     if prog.plans.is_empty() {
         bail!("le montage ne garde aucune phrase");
@@ -853,4 +858,75 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
     let nom = format!("{}-{}.mp4", if apercu { "apercu" } else { "rendu" }, chrono::Utc::now().format("%Y%m%d-%H%M%S"));
     assembler(etat, p, prog, &liste, &ass, &sorties.join(&nom), apercu, nvenc).await?;
     Ok(nom)
+}
+
+// ---------------------------------------------------------------- PostProd : image avant / après
+
+/// Une image de la source à cet instant, sans ou avec la PostProd (JPEG), pour comparer sans rendre.
+pub async fn image_postprod(mezz: &Path, t: f64, pp: &crate::postprod::PostProd, avec: bool) -> Result<Vec<u8>> {
+    let d = ffprobe(mezz).await?;
+    let v = d["streams"].as_array().and_then(|s| s.iter().find(|s| s["codec_type"] == "video")).cloned().unwrap_or_default();
+    let (l, h) = (v["width"].as_u64().unwrap_or(1080) as f64, v["height"].as_u64().unwrap_or(1920) as f64);
+    // Petit côté ramené à 720 : assez pour juger la peau et le grain.
+    let k = 720.0 / l.min(h);
+    let (lw, hh) = (((l * k) as u32) / 2 * 2, ((h * k) as u32) / 2 * 2);
+    let chaine = if avec { pp.filtre("i", "o", lw, hh) } else { "[i]null[o]".to_string() };
+    let sortie = Command::new("ffmpeg")
+        .args(["-hide_banner", "-v", "error", "-ss", &format!("{t:.3}"), "-i"])
+        .arg(mezz)
+        .args(["-frames:v", "1", "-filter_complex", &format!("[0:v]scale={lw}:{hh}:flags=lanczos,format=yuv420p[i];{chaine}"),
+               "-map", "[o]", "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "3", "-"])
+        .output()
+        .await?;
+    if !sortie.status.success() || sortie.stdout.is_empty() {
+        bail!("image impossible : {}", String::from_utf8_lossy(&sortie.stderr).trim());
+    }
+    Ok(sortie.stdout)
+}
+
+// ---------------------------------------------------------------- export
+
+/// Préréglages d'export : (clé, libellé).
+pub const PRESETS: &[(&str, &str)] = &[("youtube", "YouTube"), ("leger", "Léger"), ("max", "Qualité maximale")];
+
+/// Version exportée du rendu final : YouTube (débits recommandés), léger (iPhone, messagerie) ou archive.
+pub async fn exporter(etat: &EtatPartage, projet: &str, preset: &str) -> Result<crate::modele::Export> {
+    let p = etat.projet(projet).await?;
+    let rendu = p.rendu.as_ref().ok_or_else(|| anyhow!("lancez d'abord le rendu final"))?;
+    let source = etat.dossier_projet(projet).join("sorties").join(&rendu.fichier);
+    let (l, h) = (rendu.rapport["largeur"].as_u64().unwrap_or(1080) as u32, rendu.rapport["hauteur"].as_u64().unwrap_or(1920) as u32);
+    let duree = rendu.rapport["duree_montage"].as_f64().unwrap_or(0.0);
+    let petit = l.min(h);
+    // Le léger descend à 720 au petit côté ; les autres gardent la définition du rendu.
+    let cible = if preset == "leger" { petit.min(720) } else { petit };
+    let (lo, ho) = if l <= h { (cible, (h as f64 * cible as f64 / l as f64) as u32 / 2 * 2) } else { ((l as f64 * cible as f64 / h as f64) as u32 / 2 * 2, cible) };
+    let quatre_k = petit >= 2160;
+    let video: Vec<String> = match preset {
+        "youtube" => {
+            let (debit, max) = if quatre_k { ("45M", "60M") } else { ("12M", "16M") };
+            vec!["-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-level:v", if quatre_k { "5.1" } else { "4.2" },
+                 "-b:v", debit, "-maxrate", max, "-bufsize", max, "-g", "15", "-bf", "2"].into_iter().map(String::from).collect()
+        }
+        "leger" => vec!["-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-level:v", "4.0",
+                        "-crf", "26", "-maxrate", "3M", "-bufsize", "6M"].into_iter().map(String::from).collect(),
+        _ => vec!["-c:v", "libx264", "-preset", "slow", "-profile:v", "high", "-crf", "15"].into_iter().map(String::from).collect(),
+    };
+    let audio = match preset { "youtube" => "384k", "leger" => "128k", _ => "320k" };
+    let dossier = etat.dossier_projet(projet).join("sorties");
+    let nom = format!("export-{preset}-{}.mp4", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    let mut args: Vec<String> = vec!["-i".into(), source.to_string_lossy().into()];
+    let echelle = if (lo, ho) != (l, h) { format!("scale={lo}:{ho}:flags=lanczos,") } else { String::new() };
+    args.extend(["-vf".into(), format!("{echelle}{BT709}")]);
+    args.extend(video);
+    args.extend([
+        "-pix_fmt", "yuv420p", "-r", "30", "-fps_mode", "cfr",
+        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+        "-c:a", "aac", "-b:a", audio, "-ar", "48000", "-ac", "2", "-movflags", "+faststart",
+    ].map(String::from));
+    args.push(dossier.join(&nom).to_string_lossy().into());
+    let libelle = PRESETS.iter().find(|(k, _)| *k == preset).map(|(_, l)| *l).unwrap_or(preset);
+    ffmpeg(etat, projet, &format!("Export {libelle}"), &args, duree).await?;
+    let taille = tokio::fs::metadata(dossier.join(&nom)).await.map(|m| m.len()).unwrap_or(0);
+    Ok(crate::modele::Export { id: crate::modele::nouvel_id(), preset: preset.into(), fichier: nom, cree: maintenant(), taille,
+                               largeur: lo, hauteur: ho, youtube: None })
 }

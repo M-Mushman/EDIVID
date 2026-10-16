@@ -54,6 +54,12 @@ impl Etat {
             if let Ok(texte) = std::fs::read_to_string(&chemin) {
                 match serde_json::from_str::<Projet>(&texte) {
                     Ok(mut p) => {
+                        // Le filtre de couleur des réglages est passé dans la PostProd (v0.4).
+                        if let Some(f) = p.reglages.get("filtre").and_then(|v| v.as_str()).map(String::from) {
+                            if p.postprod.couleur == "naturel" && f != "naturel" {
+                                p.postprod.couleur = f;
+                            }
+                        }
                         reglages::completer(&mut p.reglages);
                         projets.insert(p.id.clone(), p);
                     }

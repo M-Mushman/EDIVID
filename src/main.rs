@@ -13,9 +13,11 @@ mod google;
 mod llm;
 mod modele;
 mod parametres;
+mod postprod;
 mod reglages;
 mod rendu;
 mod travaux;
+mod youtube;
 
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;

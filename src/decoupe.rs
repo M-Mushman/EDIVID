@@ -82,6 +82,46 @@ pub fn phrases(analyses: &[(String, Arc<Analyse>)]) -> Vec<Phrase> {
     res
 }
 
+/// Phrases du projet, avec les corrections faites à la main.
+pub fn phrases_projet(p: &Projet, analyses: &[(String, Arc<Analyse>)]) -> Vec<Phrase> {
+    let mut ps = phrases(analyses);
+    for ph in ps.iter_mut() {
+        if let Some(texte) = p.corrections.get(&ph.cle) {
+            corriger(ph, texte);
+        }
+    }
+    ps
+}
+
+/// Remplace les mots d'une phrase par le texte corrigé, en gardant le minutage d'origine : un mot
+/// pour un mot si leur nombre est égal, sinon réparti sur la durée de la phrase selon la longueur.
+fn corriger(ph: &mut Phrase, texte: &str) {
+    let nouveaux: Vec<&str> = texte.split_whitespace().collect();
+    if nouveaux.is_empty() || ph.mots.is_empty() {
+        return;
+    }
+    let db = ph.mots.iter().map(|m| m.db).fold(f64::MIN, f64::max);
+    if nouveaux.len() == ph.mots.len() {
+        for (m, n) in ph.mots.iter_mut().zip(&nouveaux) {
+            m.mot = n.to_string();
+        }
+    } else {
+        let (t0, t1) = (ph.mots[0].t0, ph.mots[ph.mots.len() - 1].t1);
+        let total: usize = nouveaux.iter().map(|n| n.chars().count() + 1).sum();
+        let mut t = t0;
+        ph.mots = nouveaux
+            .iter()
+            .map(|n| {
+                let d = (t1 - t0) * (n.chars().count() + 1) as f64 / total as f64;
+                let m = Mot { t0: t, t1: t + d * 0.92, mot: n.to_string(), db };
+                t += d;
+                m
+            })
+            .collect();
+    }
+    ph.texte = texte.trim().to_string();
+}
+
 /// Whisper découpe « c'est » en « c » + « 'est » et « bien-être » en « bien » + « -être ».
 pub fn recoller(mots: &[&str]) -> String {
     let mut s = String::new();
@@ -178,11 +218,14 @@ pub fn dimensions(reglages: &Reglages, premier: Option<&Analyse>, apercu: bool) 
         .to_string(),
         f => f.to_string(),
     };
+    let k = if texte(reglages, "definition") == "2160" { 2 } else { 1 };
     let (l, h) = match format.as_str() {
-        "horizontal" => (1920, 1080),
-        "carre" => (1080, 1080),
-        _ => (1080, 1920),
+        "horizontal" => (1920 * k, 1080 * k),
+        "carre" => (1080 * k, 1080 * k),
+        _ => (1080 * k, 1920 * k),
     };
+    // L'aperçu reste léger, quelle que soit la définition finale.
+    let (l, h) = if apercu && k == 2 { (l / 2, h / 2) } else { (l, h) };
     if apercu {
         (l / 2, h / 2)
     } else {
