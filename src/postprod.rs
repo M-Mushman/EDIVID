@@ -54,6 +54,10 @@ pub const COULEURS: &[(&str, &str, &str)] = &[
     ("chaud", "Chaud", "colortemperature=temperature=5200:mix=0.6,eq=saturation=1.08"),
     ("froid", "Froid", "colortemperature=temperature=8000:mix=0.5"),
     ("cinema", "Cinéma", "eq=contrast=1.1:saturation=0.9,colorbalance=rs=-0.05:bs=0.08:rh=0.08:bh=-0.06"),
+    // Lumineux et doux : noirs à peine relevés, hautes lumières qui ne brûlent pas, tons moyens éclaircis ;
+    // ombres légèrement froides, peau chaude.
+    ("lumiere", "Lumière cinéma", "curves=all='0/0.035 0.25/0.28 0.5/0.56 0.75/0.81 1/0.975',\
+                                   colorbalance=rs=-0.015:bs=0.025:rm=0.02:bm=-0.01:rh=0.03:gh=0.01:bh=-0.02,eq=saturation=0.95"),
     ("film", "Film 35 mm", "curves=r='0/0.05 0.5/0.52 1/0.98':g='0/0.04 0.5/0.5 1/0.96':b='0/0.08 0.5/0.47 1/0.9',eq=saturation=0.95"),
     ("couture_nb", "Noir et blanc couture", "hue=s=0,curves=all='0/0 0.25/0.18 0.75/0.85 1/1',eq=contrast=1.1"),
     ("noir_blanc", "Noir et blanc", "hue=s=0,eq=contrast=1.15"),

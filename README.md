@@ -43,7 +43,15 @@ code d'accès tiré au premier lancement dans `donnees/acces.json`.
 - Connexion avec Google (OAuth, application Web, HTTPS du tailnet par `tailscale serve`) : ouvre la
   session et relie le Drive du compte ; veille par compte, la vidéo montée retourne à son Drive.
 - Synchronisation son/image vérifiée au témoin flash + bip (latence d'afftdn compensée), calage
-  manuel ± 300 ms, encodage final strictement compatible iPhone.
+  manuel ± 300 ms, encodage final strictement compatible iPhone. Chaque plan a une durée exacte en
+  images et en échantillons (sinon la voix dérivait d'environ 110 ms par minute) ; le rapport du rendu
+  donne l'écart son/image du fichier final.
+- Cadrage lissé : un coefficient de saut (rapport de taille du visage à l'écran d'un plan au suivant)
+  est borné sur les coupes franches (réglage « Écart entre deux cadrages ») et rapporté (médiane, p90,
+  max) ; l'agrandissement est plafonné à ×3 de la source, au-delà duquel l'IA invente les traits.
+- Netteté IA : Real-ESRGAN mélangé à 60 % avec l'image d'origine agrandie, pour garder le grain de peau.
+- Rognage du haut de la source (logo CapCut ou TikTok) ; timbre de voix clair, chaud ou naturel ;
+  look « Lumière cinéma ».
 - Export YouTube (débits recommandés), léger (720p) ou qualité maximale ; publication sur YouTube
   (API Data v3, envoi reprenable) avec titre, description à chapitres et mots-clés proposés par le LLM.
 - Transcription modifiable en place et « rechercher et remplacer » ; les sous-titres suivent.

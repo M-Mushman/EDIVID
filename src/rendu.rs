@@ -23,6 +23,11 @@ const BT709: &str = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=
 /// Latence fixe du filtre de réduction du bruit afftdn, en échantillons à 48 kHz.
 const LATENCE_AFFTDN: u32 = 1200;
 const ZOOM_TRANSITION: f64 = 1.4;
+/// 48 000 échantillons par seconde, 30 images par seconde.
+const ECHANTILLONS_PAR_IMAGE: u64 = 1_600;
+/// Part de l'image reconstruite par l'IA, le reste venant de l'image d'origine agrandie : seule, l'IA
+/// donne une peau « peinte » ; mélangée, elle garde le grain naturel (comparé le 2026-10-18).
+const MELANGE_IA: f64 = 0.6;
 
 /// Lance ffmpeg ; la progression (0–100) suit le temps encodé rapporté à `duree`.
 async fn ffmpeg(etat: &EtatPartage, projet: &str, etape: &str, args: &[String], duree: f64) -> Result<()> {
@@ -83,13 +88,14 @@ pub async fn nvenc_disponible() -> bool {
 fn encodeur(nvenc: bool, usage: &str) -> Vec<String> {
     let v: &[&str] = match (nvenc, usage) {
         (true, "plan_apercu") => &["-c:v", "h264_nvenc", "-preset", "p2", "-rc", "vbr", "-cq", "26", "-b:v", "0"],
-        (true, "plan") => &["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "16", "-b:v", "0"],
+        (true, "plan") => &["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "13", "-b:v", "0"],
         (true, "assemblage_apercu") => &["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "24", "-b:v", "0"],
-        (true, _) => &["-c:v", "h264_nvenc", "-preset", "p6", "-rc", "vbr", "-cq", "19", "-b:v", "0", "-profile:v", "high"],
+        (true, _) => &["-c:v", "h264_nvenc", "-preset", "p7", "-tune", "hq", "-rc", "vbr", "-cq", "17", "-b:v", "0",
+                       "-spatial-aq", "1", "-temporal-aq", "1", "-profile:v", "high"],
         (false, "plan_apercu") => &["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"],
-        (false, "plan") => &["-c:v", "libx264", "-preset", "veryfast", "-crf", "14"],
+        (false, "plan") => &["-c:v", "libx264", "-preset", "veryfast", "-crf", "12"],
         (false, "assemblage_apercu") => &["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"],
-        (false, _) => &["-c:v", "libx264", "-preset", "medium", "-crf", "18"],
+        (false, _) => &["-c:v", "libx264", "-preset", "slow", "-crf", "17"],
     };
     v.iter().map(|x| x.to_string()).collect()
 }
@@ -350,6 +356,10 @@ async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, source: (u32, 
                      fichier: &Path, apercu: bool, nvenc: bool) -> Result<()> {
     let zone = zone_entiere(p, source);
     let n = (p.duree * IPS).round().max(1.0) as u32;
+    // Image et son de durée exacte : n images et n × 1 600 échantillons. Avec « -frames:v », ffmpeg coupait
+    // le son au dernier bloc entier : jusqu'à 20 ms perdus par plan, près d'une seconde d'avance de la voix
+    // sur 200 plans (mesuré le 2026-10-18).
+    let echantillons = n as u64 * ECHANTILLONS_PAR_IMAGE;
     let mut args: Vec<String> = Vec::new();
     let vf = match nette {
         Some(f) => {
@@ -364,9 +374,9 @@ async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, source: (u32, 
     let (v, a) = if nette.is_some() { ("0:v", "1:a") } else { ("0:v", "0:a") };
     args.extend([
         "-map".into(), v.into(), "-map".into(), a.into(),
-        "-vf".into(), vf,
-        "-af".into(), format!("aresample=48000,afade=t=in:d=0.01,afade=t=out:st={:.3}:d=0.01", (p.duree - 0.01).max(0.0)),
-        "-frames:v".into(), n.to_string(),
+        "-vf".into(), format!("{vf},tpad=stop_mode=clone:stop_duration=1,trim=end_frame={n},setpts=PTS-STARTPTS"),
+        "-af".into(), format!("aresample=48000,apad=whole_len={echantillons},atrim=end_sample={echantillons},\
+                               afade=t=in:d=0.01,afade=t=out:st={:.3}:d=0.01", (p.duree - 0.01).max(0.0)),
     ]);
     args.extend(encodeur(nvenc, if apercu { "plan_apercu" } else { "plan" }));
     args.extend([
@@ -674,7 +684,17 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         _ => {}
     }
     if vrai(r, "voix") {
-        a.push("highpass=f=80,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=3,acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2".into());
+        a.push(match texte(r, "timbre_voix").as_str() {
+            // Chaud et profond : du corps dans le bas (150 Hz), moins de nasal (400 Hz), une présence douce, des
+            // aigus adoucis, une compression lente qui ne pompe pas.
+            "chaud" => "highpass=f=70,bass=g=3.5:f=150:w=0.7,equalizer=f=420:t=q:w=1.3:g=-2,\
+                        equalizer=f=2800:t=q:w=1.4:g=1.5,treble=g=-3:f=7500:w=0.6,deesser=i=0.3,\
+                        acompressor=threshold=-22dB:ratio=2.5:attack=20:release=250:knee=4:makeup=2.5",
+            "naturel" => "highpass=f=70,acompressor=threshold=-22dB:ratio=2:attack=15:release=200:makeup=1.5",
+            _ => "highpass=f=80,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=3,\
+                  acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2",
+        }
+        .to_string());
     }
     if vrai(r, "deesseur") {
         a.push("deesser=i=0.4".into());
@@ -735,7 +755,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         "-pix_fmt".into(), "yuv420p".into(),
         "-r".into(), format!("{IPS}"), "-fps_mode".into(), "cfr".into(),
         "-colorspace".into(), "bt709".into(), "-color_primaries".into(), "bt709".into(), "-color_trc".into(), "bt709".into(),
-        "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
+        "-c:a".into(), "aac".into(), "-b:a".into(), "256k".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
         "-movflags".into(), "+faststart".into(),
         sortie.to_string_lossy().into(),
     ]);
@@ -773,7 +793,7 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
             let z = zone_entiere(pl, sources[&pl.rush]);
             let f = tmp.join(format!("net{i:04}.mkv"));
             travaux.push(json!({"entree": mezz(&pl.rush), "debut": pl.t0, "duree": pl.duree,
-                                "crop": [z.x, z.y, z.w, z.h], "sortie": f, "visage": visage,
+                                "crop": [z.x, z.y, z.w, z.h], "sortie": f, "visage": visage, "melange": MELANGE_IA,
                                 "largeur_max": largeur_nette(pl, z.w, prog.largeur)}));
             nettes.insert(*i, f);
         }
@@ -811,6 +831,21 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["duree_rendu_s"] = json!(debut.elapsed().as_secs());
     rapport["encodeur"] = json!(if nvenc { "NVENC" } else { "x264" });
     rapport["plans_detail"] = decoupe::plans_json(&prog);
+    // Contrôle : le son et l'image du fichier final ont la même durée ; sinon la voix dérive au fil des plans.
+    if let Ok(d) = ffprobe(&sorties.join(&nom)).await {
+        let duree = |genre: &str| {
+            d["streams"].as_array().into_iter().flatten().find(|s| s["codec_type"] == genre)
+                .and_then(|s| s["duration"].as_str()).and_then(|s| s.parse::<f64>().ok())
+        };
+        if let (Some(v), Some(a)) = (duree("video"), duree("audio")) {
+            let ecart = ((a - v) * 1000.0).round();
+            rapport["ecart_son_image_ms"] = json!(ecart);
+            if ecart.abs() > 40.0 {
+                rapport["avertissements"].as_array_mut().map(|l| l.push(json!(format!(
+                    "le son et l'image n'ont pas la même durée ({ecart} ms) : la voix peut être décalée"))));
+            }
+        }
+    }
     Ok(Sortie { fichier: nom, cree: maintenant(), rapport })
 }
 

@@ -2,6 +2,8 @@
   "looks": [
     {"cle": "beaute_naturelle", "nom": "Beauté naturelle", "description": "Peau lumineuse et lissée en douceur, couleurs fidèles. Le choix sûr pour un visage face caméra.",
      "reglages": {"couleur": "beaute", "lissage": 45, "diffusion": 15, "nettete": 15, "grain": 0, "vignette": 10, "exposition": 4, "contraste": 0, "saturation": 0, "temperature": 5, "bandes": false}},
+    {"cle": "lumiere_cinema", "nom": "Lumière cinéma", "description": "Image lumineuse et douce, peau chaude, halo léger dans les hautes lumières, grain fin : le rendu des films de mode et de beauté.",
+     "reglages": {"couleur": "lumiere", "lissage": 35, "diffusion": 30, "nettete": 12, "grain": 8, "vignette": 8, "exposition": 3, "contraste": 0, "saturation": 0, "temperature": 6, "bandes": false}},
     {"cle": "glow_peau", "nom": "Glow peau", "description": "Teint très adouci et halo lumineux : l'effet « peau parfaite » des vidéos beauté.",
      "reglages": {"couleur": "beaute", "lissage": 65, "diffusion": 40, "nettete": 10, "grain": 4, "vignette": 15, "exposition": 6, "contraste": -5, "saturation": 0, "temperature": 8, "bandes": false}},
     {"cle": "editorial_mode", "nom": "Éditorial mode", "description": "Couleurs retenues, noirs mats, contraste net : l'allure d'un magazine de mode.",

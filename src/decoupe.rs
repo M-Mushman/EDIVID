@@ -18,6 +18,10 @@ const ZOOM_MAX: f64 = 4.5;
 pub const SEUIL_NETTETE: f64 = 1.6;
 const ZOOM_TRANSITION: f64 = 1.4;
 const DUREE_MIN_PLAN: f64 = 0.3;
+/// Agrandissement le plus fort permis (pixels de sortie par pixel de la source). Au-delà, même la
+/// reconstruction IA invente les traits : yeux redessinés, visage changé (mesuré le 2026-10-18 sur une
+/// source de 576 px : propre jusqu'à ×3, yeux abîmés dès ×3,8).
+pub const AGRANDISSEMENT_MAX: f64 = 3.0;
 
 pub fn normaliser(mot: &str) -> String {
     let mut s = String::new();
@@ -165,6 +169,9 @@ pub struct Plan {
     /// Agrandissement au moment le plus serré (sortie / pixels source).
     pub agrandissement: f64,
     pub nettete: bool,
+    /// Largeur du visage à l'écran (part de la largeur de l'image) au début et à la fin du plan ; 0 sans visage.
+    pub visage_debut: f64,
+    pub visage_fin: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -322,11 +329,11 @@ fn visage_median(a: &Analyse, t0: f64, t1: f64, yeux: bool) -> Option<[f64; 4]> 
     Some(res)
 }
 
-/// Cadre de sortie dans la source, centré sur (cx, cy) et borné à l'image.
-fn cadre_dans(source: (f64, f64), base: (f64, f64), z: f64, cx: f64, cy: f64) -> Rect {
+/// Cadre de sortie dans la partie utile de la source (sous la bande rognée en haut), centré sur (cx, cy).
+fn cadre_dans(source: (f64, f64), haut: f64, base: (f64, f64), z: f64, cx: f64, cy: f64) -> Rect {
     let (w, h) = (base.0 / z, base.1 / z);
     let x = (cx - w / 2.0).clamp(0.0, (source.0 - w).max(0.0));
-    let y = (cy - h / 2.0).clamp(0.0, (source.1 - h).max(0.0));
+    let y = (cy - h / 2.0).clamp(haut, (source.1 - h).max(haut));
     Rect { x, y, w, h }
 }
 
@@ -335,14 +342,20 @@ struct Cadrage {
     z_fin: f64,
     centre_serre: (f64, f64),
     agrandissement: f64,
+    visage_debut: f64,
+    visage_fin: f64,
 }
 
+/// `rognage` : part de la hauteur retirée en haut de la source (logo, filigrane).
+/// `borne` : tailles du visage à l'écran permises au début du plan (écart avec le plan précédent).
 #[allow(clippy::too_many_arguments)]
 fn cadrer(a: &Analyse, t0: f64, t1: f64, cadre: &str, z_mul_fin: f64, z_mul: f64, zooms: &str,
-          sortie: (u32, u32), z_transition: f64) -> Cadrage {
+          sortie: (u32, u32), z_transition: f64, rognage: f64, borne: Option<(f64, f64)>) -> Cadrage {
     let source = (a.largeur as f64, a.hauteur as f64);
+    let haut = (source.1 * rognage.clamp(0.0, 0.3)).round();
+    let utile = (source.0, source.1 - haut);
     let aspect = sortie.0 as f64 / sortie.1 as f64;
-    let base = if source.0 / source.1 > aspect { (source.1 * aspect, source.1) } else { (source.0, source.0 / aspect) };
+    let base = if utile.0 / utile.1 > aspect { (utile.1 * aspect, utile.1) } else { (utile.0, utile.0 / aspect) };
     let intensite = match zooms {
         "doux" => 0.8,
         "fort" => 1.2,
@@ -359,8 +372,17 @@ fn cadrer(a: &Analyse, t0: f64, t1: f64, cadre: &str, z_mul_fin: f64, z_mul: f64
         "yeux" => (0.46, 0.47),
         _ => (0.0, 0.5),
     };
-    let mut z = if cible > 0.0 && fw > 0.0 { (cible * intensite / (fw / base.0)).clamp(1.0, ZOOM_MAX) } else { 1.0 };
-    z = (z * z_mul).min(ZOOM_MAX);
+    // Plafond : le zoom maximal, et l'agrandissement que la source supporte sans perdre en qualité.
+    let plafond = ZOOM_MAX.min(AGRANDISSEMENT_MAX * base.0 / sortie.0 as f64).max(1.0);
+    let part = if fw > 0.0 { fw / base.0 } else { 0.0 };
+    let mut z = if cible > 0.0 && part > 0.0 { (cible * intensite / part).clamp(1.0, plafond) } else { 1.0 };
+    z = (z * z_mul).min(plafond);
+    // Écart avec le plan précédent : la taille du visage à l'écran reste dans la borne.
+    if let (Some((bas, haut_borne)), true) = (borne, part > 0.0) {
+        let mini = (bas / part).clamp(1.0, plafond);
+        let maxi = (haut_borne / part).clamp(mini, plafond);
+        z = z.clamp(mini, maxi);
+    }
     let (mut cx, mut cy) = (fx, fy);
     if cadre == "yeux" {
         if let Some(b) = visage_median(a, t0, t1, true) {
@@ -374,15 +396,16 @@ fn cadrer(a: &Analyse, t0: f64, t1: f64, cadre: &str, z_mul_fin: f64, z_mul: f64
         // Plan large : le visage reste au tiers supérieur si la source dépasse le cadre.
         cy = fy + 0.15 * base.1;
     }
-    let zone = cadre_dans(source, base, z, cx, cy);
-    let z_fin_abs = (z * z_mul_fin).min(ZOOM_MAX);
+    let zone = cadre_dans(source, haut, base, z, cx, cy);
+    let z_fin_abs = (z * z_mul_fin).min(plafond.max(z));
     let z_max_abs = (z_fin_abs * z_transition).min(ZOOM_MAX * ZOOM_TRANSITION);
-    let serre = cadre_dans(source, base, z_max_abs, cx, cy);
+    let serre = cadre_dans(source, haut, base, z_max_abs, cx, cy);
     let centre_serre = (
         ((serre.x + serre.w / 2.0 - zone.x) / zone.w).clamp(0.0, 1.0),
         ((serre.y + serre.h / 2.0 - zone.y) / zone.h).clamp(0.0, 1.0),
     );
-    Cadrage { zone, z_fin: z_fin_abs / z, centre_serre, agrandissement: sortie.0 as f64 / serre.w }
+    Cadrage { zone, z_fin: z_fin_abs / z, centre_serre, agrandissement: sortie.0 as f64 / serre.w,
+              visage_debut: z * part, visage_fin: z_fin_abs * part }
 }
 
 struct Entree<'a> {
@@ -403,6 +426,11 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
     let zooms = texte(r, "zooms");
     let style = texte(r, "transition");
     let nettete = texte(r, "nettete_ia");
+    let rognage = nombre(r, "rognage_haut") / 100.0;
+    // Coefficient de saut permis entre deux plans qui se suivent en coupe franche (1,30 = visage 30 % plus
+    // grand ou plus petit) ; 100 % : pas de lissage.
+    let ecart_max = 1.0 + nombre(r, "ecart_cadrage") / 100.0;
+    let mut visage_prec: Option<f64> = None;
     let rythme_max = match texte(r, "rythme").as_str() {
         "ample" => 0.55,
         "nerveux" => 0.18,
@@ -583,7 +611,13 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
             };
             let trans = if k == 0 { transition.clone() } else { None };
             let z_trans = if trans.as_deref() == Some("zoom") { ZOOM_TRANSITION } else { 1.0 };
-            let c = cadrer(a, t0, t0 + duree, &d.cadre, z_mul_fin, z_mul, &zooms, (largeur, hauteur), z_trans);
+            // Une transition (fondu, flash…) marque le changement : le cadrage peut alors sauter librement.
+            let borne = match visage_prec {
+                Some(v) if trans.is_none() && ecart_max < 1.999 => Some((v / ecart_max, v * ecart_max)),
+                _ => None,
+            };
+            let c = cadrer(a, t0, t0 + duree, &d.cadre, z_mul_fin, z_mul, &zooms, (largeur, hauteur), z_trans, rognage, borne);
+            visage_prec = (c.visage_fin > 0.0).then_some(c.visage_fin);
             if k == 0 {
                 if let Some(t) = &trans {
                     transitions.push(sortie_t);
@@ -629,6 +663,8 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
                 sortie: None,
                 agrandissement: c.agrandissement,
                 nettete: veut_nettete && c.agrandissement > SEUIL_NETTETE,
+                visage_debut: c.visage_debut,
+                visage_fin: c.visage_fin,
             });
             sortie_t += duree;
         }
@@ -699,6 +735,33 @@ fn arr(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
 }
 
+fn arr3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
+}
+
+/// Coefficient de saut de cadrage : à chaque coupe franche, rapport entre la taille du visage à l'écran
+/// avant et après la coupe (1,00 = même cadrage ; 1,50 = visage moitié plus grand ou plus petit).
+pub fn sauts_cadrage(prog: &Programme) -> Value {
+    let mut sauts: Vec<f64> = prog
+        .plans
+        .windows(2)
+        .filter(|p| p[1].transition.is_none() && p[0].visage_fin > 0.0 && p[1].visage_debut > 0.0)
+        .map(|p| p[0].visage_fin.max(p[1].visage_debut) / p[0].visage_fin.min(p[1].visage_debut))
+        .collect();
+    if sauts.is_empty() {
+        return json!({"coupes": 0});
+    }
+    sauts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let q = |f: f64| arr(sauts[((sauts.len() - 1) as f64 * f).round() as usize]);
+    json!({
+        "coupes": sauts.len(),
+        "median": q(0.5),
+        "p90": q(0.9),
+        "max": q(1.0),
+        "au_dela_de_1_5": sauts.iter().filter(|s| **s > 1.5).count(),
+    })
+}
+
 /// Plans, avec leur place dans le montage (t, d) et dans le rush d'origine (src).
 pub fn plans_json(prog: &Programme) -> Value {
     json!(prog
@@ -706,7 +769,8 @@ pub fn plans_json(prog: &Programme) -> Value {
         .iter()
         .map(|pl| json!({"t": arr(pl.sortie_t0), "d": arr(pl.duree), "src": arr(pl.t0), "rush": pl.rush,
                          "phrase": pl.phrase, "regime": pl.regime, "cadre": pl.cadre, "accroche": pl.accroche,
-                         "transition": pl.transition}))
+                         "transition": pl.transition, "visage": [arr3(pl.visage_debut), arr3(pl.visage_fin)],
+                         "agrandissement": arr(pl.agrandissement)}))
         .collect::<Vec<_>>())
 }
 
@@ -721,6 +785,7 @@ pub fn programme_json(prog: &Programme) -> Value {
         "incrustations": prog.incrustations.iter().map(|i| json!({"id": i.id, "debut": arr(i.debut), "fin": arr(i.fin)}))
             .collect::<Vec<_>>(),
         "avertissements": prog.avertissements,
+        "sauts_cadrage": sauts_cadrage(prog),
     })
 }
 
@@ -743,6 +808,8 @@ pub fn rapport(prog: &Programme, duree_source: f64) -> Value {
         "zooms_animes": prog.plans.iter().filter(|p| p.z_fin > 1.0 + 1e-6).count(),
         "transitions": prog.transitions.len(),
         "plans_nettete_ia": prog.plans.iter().filter(|p| p.nettete).count(),
+        "agrandissement_max": arr(prog.plans.iter().map(|p| p.agrandissement).fold(0.0, f64::max)),
+        "sauts_cadrage": sauts_cadrage(prog),
         "incrustations": prog.incrustations.len(),
         "avertissements": prog.avertissements,
     })

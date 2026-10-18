@@ -3,7 +3,8 @@
 Usage : python nettete.py <travaux.json>
 
 <travaux.json> : liste de {"entree", "debut", "duree", "crop": [x, y, w, h], "sortie", "visage": bool,
-"largeur_max"}. L'image agrandie est ramenée à "largeur_max" si elle la dépasse : inutile d'écrire plus de
+"largeur_max", "melange"}. "melange" (0–1, 1 par défaut) : part de l'image reconstruite, le reste venant de
+l'image d'origine agrandie, pour garder le grain naturel de la peau. L'image agrandie est ramenée à "largeur_max" si elle la dépasse : inutile d'écrire plus de
 pixels que le plan n'en montrera.
 Chaque travail produit <sortie> : la zone recadrée, agrandie ×4 (Real-ESRGAN realesr-general-x4v3),
 visage restauré par GFPGAN 1.4 si "visage" est vrai. Sans son : le rendu reprend le son du rush.
@@ -100,6 +101,7 @@ def traiter(travail: dict, agrandisseur, restaurateur, avance) -> None:
          "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p", travail["sortie"]],
         stdin=subprocess.PIPE)
     taille = w * h * 3
+    melange = min(1.0, max(0.0, float(travail.get("melange", 1.0))))
     total = max(1, round(travail["duree"] * IPS))
     faites = 0
     while True:
@@ -112,9 +114,13 @@ def traiter(travail: dict, agrandisseur, restaurateur, avance) -> None:
         if not lot:
             break
         with torch.inference_mode():
-            t = agrandisseur(en_tenseur(np.stack(lot), agrandisseur.supports_half))
+            entree = en_tenseur(np.stack(lot), agrandisseur.supports_half)
+            t = agrandisseur(entree)
             if t.shape[-1] != W or t.shape[-2] != H:
                 t = F.interpolate(t.float(), size=(H, W), mode="bicubic", antialias=True)
+            if melange < 1.0:
+                simple = F.interpolate(entree.float(), size=(H, W), mode="bicubic", align_corners=False)
+                t = t.float() * melange + simple * (1.0 - melange)
             grandes = en_images(t)
         for image in grandes:
             if restaurateur:

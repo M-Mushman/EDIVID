@@ -97,6 +97,14 @@ pub const CATALOGUE: &[Reglage] = &[
     },
     Reglage {
         section: "Zooms",
+        cle: "ecart_cadrage",
+        titre: "Écart entre deux cadrages",
+        aide: "De combien la taille du visage peut changer d'un plan au suivant, sur une coupe franche. Petit : les cadrages s'enchaînent en douceur et l'image ne « saute » pas ; 100 % : aucun lissage. Les transitions restent libres.",
+        genre: Genre::Curseur { min: 10.0, max: 100.0, unite: "%" },
+        defaut: || json!(35),
+    },
+    Reglage {
+        section: "Zooms",
         cle: "punch_jumpcut",
         titre: "Recadrer à chaque coupe",
         aide: "Quand une phrase est coupée en deux, le cadre se resserre un peu : la coupe passe pour un effet voulu.",
@@ -181,6 +189,14 @@ pub const CATALOGUE: &[Reglage] = &[
     },
     Reglage {
         section: "Image",
+        cle: "rognage_haut",
+        titre: "Rogner le haut de la source",
+        aide: "Retire une bande en haut de l'image d'origine sur tous les plans : un logo (CapCut, TikTok) ou un bord abîmé disparaît.",
+        genre: Genre::Curseur { min: 0.0, max: 20.0, unite: "%" },
+        defaut: || json!(0),
+    },
+    Reglage {
+        section: "Image",
         cle: "format",
         titre: "Format",
         aide: "Vertical pour Shorts et Reels, horizontal pour YouTube. Le cadre suit le visage si le format change.",
@@ -215,6 +231,14 @@ pub const CATALOGUE: &[Reglage] = &[
         aide: "Coupe les graves parasites, éclaircit la voix et lisse les écarts de volume.",
         genre: Genre::Interrupteur,
         defaut: || json!(true),
+    },
+    Reglage {
+        section: "Son",
+        cle: "timbre_voix",
+        titre: "Timbre de la voix",
+        aide: "Avec « Voix plus présente ». Clair : voix en avant, aigus soulignés. Chaud : plus de corps et de profondeur, aigus adoucis. Naturel : seulement lissée.",
+        genre: Genre::Choix(&[("clair", "Clair et présent"), ("chaud", "Chaud et profond"), ("naturel", "Naturel")]),
+        defaut: || json!("clair"),
     },
     Reglage {
         section: "Son",
@@ -275,7 +299,8 @@ pub fn valider(cle: &str, valeur: &Value) -> Result<Value, String> {
             .ok_or_else(|| format!("« {} » attend oui ou non", r.titre)),
         Genre::Curseur { min, max, .. } => valeur
             .as_f64()
-            .map(|v| json!(v.clamp(*min, *max).round()))
+            // Entier : 30 et 30.0 seraient deux valeurs différentes pour la comparaison des réglages.
+            .map(|v| json!(v.clamp(*min, *max).round() as i64))
             .ok_or_else(|| format!("« {} » attend un nombre", r.titre)),
         Genre::MediaSon => Ok(json!(valeur.as_str().unwrap_or_default())),
     }
