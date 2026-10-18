@@ -973,9 +973,35 @@ async fn essai_courriel(State(etat): State<EtatPartage>) -> Reponse {
 }
 
 async fn verifier_drive(State(etat): State<EtatPartage>) -> Reponse {
-    let d = etat.parametres.read().await.drive.clone();
-    let message = drive::verifier(&d).await?;
-    Ok(Json(json!({"message": message})))
+    let p = etat.parametres.read().await.clone();
+    // Le Drive de chaque compte relié, et le Drive réglé à la main (rclone config) s'il sert encore.
+    let mut drives: Vec<(String, parametres::Drive)> = p
+        .comptes
+        .iter()
+        .filter(|c| !c.distant.is_empty())
+        .map(|c| (c.email.clone(), parametres::Drive { distant: c.distant.clone(), ..p.drive.clone() }))
+        .collect();
+    if p.drive.actif && !drives.iter().any(|(_, d)| d.distant == p.drive.distant) {
+        drives.push((p.drive.distant.clone(), p.drive.clone()));
+    }
+    if drives.is_empty() {
+        return Err(refus("aucun Drive relié : reliez d'abord un compte Google (carte « Connexion avec Google »)"));
+    }
+    let mut lignes = Vec::new();
+    let mut echec = false;
+    for (qui, d) in drives {
+        match drive::verifier(&d).await {
+            Ok(m) => lignes.push(format!("{qui} : {m}")),
+            Err(e) => {
+                echec = true;
+                lignes.push(format!("{qui} : {e:#}"));
+            }
+        }
+    }
+    if echec {
+        return Err(refus(lignes.join(" — ")));
+    }
+    Ok(Json(json!({"message": lignes.join(" — ")})))
 }
 
 async fn passage_drive(State(etat): State<EtatPartage>) -> Reponse {

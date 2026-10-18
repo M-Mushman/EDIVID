@@ -93,7 +93,7 @@ pub async fn verifier(d: &Drive) -> Result<String> {
     if d.distant.ends_with(':') {
         let distants = rclone_cmd(&["listremotes"]).await?;
         if !distants.lines().any(|l| l.trim() == d.distant) {
-            bail!("le compte « {} » n'est pas encore relié : lancez « rclone config » sur azoth (voir l'aide)", d.distant);
+            bail!("le Drive « {} » n'est pas relié : reliez à nouveau le compte Google dans Paramètres", d.distant);
         }
     }
     for dossier in [&d.entree, &d.sortie] {

@@ -1881,6 +1881,8 @@ async function afficherParametres() {
   const port = entree(c, 'port', { type: 'number', min: '1', max: '65535' });
   dessinerSecurite();
   const etatDrive = P.etat_drive?.etat || {};
+  const drivesRelies = (P.comptes || []).filter((x) => x.distant);
+  const veilles = drivesRelies.filter((x) => x.veille).length + (d.actif ? 1 : 0);
   const intervalle = h('select', { class: 'champ' }, [[60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([v, l]) =>
     h('option', { value: v, selected: d.intervalle_s === v }, l)));
   intervalle.addEventListener('change', () => { d.intervalle_s = Number(intervalle.value); });
@@ -1924,15 +1926,11 @@ async function afficherParametres() {
       h('h2', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, icone('nuage'), 'Google Drive : monter depuis l’iPhone'),
       h('p', { class: 'petit muet' }, 'Déposez une vidéo dans un dossier du Drive depuis l’iPhone : EDIVID la récupère, la monte, la rend, dépose la vidéo finale dans un autre dossier et vous prévient.'),
       h('div', { class: 'guide-liste' },
-        [['Relier le compte Google (une seule fois)', h('div', {},
-          h('span', { class: 'petit muet' }, 'Dans un terminal sur azoth, lancez la commande ci-dessous, choisissez « n » (nouveau), nommez-le « gdrive », type « drive », laissez les identifiants vides, accès « 1 » (complet), puis acceptez l’ouverture du navigateur pour autoriser.'),
-          blocCommande(P.etat_drive?.rclone ? '~/.local/bin/rclone config' : 'curl https://rclone.org/install.sh | sudo bash'))],
-        ['Préparer les dossiers', h('span', { class: 'petit muet' }, 'Cliquez « Vérifier la liaison » : EDIVID crée « ' + d.entree + ' » et « ' + d.sortie + ' » sur votre Drive.')],
+        [['Relier son compte Google', h('span', { class: 'petit muet' }, 'Dans la carte « Connexion avec Google » ci-dessus, une fois par compte : EDIVID crée « ' + d.entree + ' » et « ' + d.sortie + ' » sur son Drive et le surveille (interrupteur « Veille » à côté du compte).')],
         ['Envoyer depuis l’iPhone', h('span', { class: 'petit muet' }, 'App Google Drive → dossier « ' + d.entree + ' » → « + » → Importer → choisissez la vidéo. Un sous-dossier avec plusieurs vidéos donne un seul projet aux rushs multiples. Vérifiez sur le premier envoi que la définition est bien celle de l’iPhone (EDIVID l’affiche dans la carte du rush).')],
         ['Récupérer la vidéo finale', h('span', { class: 'petit muet' }, 'Elle arrive dans « ' + d.sortie + ' », et un courriel vous prévient si vous l’avez activé.')],
         ].map(([t, x], i) => h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, t), x)))),
-      ligneInterrupteur('Surveiller le dossier d’entrée', 'EDIVID y regarde régulièrement et prend les vidéos dont l’envoi est terminé.', d.actif, (v) => { d.actif = v; }),
-      champ('Compte rclone', entree(d, 'distant', { placeholder: 'gdrive:' }), 'Le nom donné pendant « rclone config », suivi de deux-points.'),
+      h('p', { class: 'petit muet', style: { margin: '16px 0 0' } }, 'Réglages communs à tous les Drive reliés :'),
       champ('Dossier d’entrée', entree(d, 'entree')),
       champ('Dossier de sortie', entree(d, 'sortie')),
       champ('Fréquence', intervalle),
@@ -1940,11 +1938,12 @@ async function afficherParametres() {
       ligneInterrupteur('Déposer la vidéo finale sur le Drive', null, d.deposer, (v) => { d.deposer = v; }),
       champ('Réglages des projets venus du Drive', modele, 'Choisissez un projet dont vous aimez le montage : ses réglages et ses consignes seront repris.'),
       h('div', { class: 'aide', style: { marginTop: '12px', background: etatDrive.erreur ? 'var(--erreur-doux)' : 'var(--accent-doux)' } }, icone(etatDrive.erreur ? 'alerte' : 'info'),
-        h('span', {}, !P.etat_drive?.rclone ? 'rclone n’est pas installé sur azoth.'
-          : etatDrive.en_cours ? etatDrive.en_cours
-            : etatDrive.erreur ? `${etatDrive.message} : ${etatDrive.erreur}`
-              : etatDrive.dernier_passage ? `Dernier passage : ${new Date(etatDrive.dernier_passage).toLocaleTimeString('fr-FR')} — ${etatDrive.message}`
-                : d.actif ? 'Premier passage en attente.' : 'Veille désactivée.')),
+        !P.etat_drive?.rclone ? h('div', {}, h('span', {}, 'rclone n’est pas installé sur azoth. Dans un terminal sur azoth :'), blocCommande('curl https://rclone.org/install.sh | sudo bash'))
+          : h('span', {}, !drivesRelies.length && !d.actif ? 'Aucun Drive relié : reliez un compte Google dans la carte ci-dessus.'
+            : etatDrive.en_cours ? etatDrive.en_cours
+              : etatDrive.erreur ? `${etatDrive.message} : ${etatDrive.erreur}`
+                : etatDrive.dernier_passage ? `Dernier passage : ${new Date(etatDrive.dernier_passage).toLocaleTimeString('fr-FR')} — ${etatDrive.message}`
+                  : veilles ? 'Premier passage en attente.' : 'Veille désactivée (interrupteur « Veille » à côté du compte).')),
       h('div', { style: { display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' } },
         h('button', { class: 'btn primaire', onclick: () => enregistrer() }, 'Enregistrer'),
         h('button', { class: 'btn', onclick: async () => {
@@ -2008,14 +2007,18 @@ function sectionGoogle(P) {
     h('details', { style: { marginTop: '14px' }, open: !g.configure },
       h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, 'Mise en place (une seule fois)'),
       h('div', { class: 'guide-liste' },
-        [['Ouvrir EDIVID en HTTPS sur le tailnet', h('div', {},
-          h('span', { class: 'petit muet' }, 'Google n’accepte qu’une adresse en HTTPS. Dans la console Tailscale (DNS), activez « HTTPS Certificates », puis sur azoth :'),
-          blocCommande('sudo tailscale serve --bg 8030'),
-          h('span', { class: 'petit muet' }, 'EDIVID est alors aussi joignable à https://azoth.tailaae476.ts.net. Mettez cette adresse dans « Lien des courriels » plus bas.'),
-          !https ? h('div', { class: 'tres-petit', style: { color: 'var(--alerte)', marginTop: '4px' } }, `Adresse actuelle : ${P.url_publique} — elle doit commencer par https://`) : null)],
-        ['Créer l’application chez Google', h('span', { class: 'petit muet' },
-          'console.cloud.google.com → nouveau projet « EDIVID » → API et services : activez « Google Drive API ». Écran de consentement OAuth : type Externe, nom EDIVID, champs d’application « …/auth/drive », openid, email, profile ; ajoutez en utilisateurs test les comptes qui se connecteront. Une fois l’essai réussi, passez l’application « En production » : sinon Google coupe la liaison du Drive au bout de 7 jours (un avertissement « application non validée » s’affichera, il suffit de continuer).')],
-        ['Créer l’identifiant', h('div', {}, h('span', { class: 'petit muet' }, 'Identifiants → Créer → ID client OAuth → « Application Web ». URI de redirection autorisé :'), blocCommande(retour))],
+        [['Adresse en HTTPS', https
+          ? h('span', { class: 'petit muet' }, `Déjà en place : ${P.url_publique}.`)
+          : h('div', {},
+            h('span', { class: 'petit muet' }, 'Google n’accepte qu’une adresse en HTTPS. Dans la console Tailscale (DNS), activez « HTTPS Certificates », puis sur azoth :'),
+            blocCommande('sudo tailscale serve --bg 8030'),
+            h('span', { class: 'petit muet' }, 'Mettez ensuite l’adresse https://… dans « Lien des courriels » plus bas.'),
+            h('div', { class: 'tres-petit', style: { color: 'var(--alerte)', marginTop: '4px' } }, `Adresse actuelle : ${P.url_publique} — elle doit commencer par https://`))],
+        ['Créer le projet et activer les API', h('span', { class: 'petit muet' },
+          'Sur console.cloud.google.com, avec le compte Google qui gérera l’application : nouveau projet « EDIVID ». Puis API et services → Bibliothèque : activez « Google Drive API » et « YouTube Data API v3 ».')],
+        ['Écran de consentement', h('span', { class: 'petit muet' },
+          'Google Auth Platform (anciennement « Écran de consentement OAuth ») : type Externe, nom EDIVID, votre adresse de contact. Accès aux données : ajoutez les champs d’application …/auth/drive, …/auth/youtube.upload, openid, email et profile. Audience : ajoutez en utilisateurs test chaque compte Google qui se reliera.')],
+        ['Créer l’identifiant', h('div', {}, h('span', { class: 'petit muet' }, 'Clients → Créer un client → type « Application Web ». URI de redirection autorisé :'), blocCommande(retour))],
         ['Coller l’identifiant ici', h('div', {},
           champ('ID client', entreeG('client_id', { placeholder: '…apps.googleusercontent.com' })),
           champ('Code secret du client', entreeG('client_secret', { type: 'password', autocomplete: 'new-password', placeholder: g.secret_defini ? '•••••••• (enregistré — laissez vide pour le garder)' : '' })),
@@ -2023,6 +2026,10 @@ function sectionGoogle(P) {
             try { await api('POST', '/api/parametres', { google: { client_id: g.client_id, client_secret: g.client_secret } }); toast('Identifiant Google enregistré.', 'ok'); afficherParametres(); }
             catch (e) { toast(e.message, 'erreur'); }
           } }, 'Enregistrer'))],
+        ['Relier, puis passer en production', h('span', { class: 'petit muet' },
+          'Cliquez « Autoriser et relier un compte Google » (plus haut) pour chaque compte, et acceptez Drive et YouTube. Une fois l’essai réussi, dans Audience, publiez l’application (« En production ») : sinon Google coupe la liaison au bout de 7 jours. Google affichera « application non validée » : il suffit de continuer.')],
+        ['Lever le verrou YouTube', h('span', { class: 'petit muet' },
+          'Tant que l’application n’a pas passé l’audit de l’API YouTube, Google garde en privé les vidéos envoyées par EDIVID. La demande se fait par le formulaire « YouTube API Services – Audit and Quota Extension ». Rien n’assure qu’une vidéo déjà verrouillée soit libérée ensuite : en attendant, téléchargez l’export YouTube et envoyez-le à la main depuis YouTube Studio.')],
         ].map(([t, x], i) => h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, t), x))))));
 }
 
@@ -2260,7 +2267,7 @@ function dialogueYoutube(x, P) {
         champ('Titre', champTexte('titre', { maxlength: '100' })),
         champ('Description', champTexte('description', { rows: '6' }, true), 'Les chapitres horodatés, s’il y en a, rendent la vidéo plus facile à parcourir.'),
         champ('Mots-clés', champTexte('mots_cles', { placeholder: 'séparés par des virgules' })),
-        champ('Visibilité', visibilite, 'Commencez en « Privée » pour vérifier, puis publiez depuis YouTube Studio.'),
+        champ('Visibilité', visibilite, 'Commencez en « Privée » pour vérifier, puis passez-la en publique depuis YouTube Studio (une fois l’audit passé, voir ci-dessous).'),
         champ('Catégorie', categorie),
         h('div', { class: 'aide', style: { marginTop: '12px' } }, icone('info'),
           h('span', {}, 'Tant que votre application Google n’a pas passé l’audit de l’API YouTube, Google garde en privé les vidéos envoyées par EDIVID. La demande d’audit se fait dans la console Google Cloud.')),
