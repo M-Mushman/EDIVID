@@ -1,0 +1,15 @@
+<!-- Patron « dialogue » : <dialog> natif (focus piégé, Échap ferme : R-09). Ouvrir : dialog.showModal(). -->
+<div class="kd-stack">
+  <p class="kd-eyebrow">Patron · dialogue</p>
+  <button class="kd-btn kd-btn--outline" type="button" onclick="this.nextElementSibling.showModal()">Ouvrir le dialogue</button>
+  <dialog class="kd-dialog" aria-labelledby="kd-dlg-title">
+    <form class="kd-dialog__body" method="dialog">
+      <h2 class="kd-dialog__title" id="kd-dlg-title">Supprimer ce projet ?</h2>
+      <p class="kd-muted">Les 12 notes et les 3 sources seront effacées. Cette action est définitive.</p>
+      <div class="kd-actions">
+        <button class="kd-btn kd-btn--ghost" value="cancel">Annuler</button>
+        <button class="kd-btn kd-btn--danger" value="confirm">Supprimer</button>
+      </div>
+    </form>
+  </dialog>
+</div>

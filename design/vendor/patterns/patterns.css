@@ -1,0 +1,278 @@
+/* Patrons du contrat de design KARAYAN — classes kd-*, uniquement des variables du contrat.
+   Chargé APRÈS brands/<marque>.css. Copiable tel quel dans un template Jinja ou une webview. */
+
+/* 1.1.1 : sans ces deux remises à zéro, un champ ou un bouton à width:100% débordait de sa
+   carte (padding ajouté à la largeur) et le navigateur laissait 8 px de marge autour de la
+   page — constaté sur karayan.tech /compte/ et /oauth/authorize, 2026-09-24. */
+.kd-page, .kd-page *, .kd-page *::before, .kd-page *::after { box-sizing: border-box; }
+body.kd-page { margin: 0; }
+
+.kd-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body), sans-serif;
+  font-size: var(--text-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.kd-container {
+  width: 100%;
+  max-width: var(--content-default);
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+.kd-container--wide { max-width: var(--content-wide); }
+.kd-container--narrow { max-width: var(--content-narrow); }
+.kd-main { flex: 1; padding-block: var(--space-10); }
+.kd-stack > * + * { margin-top: var(--space-4); }
+
+/* Typographie */
+.kd-display {
+  font-family: var(--font-display), serif;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.kd-h1 { font-size: var(--text-2xl); }
+.kd-h2 { font-size: var(--text-xl); }
+.kd-h3 { font-size: var(--text-lg); }
+.kd-eyebrow {
+  font-family: var(--font-mono, var(--font-body)), monospace;
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.kd-muted { color: var(--muted-foreground); }
+.kd-small { font-size: var(--text-sm); }
+
+/* En-tête */
+.kd-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--background) 85%, transparent);
+  backdrop-filter: blur(12px);
+}
+.kd-header__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  min-height: 3.5rem;
+}
+.kd-header__brand {
+  font-family: var(--font-display), serif;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--foreground);
+  text-decoration: none;
+}
+.kd-nav { display: flex; gap: var(--space-1); margin-inline-start: auto; }
+.kd-nav a {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--muted-foreground);
+  text-decoration: none;
+  font-size: var(--text-sm);
+  transition: color var(--transition-interactive), background var(--transition-interactive);
+}
+.kd-nav a:hover { color: var(--foreground); background: var(--muted); }
+.kd-nav a[aria-current="page"] { color: var(--foreground); font-weight: 600; }
+
+/* Pied */
+.kd-footer {
+  border-top: 1px solid var(--border);
+  padding-block: var(--space-8);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+
+/* Boutons */
+.kd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 2.5rem;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: filter var(--transition-interactive), background var(--transition-interactive);
+}
+.kd-btn:hover { filter: brightness(1.08); }
+.kd-btn:disabled, .kd-btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; filter: none; }
+.kd-btn--outline { background: transparent; color: var(--foreground); border-color: var(--border); }
+.kd-btn--outline:hover { background: var(--muted); filter: none; }
+.kd-btn--ghost { background: transparent; color: var(--muted-foreground); }
+.kd-btn--ghost:hover { color: var(--foreground); background: var(--muted); filter: none; }
+.kd-btn--danger { background: var(--destructive, var(--accent)); color: var(--accent-foreground); }
+
+/* Séparateur « ou » entre deux moyens d'action (ex. connexion fédérée / formulaire). */
+.kd-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-block: var(--space-2);
+}
+.kd-divider::before, .kd-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* R-09 : focus visible partout, avec le token ring */
+.kd-page :is(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Formulaire */
+.kd-form { display: grid; gap: var(--space-5); }
+.kd-field { display: grid; gap: var(--space-2); }
+.kd-label { font-size: var(--text-sm); font-weight: 600; }
+.kd-label .kd-optional { font-weight: 400; color: var(--muted-foreground); }
+.kd-input, .kd-select, .kd-textarea {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--text-sm);
+  transition: border-color var(--transition-interactive);
+}
+.kd-textarea { min-height: 6rem; resize: vertical; }
+.kd-input::placeholder, .kd-textarea::placeholder { color: var(--muted-foreground); }
+.kd-input:hover, .kd-select:hover, .kd-textarea:hover { border-color: var(--muted-foreground); }
+.kd-help { font-size: var(--text-xs); color: var(--muted-foreground); }
+.kd-error { font-size: var(--text-xs); color: var(--destructive, var(--accent)); }
+.kd-input[aria-invalid="true"], .kd-textarea[aria-invalid="true"] { border-color: var(--destructive, var(--accent)); }
+.kd-actions { display: flex; gap: var(--space-3); justify-content: flex-end; flex-wrap: wrap; }
+.kd-check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.kd-check input { accent-color: var(--primary); width: 1rem; height: 1rem; }
+
+/* Carte */
+.kd-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+}
+
+/* Dialogue (élément <dialog> natif : focus piégé, Échap ferme — R-09) */
+.kd-dialog {
+  width: min(32rem, calc(100vw - var(--space-8)));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--shadow-glow-md);
+}
+.kd-dialog::backdrop { background: color-mix(in oklch, var(--brand-neutral-950) 60%, transparent); backdrop-filter: blur(4px); }
+.kd-dialog__body { padding: var(--space-6); display: grid; gap: var(--space-4); }
+.kd-dialog__title { font-family: var(--font-display), serif; font-size: var(--text-xl); margin: 0; }
+
+/* États (R-08) */
+.kd-state {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  padding: var(--space-10) var(--space-6);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  color: var(--muted-foreground);
+}
+.kd-state__title { color: var(--foreground); font-weight: 600; margin: 0; }
+.kd-state--error { border-style: solid; border-color: var(--destructive, var(--accent)); }
+.kd-state--error .kd-state__title { color: var(--destructive, var(--accent)); }
+.kd-spinner {
+  width: 1.5rem; height: 1.5rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: var(--radius-full);
+  animation: kd-spin 0.8s linear infinite;
+}
+@keyframes kd-spin { to { transform: rotate(360deg); } }
+.kd-skeleton {
+  display: block;
+  height: 1em;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--muted) 25%, var(--card) 50%, var(--muted) 75%);
+  background-size: 200% 100%;
+  animation: kd-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes kd-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .kd-spinner, .kd-skeleton { animation: none; }
+}
+
+/* Bascule de thème (R-03) */
+.kd-theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.25rem; height: 2.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+}
+.kd-theme-toggle:hover { background: var(--muted); }
+.kd-theme-toggle [data-when="dark"] { display: none; }
+[data-theme="dark"] .kd-theme-toggle [data-when="dark"] { display: inline; }
+[data-theme="dark"] .kd-theme-toggle [data-when="light"] { display: none; }
+
+/* ── Splash (1.2.0) : écran d'accueil, d'installation, de chargement, « À propos ». Fond animé
+   par splash.js (aurore aux couleurs de la marque, remuée par le pointeur), trame fine, logo au
+   centre. Remplit son conteneur ; .kd-splash--plein couvre la fenêtre. Sans WebGL ou avec
+   « mouvement réduit », le dégradé de .kd-splash__fond reste. */
+.kd-splash { position: relative; overflow: hidden; min-height: 100%; display: grid; place-items: center;
+  background: var(--background); color: var(--foreground); }
+.kd-splash--plein { position: fixed; inset: 0; min-height: 100vh; }
+.kd-splash__fond { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none;
+  background:
+    radial-gradient(60vmax 60vmax at 20% 30%, color-mix(in oklch, var(--primary) 45%, transparent), transparent 70%),
+    radial-gradient(50vmax 50vmax at 80% 70%, color-mix(in oklch, var(--accent) 40%, transparent), transparent 70%),
+    var(--background); }
+.kd-splash__grille { position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(to right, color-mix(in oklch, var(--foreground) 7%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 7%, transparent) 1px, transparent 1px);
+  background-size: var(--space-12) var(--space-12);
+  mask-image: radial-gradient(ellipse at center, black 40%, transparent 85%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 85%); }
+.kd-splash__centre { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: var(--space-4); padding: var(--space-8) var(--space-6); max-width: 44rem; }
+.kd-splash__logo { display: block; height: var(--space-6); width: auto; margin-bottom: var(--space-6); }
+[data-theme="dark"] .kd-splash__logo { filter: invert(1); } /* logo noir sur fond transparent : blanc la nuit */
+/* 1.3.0 — logo EN COULEUR (emblème carré, ex. STRADA) : ni inversé la nuit, ni réduit à une ligne de texte. */
+.kd-splash__logo--couleur { height: auto; width: min(40vmin, 100%); }
+[data-theme="dark"] .kd-splash__logo--couleur { filter: none; }
+.kd-splash__surtitre { margin: 0; font-family: var(--font-display), sans-serif; font-size: var(--text-sm); font-weight: 600;
+  letter-spacing: 0.3em; text-transform: uppercase; color: var(--primary); }
+.kd-splash__titre { margin: 0; font-family: var(--font-display), sans-serif; font-size: var(--text-hero); font-weight: 700;
+  line-height: 1; letter-spacing: -0.02em; text-shadow: 0 0 40px color-mix(in oklch, var(--primary) 35%, transparent); }
+.kd-splash__texte { margin: 0; font-size: var(--text-lg); line-height: 1.5; color: var(--muted-foreground); text-wrap: balance; }
+.kd-splash__etat { margin: var(--space-6) 0 0; font-family: var(--font-mono, var(--font-body)), monospace;
+  font-size: var(--text-sm); color: var(--muted-foreground); }
+@media (prefers-reduced-motion: reduce) { .kd-splash__fond { visibility: hidden; } }

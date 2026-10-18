@@ -1,0 +1,29 @@
+<!-- Patron « page » : coquille en-tête / contenu / pied. Dans un document complet :
+     <html lang="fr"> + <script src="theme.js"></script> dans <head>, puis ce fragment dans <body>. -->
+<div class="kd-page">
+  <header class="kd-header">
+    <div class="kd-container kd-header__inner">
+      <a class="kd-header__brand" href="/">KARAYAN</a>
+      <nav class="kd-nav" aria-label="Navigation principale">
+        <a href="/" aria-current="page">Accueil</a>
+        <a href="/projets">Projets</a>
+        <a href="/compte">Compte</a>
+      </nav>
+      <button class="kd-theme-toggle" type="button" aria-label="Basculer le thème">
+        <span data-when="light" aria-hidden="true">☾</span>
+        <span data-when="dark" aria-hidden="true">☀</span>
+      </button>
+    </div>
+  </header>
+  <main class="kd-main">
+    <div class="kd-container kd-stack">
+      <p class="kd-eyebrow">Patron · page</p>
+      <h1 class="kd-display kd-h1">Un titre en police d'affichage</h1>
+      <p class="kd-muted">Le corps de texte utilise la police de corps, la taille de base et l'interligne du contrat. Le contenu est borné à la largeur par défaut.</p>
+      <p><a class="kd-btn" href="#">Action principale</a> <a class="kd-btn kd-btn--outline" href="#">Secondaire</a></p>
+    </div>
+  </main>
+  <footer class="kd-footer">
+    <div class="kd-container">© KARAYAN — mentions légales · confidentialité</div>
+  </footer>
+</div>

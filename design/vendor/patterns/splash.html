@@ -1,0 +1,17 @@
+<!-- Patron « splash » (1.2.0) : écran d'accueil, d'installation, de chargement, page « À propos ».
+     Fond : aurore fluide aux couleurs de la marque (splash.js), trame fine, logo de l'application
+     au centre. Plein écran avec .kd-splash--plein ; sinon il remplit son conteneur (position: relative).
+     Le logo est celui de CHAQUE application (STRADA, morfo…) ; karayan.tech garde celui de KARAYAN.
+     L'état (installation, chargement) va dans .kd-splash__etat, avec role="status". -->
+<section class="kd-splash" aria-labelledby="splash-titre">
+  <canvas class="kd-splash__fond" data-kd-splash aria-hidden="true"></canvas>
+  <div class="kd-splash__grille" aria-hidden="true"></div>
+  <div class="kd-splash__centre">
+    <img class="kd-splash__logo" src="/logo.png" alt="Nom de l'application" width="212" height="22">
+    <p class="kd-splash__surtitre">KARAYAN TECHNOLOGIES</p>
+    <h1 class="kd-splash__titre" id="splash-titre">arrive bientôt</h1>
+    <p class="kd-splash__texte">avec son offre de technologies souveraines pour démocratiser la production documentaire assistée par IA.</p>
+    <p class="kd-splash__etat" role="status" aria-live="polite">Installation… 3 / 5</p>
+  </div>
+</section>
+<script src="splash.js"></script>

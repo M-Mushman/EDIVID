@@ -1,0 +1,91 @@
+{
+  "id": "karayan",
+  "name": "KARAYAN",
+  "family": "flagship",
+  "status": "existante",
+  "light": {
+    "background": "#ffffff",
+    "foreground": "#1f1f23",
+    "card": "#f8f8f9",
+    "primary": "#bf0063",
+    "muted": "#eeeef0",
+    "mutedForeground": "#676872",
+    "border": "#c3c4c8",
+    "ring": "#bf0063",
+    "accent": "#aa5cdc",
+    "primaryForeground": "#ffffff",
+    "accentForeground": "#0a0a0a"
+  },
+  "dark": {
+    "background": "#0d0d1a",
+    "foreground": "#f8f8f9",
+    "card": "#1f1f23",
+    "primary": "#ef78a0",
+    "muted": "#1f1f23",
+    "mutedForeground": "#a3a4aa",
+    "border": "#323238",
+    "ring": "#ef78a0",
+    "accent": "#c08ae7",
+    "primaryForeground": "#0a0a0a",
+    "accentForeground": "#0a0a0a"
+  },
+  "ramps": {
+    "primary": {
+      "50": "#fff6f8",
+      "100": "#ffe7ed",
+      "200": "#fed0dc",
+      "300": "#f7abc1",
+      "400": "#ef78a0",
+      "500": "#e13c80",
+      "600": "#bf0063",
+      "700": "#8f0049",
+      "800": "#610030",
+      "900": "#40001d",
+      "950": "#21000c"
+    },
+    "accent": {
+      "50": "#fbf6ff",
+      "100": "#f4eafd",
+      "200": "#e8d5f8",
+      "300": "#d6b5ef",
+      "400": "#c08ae7",
+      "500": "#aa5cdc",
+      "600": "#9129c8",
+      "700": "#6f089e",
+      "800": "#4c006e",
+      "900": "#300346",
+      "950": "#160223"
+    },
+    "neutral": {
+      "50": "#f8f8f9",
+      "100": "#eeeef0",
+      "200": "#dddee0",
+      "300": "#c3c4c8",
+      "400": "#a3a4aa",
+      "500": "#85858e",
+      "600": "#676872",
+      "700": "#4c4c54",
+      "800": "#323238",
+      "900": "#1f1f23",
+      "950": "#0d0d0f"
+    }
+  },
+  "font": {
+    "display": "Space Grotesk Variable",
+    "body": "Inter Variable",
+    "mono": "Fira Code Variable"
+  },
+  "radius": {
+    "base": "0.5rem"
+  },
+  "motion": {
+    "interactive": "200ms",
+    "easing": "cubic-bezier(0.16, 1, 0.3, 1)"
+  },
+  "canvas": {
+    "bg": "oklch(16.6% 0.027 283.1)",
+    "primary": "oklch(60.3% 0.244 0.4)",
+    "accent": "oklch(50% 0.23 310)",
+    "highlight": "oklch(94.8% 0.011 280.5)"
+  }
+}

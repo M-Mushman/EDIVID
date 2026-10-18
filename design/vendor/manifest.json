@@ -1,0 +1,182 @@
+{
+  "name": "karayan-design",
+  "version": "1.3.0",
+  "brands": [
+    "aristote",
+    "gnoz",
+    "karayan",
+    "morfo",
+    "swihn"
+  ],
+  "distribution": "https://mcp.mcp-zone.net/design/",
+  "profiles": {
+    "common": [
+      "CONTRAT.md",
+      "design-check.py",
+      "design-sync.py",
+      "brands/{brand}.json"
+    ],
+    "web": [
+      "brands/{brand}.css",
+      "brands/{brand}.scoped.css",
+      "brands/{brand}.ts",
+      "patterns/*"
+    ],
+    "tauri": [
+      "brands/{brand}.css",
+      "brands/{brand}.scoped.css",
+      "brands/{brand}.ts",
+      "patterns/*"
+    ],
+    "fastapi": [
+      "brands/{brand}.css",
+      "brands/{brand}.scoped.css",
+      "python/karayan_tokens.py",
+      "patterns/*"
+    ],
+    "rust": [
+      "brands/{brand}.css",
+      "python/karayan_tokens.py",
+      "patterns/*",
+      "rust/*"
+    ]
+  },
+  "files": {
+    "CONTRAT.md": {
+      "sha256": "d9d5ddc089fa3227d45e11d4f31c20d9bb2a91e6ea3909aaa84973b203ff73b5",
+      "bytes": 9993
+    },
+    "brands/aristote.css": {
+      "sha256": "90b92ee12d884d4f24b983997922ad932f399ad7b453d74913f8a68d5dbb9186",
+      "bytes": 3278
+    },
+    "brands/aristote.json": {
+      "sha256": "f3913648e231c441ca3fea400cf32783c761dd773d150a1e4600cee6bfbc9b41",
+      "bytes": 2032
+    },
+    "brands/aristote.scoped.css": {
+      "sha256": "fdd0d366df9ef94eb93a11accf92e9c8cefd0131db4b685766cd8233ee1f9483",
+      "bytes": 3342
+    },
+    "brands/aristote.ts": {
+      "sha256": "27d00c3278efa3d5572623e409d3545b656a3599a2e48f44f49f300dfde56146",
+      "bytes": 1935
+    },
+    "brands/gnoz.css": {
+      "sha256": "39ddf8127a9de08465973098e6799a3a64bf740a0301bea726c9b02196e42a74",
+      "bytes": 3274
+    },
+    "brands/gnoz.json": {
+      "sha256": "a7a17fe0ec18b70109dd50949200eb9ea16a73cda23ddc0c44fb2a12e3559af1",
+      "bytes": 2015
+    },
+    "brands/gnoz.scoped.css": {
+      "sha256": "3e881e751d354b55800d83457c968c7c8df43031fc97ed818ac550d5149c7650",
+      "bytes": 3326
+    },
+    "brands/gnoz.ts": {
+      "sha256": "0d32c4277d64fbace2a29601d54bee2b582892cf21a167ed9e7addba3872cc6d",
+      "bytes": 1990
+    },
+    "brands/karayan.css": {
+      "sha256": "c8bcbd9f50201eca1461d459bf6a1b913bb1a5ac4de6c04541108887c5d49f14",
+      "bytes": 3324
+    },
+    "brands/karayan.json": {
+      "sha256": "ebe73f9f58cbcd3774b264eca2701c677a2517decca00ed6239c53bcef399c5a",
+      "bytes": 2050
+    },
+    "brands/karayan.scoped.css": {
+      "sha256": "efea5d56ff8d27c906bcff24cf8d5ee0983b7c9f70ca37c539c56f460da8da19",
+      "bytes": 3385
+    },
+    "brands/karayan.ts": {
+      "sha256": "3b57c314edae8ddb1032915f51a0856cfee1a6b8037bcec395429c222de23b8a",
+      "bytes": 2370
+    },
+    "brands/morfo.css": {
+      "sha256": "e973975f9fff3d286a847b36a58d67f2acc8d8304556bb8b7a862ab398aa4456",
+      "bytes": 3274
+    },
+    "brands/morfo.json": {
+      "sha256": "b86903f18199968c0cde86a8ea3e8b8b7dbaab8409e29535d66154380d364bfd",
+      "bytes": 2022
+    },
+    "brands/morfo.scoped.css": {
+      "sha256": "6444ec96d4b8592ddc39f7a4c8f2ceb0f3bda49acd7be3dd579fc16ec9edb581",
+      "bytes": 3329
+    },
+    "brands/morfo.ts": {
+      "sha256": "cee8980b234d847d374a1a2bddceacd5df5d09f00b4c01c07f4a53ef2000f1e1",
+      "bytes": 2139
+    },
+    "brands/swihn.css": {
+      "sha256": "4a48588d376383dd64c380658fbe0b10784ef82e7ecffac0c3622c6d4f58316c",
+      "bytes": 3307
+    },
+    "brands/swihn.json": {
+      "sha256": "ddff16b5eb0ceb90743eb0e3c9f5ac61f0a409adb0f65791394b0db9b0e3c7b8",
+      "bytes": 2030
+    },
+    "brands/swihn.scoped.css": {
+      "sha256": "63ec2e4930436356040e3ec4a0be2905a0af12cdb1ff9995e25fbe49bb403a45",
+      "bytes": 3362
+    },
+    "brands/swihn.ts": {
+      "sha256": "3a09aed8db9bb75fefe4e0027193a29493d5a2a1ba4ef154ed9e9941945a8867",
+      "bytes": 1912
+    },
+    "design-check.py": {
+      "sha256": "99a5ca43f979724487bc3b6d86a1e89b84d25bb4484a58be7ab6a1016a28e055",
+      "bytes": 18773
+    },
+    "design-sync.py": {
+      "sha256": "02ef2e8db8dd5af037ba1fe014a478bdf1d484ac044b588d6655f85677eae452",
+      "bytes": 8853
+    },
+    "patterns/dialog.html": {
+      "sha256": "7948ee575e15c1be8fb095ea1fd1ea6ad780a10dce19948aa8304b5297224dd7",
+      "bytes": 846
+    },
+    "patterns/form.html": {
+      "sha256": "1129e3d8a392bd57a7d0644d5a77d1bb6ad336889b6e28bb95dc0c600ed812df",
+      "bytes": 1407
+    },
+    "patterns/header.html": {
+      "sha256": "189aa71629bcb55afe7990760faf50ab018b96da7640d02f271bfc4f786e8caa",
+      "bytes": 689
+    },
+    "patterns/page.html": {
+      "sha256": "55b9102ca9dee7999205966f8aa097d6ab557f14ae91d5d118d7499a90fbfe64",
+      "bytes": 1428
+    },
+    "patterns/patterns.css": {
+      "sha256": "9ea021556373740953fc19dd542b7d9a5b2d3d958971c7f4ee00c1d5f672b8e7",
+      "bytes": 11667
+    },
+    "patterns/splash.html": {
+      "sha256": "ba718889ef5f77bd1ae33112c5572eec1e2f158168b0773af0ce37926d337eb0",
+      "bytes": 1255
+    },
+    "patterns/splash.js": {
+      "sha256": "bf6c23fb1a2f064a0c0609e8650d6d77ea2caad60958eb91ce0fc6fab5ce6ee8",
+      "bytes": 10144
+    },
+    "patterns/states.html": {
+      "sha256": "3e60c62efe288112b7aefc081169173d0fb2acb3ba931aab7c609582b6b4b0e1",
+      "bytes": 1272
+    },
+    "patterns/theme.js": {
+      "sha256": "8db921f42b6590ee0b90777f21b80e9e3bba061f301e909c63604b806bc637c6",
+      "bytes": 1167
+    },
+    "python/karayan_tokens.py": {
+      "sha256": "d3a17b94716a8192724a16772cf171f1572326012be4ca696f479eda48f58b9f",
+      "bytes": 15644
+    },
+    "tokens.json": {
+      "sha256": "543229d830e39f1e0344ca3a3f3eeb10b6f739599ab9906d28e191704a9539a6",
+      "bytes": 11116
+    }
+  }
+}

@@ -49,6 +49,22 @@ pub fn oublier(etat: &EtatPartage, email: &str) {
     }
 }
 
+/// Nom de la chaîne YouTube du compte connecté, pour montrer où partiront les vidéos.
+pub async fn nom_chaine(etat: &EtatPartage, jeton_acces: &str) -> Option<String> {
+    let v: Value = etat
+        .http
+        .get("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true")
+        .bearer_auth(jeton_acces)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    v["items"][0]["snippet"]["title"].as_str().map(str::to_string)
+}
+
 /// Ce compte a-t-il autorisé l'envoi sur YouTube ?
 pub fn autorise(etat: &EtatPartage, email: &str) -> bool {
     charger(etat).get(&email.to_lowercase()).map(|j| j.portees.contains(PORTEE) && !j.refresh_token.is_empty()).unwrap_or(false)

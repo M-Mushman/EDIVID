@@ -1,0 +1,32 @@
+{
+  "contract": "karayan-design",
+  "version": "1.3.0",
+  "brand": "karayan",
+  "stack": "rust",
+  "surface": null,
+  "source": "https://mcp.mcp-zone.net/design/1.3.0/",
+  "base": "https://mcp.mcp-zone.net/design",
+  "vendor_dir": "design/vendor",
+  "files": {
+    "CONTRAT.md": "d9d5ddc089fa3227d45e11d4f31c20d9bb2a91e6ea3909aaa84973b203ff73b5",
+    "brands/karayan.css": "c8bcbd9f50201eca1461d459bf6a1b913bb1a5ac4de6c04541108887c5d49f14",
+    "brands/karayan.json": "ebe73f9f58cbcd3774b264eca2701c677a2517decca00ed6239c53bcef399c5a",
+    "design-check.py": "99a5ca43f979724487bc3b6d86a1e89b84d25bb4484a58be7ab6a1016a28e055",
+    "design-sync.py": "02ef2e8db8dd5af037ba1fe014a478bdf1d484ac044b588d6655f85677eae452",
+    "patterns/dialog.html": "7948ee575e15c1be8fb095ea1fd1ea6ad780a10dce19948aa8304b5297224dd7",
+    "patterns/form.html": "1129e3d8a392bd57a7d0644d5a77d1bb6ad336889b6e28bb95dc0c600ed812df",
+    "patterns/header.html": "189aa71629bcb55afe7990760faf50ab018b96da7640d02f271bfc4f786e8caa",
+    "patterns/page.html": "55b9102ca9dee7999205966f8aa097d6ab557f14ae91d5d118d7499a90fbfe64",
+    "patterns/patterns.css": "9ea021556373740953fc19dd542b7d9a5b2d3d958971c7f4ee00c1d5f672b8e7",
+    "patterns/splash.html": "ba718889ef5f77bd1ae33112c5572eec1e2f158168b0773af0ce37926d337eb0",
+    "patterns/splash.js": "bf6c23fb1a2f064a0c0609e8650d6d77ea2caad60958eb91ce0fc6fab5ce6ee8",
+    "patterns/states.html": "3e60c62efe288112b7aefc081169173d0fb2acb3ba931aab7c609582b6b4b0e1",
+    "patterns/theme.js": "8db921f42b6590ee0b90777f21b80e9e3bba061f301e909c63604b806bc637c6",
+    "python/karayan_tokens.py": "d3a17b94716a8192724a16772cf171f1572326012be4ca696f479eda48f58b9f",
+    "manifest.json": "4d4a41ee192a850bd09ff502b7e6bbc7f93725fb046f68b6458b41693bf9d7de"
+  },
+  "mirrors": {
+    "web/design/karayan.css": "brands/karayan.css"
+  },
+  "scan": {}
+}

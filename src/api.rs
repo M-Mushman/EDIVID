@@ -24,6 +24,7 @@ use crate::courriel;
 use crate::decoupe;
 use crate::drive;
 use crate::google;
+use crate::jeux;
 use crate::parametres;
 use crate::postprod::{self, PostProd};
 use crate::youtube;
@@ -108,6 +109,9 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/youtube/proposer", post(proposer_youtube))
         .route("/api/projets/{id}/youtube", post(publier_youtube))
         .route("/api/bibliotheque", get(voir_bibliotheque).post(ajouter_demande))
+        .route("/api/jeux", get(voir_jeux).post(ajouter_jeu))
+        .route("/api/jeux/{jid}", delete(retirer_jeu))
+        .route("/api/projets/{id}/jeux/{jid}", post(appliquer_jeu))
         .route("/api/bibliotheque/{did}", delete(retirer_demande))
         .merge(televersement)
         .nest_service("/polices", ServeDir::new(etat.cfg.racine.join("modeles").join("polices")))
@@ -1011,6 +1015,50 @@ async fn passage_drive(State(etat): State<EtatPartage>) -> Reponse {
     }
     etat.drive.reveil.notify_one();
     Ok(Json(json!({})))
+}
+
+// ---------------------------------------------------------------- jeux de réglages
+
+async fn voir_jeux(State(etat): State<EtatPartage>) -> Json<Value> {
+    Json(json!({"jeux": jeux::liste(&etat.cfg.donnees)}))
+}
+
+#[derive(Deserialize)]
+struct NouveauJeu {
+    nom: String,
+    projet: String,
+}
+
+/// Enregistre les réglages et la PostProd du projet sous ce nom.
+async fn ajouter_jeu(State(etat): State<EtatPartage>, Json(j): Json<NouveauJeu>) -> Reponse {
+    let p = etat.projet(&j.projet).await?;
+    Ok(Json(json!(jeux::ajouter(&etat.cfg.donnees, &j.nom, p.reglages.clone(), p.postprod.clone())?)))
+}
+
+async fn retirer_jeu(State(etat): State<EtatPartage>, Path(jid): Path<String>) -> Reponse {
+    jeux::retirer(&etat.cfg.donnees, &jid)?;
+    Ok(Json(json!({})))
+}
+
+/// Recharge un jeu sur le projet : chaque réglage passe par la même validation qu'à la main.
+async fn appliquer_jeu(State(etat): State<EtatPartage>, Path((id, jid)): Path<(String, String)>) -> Reponse {
+    let jeu = jeux::trouver(&etat.cfg.donnees, &jid).ok_or_else(|| refus("ce jeu de réglages n'existe plus"))?;
+    let changements: serde_json::Map<String, Value> = jeu.reglages.clone().into_iter().collect();
+    let (faits, refus_) = etat
+        .modifier(&id, |p| {
+            // La musique d'un autre projet n'est pas dans cette médiathèque : on garde celle du projet.
+            let mut changements = changements.clone();
+            if let Some(m) = changements.get("musique").and_then(Value::as_str) {
+                if !m.is_empty() && !p.medias.iter().any(|x| x.id == m) {
+                    changements.remove("musique");
+                }
+            }
+            let res = appliquer_reglages(p, &changements);
+            p.postprod = jeu.postprod.clone();
+            res
+        })
+        .await?;
+    Ok(Json(json!({"faits": faits, "refus": refus_, "jeu": jeu.nom})))
 }
 
 // ---------------------------------------------------------------- bibliothèque

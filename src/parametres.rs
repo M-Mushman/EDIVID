@@ -90,6 +90,8 @@ pub struct Compte {
     pub distant: String,
     /// Veille du dossier d'entrée de son Drive.
     pub veille: bool,
+    /// Nom de sa chaîne YouTube, lu à la connexion ; vide si inconnu ou sans accès à YouTube.
+    pub chaine: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

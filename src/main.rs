@@ -10,6 +10,7 @@ mod decoupe;
 mod drive;
 mod etat;
 mod google;
+mod jeux;
 mod llm;
 mod modele;
 mod parametres;

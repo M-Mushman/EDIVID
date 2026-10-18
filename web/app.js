@@ -57,6 +57,17 @@ const TRACES = {
   nuage: '<path d="M7 18a4 4 0 0 1-.6-8 6 6 0 0 1 11.5 1.5A3.5 3.5 0 0 1 17.5 18z"/>',
   courriel: '<path d="M4 6h16v12H4z"/><path d="M4 7l8 6 8-6"/>',
   copier: '<path d="M9 9h11v11H9z"/><path d="M5 15H4V4h11v1"/>',
+  zoom: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M11 8v6M8 11h6"/>',
+  texte: '<path d="M5 6V4h14v2M12 4v16M9 20h6"/>',
+  couches: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  onde: '<path d="M3 12h1M7 8v8M11 5v14M15 8v8M19 10v4"/>',
+  fondu: '<rect x="3" y="5" width="11" height="11" rx="2"/><rect x="10" y="9" width="11" height="11" rx="2"/>',
+  signet: '<path d="M6 3h12v18l-6-4-6 4z"/>',
+  telephone: '<rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/>',
+  youtube: '<rect x="2.5" y="5.5" width="19" height="13" rx="4"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor" stroke="none"/>',
+  peau: '<circle cx="12" cy="12" r="8"/><path d="M8.5 14.5c1.8 1.4 5.2 1.4 7 0M9 10h.01M15 10h.01"/>',
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.5-1.5 0-1.2-1-1.5-1-2.5s.7-1.5 1.8-1.5H17a4 4 0 0 0 4-4C21 6.5 17 3 12 3z"/><path d="M7.5 11h.01M10 7h.01M15 7h.01"/>',
+  grain: '<path d="M5 5h.01M10 7h.01M15 5h.01M19 9h.01M7 11h.01M12 12h.01M17 14h.01M5 17h.01M10 18h.01M15 19h.01M19 18h.01"/>',
 };
 
 function icone(nom) {
@@ -132,18 +143,17 @@ async function api(methode, chemin, corps) {
   return v;
 }
 
+/** Thème du contrat de design KARAYAN : data-theme toujours posé, choix gardé sous « karayan_theme ». */
 function appliquerTheme() {
-  const t = lire('edivid_theme');
-  if (t === 'clair') document.documentElement.dataset.theme = 'light';
-  else if (t === 'sombre') document.documentElement.dataset.theme = 'dark';
-  else delete document.documentElement.dataset.theme;
+  const t = lire('karayan_theme');
+  document.documentElement.dataset.theme = t === 'light' || t === 'dark' ? t
+    : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 }
 function boutonTheme() {
-  const sombre = document.documentElement.dataset.theme === 'dark' ||
-    (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+  const sombre = document.documentElement.dataset.theme === 'dark';
   return h('button', {
     class: 'btn icone fantome', title: sombre ? 'Passer en thème clair' : 'Passer en thème sombre',
-    onclick: () => { stocker('edivid_theme', sombre ? 'clair' : 'sombre'); appliquerTheme(); route(); },
+    onclick: () => { stocker('karayan_theme', sombre ? 'light' : 'dark'); appliquerTheme(); route(); },
   }, icone(sombre ? 'soleil' : 'lune'));
 }
 
@@ -196,6 +206,59 @@ function enteteRepliable(nom, titre, ...extras) {
 }
 
 function appliquerReplie(carte, nom) { carte.classList.toggle('replie', estReplie(nom)); }
+
+// ------------------------------------------------------------------ blocs d'outils (accordéon)
+
+/** Bloc d'outils repliable du panneau latéral : un fond teinté par famille d'outils, une ligne de résumé
+ *  lisible même replié ; replié par défaut, l'état est gardé par navigateur. */
+function blocOutil(cle, { icone: ic, titre, resume, famille }, ...contenu) {
+  const ouvert = lire(`edivid_outil_${cle}`) === '1';
+  const id = `outil-${cle.replace(/[^a-z0-9_-]/gi, '_')}`;
+  const corps = h('div', { class: 'outil-corps', id, hidden: !ouvert }, ...contenu);
+  const bloc = h('section', { class: `outil famille-${famille}${ouvert ? ' ouvert' : ''}` });
+  const tete = h('button', {
+    class: 'outil-tete', type: 'button', 'aria-expanded': ouvert ? 'true' : 'false', 'aria-controls': id,
+    onclick: () => {
+      const o = !bloc.classList.contains('ouvert');
+      bloc.classList.toggle('ouvert', o);
+      corps.hidden = !o;
+      tete.setAttribute('aria-expanded', o ? 'true' : 'false');
+      stocker(`edivid_outil_${cle}`, o ? '1' : '0');
+    },
+  },
+  h('span', { class: 'outil-icone' }, icone(ic)),
+  h('span', { class: 'outil-titres' }, h('b', {}, titre), resume ? h('span', { class: 'outil-resume' }, resume) : null),
+  h('span', { class: 'outil-chevron' }, icone('chevron')));
+  bloc.append(tete, corps);
+  return bloc;
+}
+
+/** Les réglages d'une section, en une ligne : choix, curseurs, interrupteurs actifs. */
+function resumeSection(section, reglages) {
+  const rs = E.catalogue.filter((r) => r.section === section);
+  const parts = [];
+  for (const r of rs) {
+    const v = reglages[r.cle];
+    if (r.genre === 'choix') parts.push(r.options.find((o) => o.valeur === v)?.libelle);
+    else if (r.genre === 'curseur') parts.push(`${r.titre.split(' ')[0].toLowerCase()} ${v} ${r.bornes.unite}`);
+    else if (r.genre === 'media_son') parts.push(v ? (E.vue.projet.medias.find((m) => m.id === v)?.nom || 'musique') : 'sans musique');
+  }
+  const inter = rs.filter((r) => r.genre === 'interrupteur');
+  if (inter.length > 1) parts.push(`${inter.filter((r) => reglages[r.cle]).length}/${inter.length} activés`);
+  else if (inter.length === 1) parts.push(reglages[inter[0].cle] ? 'activé' : 'désactivé');
+  return parts.filter(Boolean).join(' · ');
+}
+
+// Famille (teinte du bloc) et icône de chaque section de réglages.
+const SECTIONS_REGLAGES = {
+  Autocut: ['montage', 'ciseaux'],
+  Structure: ['montage', 'couches'],
+  Zooms: ['cadre', 'zoom'],
+  Transitions: ['cadre', 'fondu'],
+  'Sous-titres': ['texte', 'texte'],
+  Image: ['image', 'image'],
+  Son: ['son', 'onde'],
+};
 
 // ------------------------------------------------------------------ état
 
@@ -345,17 +408,29 @@ async function afficherAccueil() {
 function nouveauProjet() {
   fenetre('Nouveau projet', (fermer) => {
     const champ = h('input', { class: 'champ', placeholder: 'Par exemple : Présentation de la chaîne', maxlength: '80' });
+    // Un jeu de réglages enregistré peut servir de point de départ.
+    const jeu = h('select', { class: 'champ', 'aria-label': 'Réglages de départ' }, h('option', { value: '' }, 'Réglages par défaut'));
+    const ligneJeu = h('div', { hidden: true, style: { marginTop: '14px' } },
+      h('label', { class: 'petit', style: { fontWeight: 600, display: 'block', marginBottom: '6px' } }, 'Partir d’un jeu de réglages'), jeu);
+    api('GET', '/api/jeux').then(({ jeux }) => {
+      if (!jeux.length) return;
+      jeu.append(...jeux.map((j) => h('option', { value: j.id }, j.nom)));
+      ligneJeu.hidden = false;
+    }).catch(() => {});
     setTimeout(() => champ.focus(), 30);
     return h('form', {
       onsubmit: async (e) => {
         e.preventDefault();
         const { id } = await api('POST', '/api/projets', { nom: champ.value });
+        if (jeu.value) {
+          try { await api('POST', `/api/projets/${id}/jeux/${jeu.value}`); } catch (err) { toast(err.message, 'erreur'); }
+        }
         fermer();
         location.hash = `#/projet/${id}`;
       },
     },
     h('label', { class: 'petit', style: { fontWeight: 600, display: 'block', marginBottom: '6px' } }, 'Nom du projet'),
-    champ,
+    champ, ligneJeu,
     h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' } },
       h('button', { class: 'btn', type: 'button', onclick: fermer }, 'Annuler'),
       h('button', { class: 'btn primaire', type: 'submit' }, 'Créer')));
@@ -1362,7 +1437,7 @@ function controleReglage(r, valeur) {
     const unite = r.bornes.unite || '%';
     const sortie = h('b', { class: 'petit', style: { minWidth: '62px', textAlign: 'right' } }, `${valeur > 0 && unite === 'ms' ? '+' : ''}${valeur} ${unite}`);
     return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' } },
-      h('input', { type: 'range', min: r.bornes.min, max: r.bornes.max, step: unite === 'ms' ? '10' : '5', value: valeur, 'aria-label': r.titre,
+      h('input', { type: 'range', min: r.bornes.min, max: r.bornes.max, step: unite === 'ms' ? '10' : (r.bornes.max - r.bornes.min <= 30 ? '1' : '5'), value: valeur, 'aria-label': r.titre,
         oninput: (e) => { sortie.textContent = `${e.target.value > 0 && unite === 'ms' ? '+' : ''}${e.target.value} ${unite}`; }, onchange: (e) => changer(Number(e.target.value)) }), sortie);
   }
   if (r.genre === 'media_son') {
@@ -1391,20 +1466,69 @@ function sectionConsignes(corps) {
   const exemples = h('div', { class: 'suggestions', style: { padding: '8px 0 0' } });
   chargerBibliotheque().then((b) => remplir(exemples, (b.integree.consignes || []).map((c) =>
     h('button', { title: c.texte, onclick: () => { zone.value = (zone.value.trim() ? `${zone.value.trim()}\n` : '') + c.texte; enregistrer(); } }, `+ ${c.titre}`))));
-  corps.append(h('div', { class: 'section-reglages' }, h('h3', {}, 'Vos consignes au monteur'),
+  corps.append(blocOutil('consignes', { icone: 'livre', titre: 'Vos consignes au monteur', famille: 'recettes',
+    resume: p.consignes?.trim() ? p.consignes.trim().replace(/\s+/g, ' ').slice(0, 80) : 'Aucune consigne pour l’instant' },
     h('div', { class: 'reglage-aide' }, 'Vos préférences, en toutes lettres. Le LLM les lit à chaque montage et dans la conversation, en plus de ses propres consignes.'),
     zone, exemples,
     h('button', { class: 'btn petit fantome', style: { marginTop: '6px' }, onclick: afficherCoulisses }, icone('livre'), 'Voir les consignes complètes du LLM')));
 }
 
+/** Jeux de réglages : enregistrer ceux du projet sous un nom, en recharger un d'un clic. */
+function blocJeux(corps) {
+  const zone = h('div', {}, h('p', { class: 'petit muet' }, 'Chargement…'));
+  const dessiner = async () => {
+    let jeux;
+    try {
+      jeux = (await api('GET', '/api/jeux')).jeux;
+      if (!catalogueLooks) catalogueLooks = await api('GET', '/api/postprod/looks');
+    }
+    catch (e) { remplir(zone, h('p', { class: 'petit', style: { color: 'var(--erreur)' } }, `Jeux de réglages indisponibles : ${e.message}`)); return; }
+    const nom = h('input', { class: 'champ', placeholder: 'Nom, par exemple « Coach lumineux »', maxlength: '60', 'aria-label': 'Nom du jeu de réglages' });
+    const enregistrer = async () => {
+      if (!nom.value.trim()) { nom.focus(); return; }
+      try {
+        const j = await api('POST', '/api/jeux', { nom: nom.value, projet: E.projetId });
+        toast(`Réglages et PostProd enregistrés sous « ${j.nom} ».`, 'ok');
+        dessiner();
+      } catch (e) { toast(e.message, 'erreur'); }
+    };
+    nom.addEventListener('keydown', (e) => { if (e.key === 'Enter') enregistrer(); });
+    remplir(zone,
+      h('div', { class: 'reglage-aide' }, 'Enregistrez les réglages et la PostProd de ce projet sous un nom, puis rechargez-les d’un clic sur n’importe quel projet. Les vidéos venues du Drive peuvent aussi les reprendre (Paramètres). Un nom déjà pris est mis à jour.'),
+      h('div', { class: 'ligne-jeu' }, nom, h('button', { class: 'btn petit primaire', onclick: enregistrer }, icone('signet'), 'Enregistrer')),
+      jeux.length
+        ? h('div', { class: 'liste-jeux' }, jeux.map((j) => h('div', { class: 'jeu' },
+          h('div', { class: 'jeu-infos' }, h('b', {}, j.nom),
+            h('span', { class: 'tres-petit muet' }, [j.postprod?.look ? `look ${catalogueLooks?.looks.find((l) => l.cle === j.postprod.look)?.nom || j.postprod.look}` : null, `zooms ${j.reglages.zooms || 'normal'}`,
+              j.reglages.timbre_voix ? `voix ${j.reglages.timbre_voix}` : null].filter(Boolean).join(' · '))),
+          h('button', { class: 'btn petit doux', title: 'Appliquer ce jeu à ce projet', onclick: async () => {
+            try {
+              const r = await api('POST', `/api/projets/${E.projetId}/jeux/${j.id}`);
+              E.aMettreAJour = true;
+              toast(`« ${r.jeu} » rechargé${r.faits.length ? ` : ${r.faits.length} réglage(s) changé(s)` : ' : rien ne changeait'}. Mettez à jour l’aperçu.`, 'ok');
+            } catch (e) { toast(e.message, 'erreur'); }
+          } }, 'Charger'),
+          h('button', { class: 'btn icone petit fantome danger', title: 'Supprimer ce jeu', onclick: async () => {
+            if (!(await confirmer('Supprimer ce jeu de réglages ?', `« ${j.nom} » ne pourra plus être rechargé. Les projets qui l’ont utilisé gardent leurs réglages.`, 'Supprimer'))) return;
+            try { await api('DELETE', `/api/jeux/${j.id}`); dessiner(); } catch (e) { toast(e.message, 'erreur'); }
+          } }, icone('corbeille')))))
+        : h('p', { class: 'tres-petit muet', style: { margin: '10px 0 0' } }, 'Aucun jeu enregistré pour l’instant.'));
+  };
+  dessiner();
+  corps.append(blocOutil('jeux', { icone: 'signet', titre: 'Jeux de réglages', famille: 'recettes',
+    resume: 'Enregistrer ces réglages, ou en recharger un' }, zone));
+}
+
 function dessinerReglages(corps) {
   const p = E.vue.projet;
+  corps.append(h('div', { class: 'aide', style: { marginBottom: '12px' } }, icone('info'),
+    h('span', {}, 'Ouvrez un bloc pour régler. Chaque changement est enregistré aussitôt ; cliquez ensuite sur « Mettre à jour l’aperçu ». Vous pouvez aussi simplement le demander à l’assistant.')));
+  blocJeux(corps);
   sectionConsignes(corps);
   const sections = [...new Set(E.catalogue.map((r) => r.section))];
-  corps.append(h('div', { class: 'aide', style: { marginBottom: '14px' } }, icone('info'),
-    h('span', {}, 'Chaque réglage est enregistré aussitôt. Cliquez ensuite sur « Mettre à jour l’aperçu ». Vous pouvez aussi simplement demander à l’assistant.')));
   for (const s of sections) {
-    corps.append(h('div', { class: 'section-reglages' }, h('h3', {}, s),
+    const [famille, ic] = SECTIONS_REGLAGES[s] || ['recettes', 'reglages'];
+    corps.append(blocOutil(`reglages_${s}`, { icone: ic, titre: s, famille, resume: resumeSection(s, p.reglages) },
       E.catalogue.filter((r) => r.section === s).map((r) => {
         const valeur = p.reglages[r.cle];
         const enLigne = r.genre === 'interrupteur';
@@ -1528,8 +1652,14 @@ function moduleTexte(corps) {
 
 function dessinerEffets(corps) {
   const p = E.vue.projet;
-  moduleTexte(corps);
-  corps.append(h('h3', { style: { margin: '4px 0 10px', textTransform: 'uppercase', fontSize: '11.5px', letterSpacing: '.08em', color: 'var(--texte-3)' } }, 'Posés dans la vidéo'));
+  const composer = h('div');
+  moduleTexte(composer);
+  const poses = h('div');
+  corps.append(
+    blocOutil('textes_composer', { icone: 'texte', titre: 'Composer un texte', famille: 'texte', resume: 'Écrire, choisir l’effet, glisser sur la vidéo' }, composer),
+    blocOutil('textes_poses', { icone: 'baguette', titre: 'Posés dans la vidéo', famille: 'image',
+      resume: p.incrustations.length ? `${p.incrustations.length} incrustation(s)` : 'Rien pour l’instant' }, poses));
+  corps = poses;
   const texte = Object.fromEntries(E.vue.phrases.map((ph) => [ph.cle, ph]));
   corps.append(h('div', { class: 'aide', style: { marginBottom: '12px' } }, icone('info'),
     h('span', {}, 'Une incrustation pose une image, un GIF, une vidéo ou un effet sur une phrase précise. Pour en ajouter une : la baguette à côté d’une phrase, ou demandez à l’assistant (« mets le GIF du chat quand elle parle de montgolfière »).')));
@@ -1848,15 +1978,16 @@ function ligneInterrupteur(titre, aide, valeur, rappel) {
   return h('div', { class: 'reglage' }, h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, titre), interrupteurSimple(valeur, rappel)),
     aide ? h('div', { class: 'reglage-aide' }, aide) : null);
 }
-function blocCommande(texte) {
+function blocCommande(texte, copie = 'Commande copiée.') {
   return h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px' } },
     h('code', { style: { flex: 1, background: 'var(--surface-2)', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', overflowX: 'auto', whiteSpace: 'nowrap' } }, texte),
-    h('button', { class: 'btn icone fantome', title: 'Copier', onclick: async () => { try { await navigator.clipboard.writeText(texte); toast('Commande copiée.'); } catch { toast('Copie impossible : sélectionnez le texte.'); } } }, icone('copier')));
+    h('button', { class: 'btn icone fantome', title: 'Copier', onclick: async () => { try { await navigator.clipboard.writeText(texte); toast(copie); } catch { toast('Copie impossible : sélectionnez le texte.'); } } }, icone('copier')));
 }
 
 async function afficherParametres() {
   const P = await api('GET', '/api/parametres');
   const projets = await api('GET', '/api/projets');
+  const jeux = (await api('GET', '/api/jeux').catch(() => ({ jeux: [] }))).jeux;
   const c = P.courriel;
   const d = P.drive;
   const enregistrer = async (message = 'Paramètres enregistrés.') => {
@@ -1887,7 +2018,8 @@ async function afficherParametres() {
     h('option', { value: v, selected: d.intervalle_s === v }, l)));
   intervalle.addEventListener('change', () => { d.intervalle_s = Number(intervalle.value); });
   const modele = h('select', { class: 'champ' }, h('option', { value: '' }, 'Réglages par défaut'),
-    projets.map((p) => h('option', { value: p.id, selected: d.modele === p.id }, p.nom)));
+    jeux.length ? h('optgroup', { label: 'Jeux de réglages' }, jeux.map((j) => h('option', { value: `jeu:${j.id}`, selected: d.modele === `jeu:${j.id}` }, j.nom))) : null,
+    h('optgroup', { label: 'Comme un projet' }, projets.map((p) => h('option', { value: p.id, selected: d.modele === p.id }, p.nom))));
   modele.addEventListener('change', () => { d.modele = modele.value; });
 
   remplir($app, h('div', { class: 'accueil', style: { maxWidth: '820px' } },
@@ -1936,7 +2068,7 @@ async function afficherParametres() {
       champ('Fréquence', intervalle),
       ligneInterrupteur('Lancer le rendu final tout seul', 'Sinon, EDIVID s’arrête à l’aperçu et vous prévient : vous ajustez, puis lancez le rendu.', d.rendu_final, (v) => { d.rendu_final = v; }),
       ligneInterrupteur('Déposer la vidéo finale sur le Drive', null, d.deposer, (v) => { d.deposer = v; }),
-      champ('Réglages des projets venus du Drive', modele, 'Choisissez un projet dont vous aimez le montage : ses réglages et ses consignes seront repris.'),
+      champ('Réglages des projets venus du Drive', modele, 'Un jeu de réglages enregistré, ou un projet dont vous aimez le montage (ses réglages, sa PostProd et ses consignes sont repris).'),
       h('div', { class: 'aide', style: { marginTop: '12px', background: etatDrive.erreur ? 'var(--erreur-doux)' : 'var(--accent-doux)' } }, icone(etatDrive.erreur ? 'alerte' : 'info'),
         !P.etat_drive?.rclone ? h('div', {}, h('span', {}, 'rclone n’est pas installé sur azoth. Dans un terminal sur azoth :'), blocCommande('curl https://rclone.org/install.sh | sudo bash'))
           : h('span', {}, !drivesRelies.length && !d.actif ? 'Aucun Drive relié : reliez un compte Google dans la carte ci-dessus.'
@@ -1970,7 +2102,89 @@ async function afficherParametres() {
 
 // ------------------------------------------------------------------ connexion avec Google (Paramètres)
 
+const CONSOLE_GOOGLE = 'https://console.cloud.google.com';
+const PORTEES_GOOGLE = 'https://www.googleapis.com/auth/drive, https://www.googleapis.com/auth/youtube.upload';
+
+/** Lien vers une page de la console Google, ouvert dans un nouvel onglet. */
+function lienConsole(chemin, libelle) {
+  return h('a', { class: 'btn petit doux', href: `${CONSOLE_GOOGLE}${chemin}`, target: '_blank', rel: 'noopener' }, libelle, ' ↗');
+}
+
+/** Lit le fichier « client_secret_….json » téléchargé chez Google et enregistre l'identifiant. */
+async function deposerIdentifiantGoogle(fichier, retour) {
+  let j;
+  try { j = JSON.parse(await fichier.text()); } catch { toast('Ce fichier n’est pas un fichier JSON de Google.', 'erreur'); return; }
+  if (j.installed) { toast('Cet identifiant est de type « Application de bureau » : créez-en un de type « Application Web » (étape 6).', 'erreur'); return; }
+  const c = j.web;
+  if (!c?.client_id || !c?.client_secret) { toast('Fichier inattendu : il faut celui de l’identifiant « Application Web » (client_secret_….json).', 'erreur'); return; }
+  try {
+    await api('POST', '/api/parametres', { google: { client_id: c.client_id, client_secret: c.client_secret } });
+  } catch (e) { toast(e.message, 'erreur'); return; }
+  const bonRetour = (c.redirect_uris || []).includes(retour);
+  toast(bonRetour ? 'Identifiant Google enregistré. Essayez maintenant « Se connecter avec Google ».'
+    : `Identifiant enregistré, mais l’adresse de retour ${retour} n’y figure pas : ajoutez-la dans la console (étape 6), sinon Google refusera la connexion.`,
+  bonRetour ? 'ok' : 'erreur');
+  afficherParametres();
+}
+
+/** Carte simple : se connecter avec son compte Google, voir ce qui est relié. Puis l'activation, pour la
+ *  personne qui gère EDIVID, une seule fois. */
 function sectionGoogle(P) {
+  const g = P.google;
+  const comptes = P.comptes || [];
+  const moi = E.session?.compte ? comptes.find((c) => c.email === E.session.compte.email) || E.session.compte : null;
+  const avantages = h('ul', { class: 'avantages' },
+    h('li', {}, icone('telephone'), h('span', {}, 'Filmez à l’iPhone et déposez la vidéo dans votre Google Drive : EDIVID la monte tout seul.')),
+    h('li', {}, icone('nuage'), h('span', {}, 'Le montage terminé revient dans votre Drive, et un courriel vous prévient si vous le souhaitez.')),
+    h('li', {}, icone('youtube'), h('span', {}, 'Publiez sur votre chaîne YouTube depuis « Exporter ».')));
+  const pastilles = (c) => h('div', { class: 'tres-petit', style: { marginTop: '4px', display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+    c.distant ? h('span', { class: 'pastille ok' }, 'Drive relié') : h('span', { class: 'pastille alerte' }, 'Drive non relié'),
+    c.chaine ? h('span', { class: 'pastille ok' }, `YouTube : ${c.chaine}`) : null);
+  const ligneCompte = (c) => h('div', { class: 'incrustation' },
+    h('div', { style: { minWidth: 0 } }, h('b', { class: 'petit' }, c.nom || c.email), h('div', { class: 'tres-petit muet' }, c.email), pastilles(c)),
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+      c.distant ? h('label', { class: 'bascule', title: 'Surveiller le dossier d’entrée de ce Drive' },
+        h('input', { type: 'checkbox', checked: c.veille, onchange: async (e) => {
+          try { await api('POST', '/api/comptes', { email: c.email, veille: e.target.checked }); toast(e.target.checked ? 'Veille de ce Drive activée.' : 'Veille de ce Drive arrêtée.', 'ok'); }
+          catch (err) { toast(err.message, 'erreur'); e.target.checked = !e.target.checked; }
+        } }), h('span', {}, 'Veille')) : null,
+      h('button', { class: 'btn petit fantome danger', onclick: async () => {
+        if (!(await confirmer('Retirer ce compte ?', `${c.email} ne pourra plus se connecter et son Drive sera délié.`, 'Retirer'))) return;
+        await api('DELETE', `/api/comptes/${encodeURIComponent(c.email)}`);
+        afficherParametres();
+      } }, 'Retirer')));
+  const carte = h('div', { class: 'carte carte-corps carte-google', style: { marginTop: '16px' } },
+    h('h2', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, icone('google'), 'Votre compte Google'));
+  if (!g.configure) {
+    carte.append(avantages,
+      h('div', { class: 'aide', style: { background: 'var(--alerte-doux)', marginTop: '14px' } }, icone('info'),
+        h('span', {}, 'Pas encore disponible ici : la connexion avec Google s’active une seule fois, par la personne qui gère EDIVID (une quinzaine de minutes dans un navigateur, sans rien installer). Ensuite, chacun se connecte en un clic.')),
+      h('button', { class: 'btn primaire', style: { marginTop: '12px' }, onclick: () => {
+        const a = document.getElementById('activation-google');
+        if (a) { a.open = true; a.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      } }, icone('engrenage'), 'Activer la connexion Google'));
+  } else {
+    if (moi) {
+      carte.append(h('div', { class: 'compte-connecte' },
+        h('span', { class: 'avatar grand' }, (moi.nom || moi.email).trim()[0]?.toUpperCase() || '?'),
+        h('div', { style: { minWidth: 0 } }, h('b', {}, moi.nom || moi.email), h('div', { class: 'tres-petit muet' }, moi.email), pastilles(moi))));
+    } else {
+      carte.append(avantages);
+    }
+    carte.append(
+      h('a', { class: 'btn bouton-google grand', href: '/api/google/connexion?mode=liaison', style: { marginTop: '14px' } }, icone('google'),
+        moi ? 'Relier un autre compte Google' : 'Se connecter avec Google'),
+      h('p', { class: 'tres-petit muet' }, 'Google vous demande d’autoriser EDIVID à utiliser votre Drive et à publier sur YouTube : cochez les deux. Si un écran « Google n’a pas validé cette application » apparaît, cliquez « Continuer » (ou « Paramètres avancés », puis « Accéder à EDIVID »).'),
+      comptes.length ? h('details', { style: { marginTop: '10px' }, open: comptes.length > 0 && !moi },
+        h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, `Comptes reliés à cet EDIVID (${comptes.length})`),
+        comptes.map(ligneCompte)) : null);
+  }
+  return [carte, carteActivationGoogle(P)];
+}
+
+/** Activation de la connexion Google : pour la personne qui gère EDIVID, une seule fois. Chaque étape ouvre
+ *  la bonne page de la console et donne les valeurs à copier ; le fichier téléchargé se dépose ici. */
+function carteActivationGoogle(P) {
   const g = P.google;
   const https = (P.url_publique || '').startsWith('https://');
   const retour = `${(P.url_publique || '').replace(/\/$/, '')}/api/google/retour`;
@@ -1979,58 +2193,60 @@ function sectionGoogle(P) {
     el.addEventListener('input', () => { g[cle] = el.value; });
     return el;
   };
-  const comptes = P.comptes || [];
-  return h('div', { class: 'carte carte-corps', style: { marginTop: '16px' } },
-    h('h2', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, icone('google'), 'Connexion avec Google'),
-    h('p', { class: 'petit muet' }, 'Les appareils du tailnet entrent sans code ni compte. Relier un compte Google sert à son Drive (les vidéos déposées depuis son iPhone sont montées et lui reviennent) et à la publication sur YouTube.'),
-    g.configure
-      ? h('div', {},
-          comptes.length ? comptes.map((c) => h('div', { class: 'incrustation' },
-            h('div', { style: { minWidth: 0 } },
-              h('b', { class: 'petit' }, c.nom || c.email), h('div', { class: 'tres-petit muet' }, c.email),
-              h('div', { class: 'tres-petit', style: { marginTop: '4px' } }, c.distant ? h('span', { class: 'pastille ok' }, 'Drive relié') : h('span', { class: 'pastille alerte' }, 'Drive non relié'))),
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-              c.distant ? h('label', { class: 'bascule', title: 'Surveiller le dossier d’entrée de ce Drive' },
-                h('input', { type: 'checkbox', checked: c.veille, onchange: async (e) => {
-                  try { await api('POST', '/api/comptes', { email: c.email, veille: e.target.checked }); toast(e.target.checked ? 'Veille de ce Drive activée.' : 'Veille de ce Drive arrêtée.', 'ok'); }
-                  catch (err) { toast(err.message, 'erreur'); e.target.checked = !e.target.checked; }
-                } }), h('span', {}, 'Veille')) : null,
-              h('button', { class: 'btn petit fantome danger', onclick: async () => {
-                if (!(await confirmer('Retirer ce compte ?', `${c.email} ne pourra plus se connecter et son Drive sera délié.`, 'Retirer'))) return;
-                await api('DELETE', `/api/comptes/${encodeURIComponent(c.email)}`);
-                afficherParametres();
-              } }, 'Retirer'))))
-            : h('p', { class: 'petit muet' }, 'Aucun compte autorisé pour l’instant.'),
-          h('a', { class: 'btn bouton-google', href: '/api/google/connexion?mode=liaison', style: { marginTop: '10px' } }, icone('google'), 'Autoriser et relier un compte Google'),
-          h('p', { class: 'tres-petit muet' }, 'Une seule fois par compte Google, depuis n’importe quel appareil : la personne clique ce bouton et accepte chez Google.'))
-      : h('div', { class: 'aide', style: { background: 'var(--alerte-doux)' } }, icone('alerte'), h('span', {}, 'Pas encore configurée : suivez la mise en place ci-dessous (une seule fois).')),
-    h('details', { style: { marginTop: '14px' }, open: !g.configure },
-      h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, 'Mise en place (une seule fois)'),
-      h('div', { class: 'guide-liste' },
-        [['Adresse en HTTPS', https
-          ? h('span', { class: 'petit muet' }, `Déjà en place : ${P.url_publique}.`)
-          : h('div', {},
-            h('span', { class: 'petit muet' }, 'Google n’accepte qu’une adresse en HTTPS. Dans la console Tailscale (DNS), activez « HTTPS Certificates », puis sur azoth :'),
-            blocCommande('sudo tailscale serve --bg 8030'),
-            h('span', { class: 'petit muet' }, 'Mettez ensuite l’adresse https://… dans « Lien des courriels » plus bas.'),
-            h('div', { class: 'tres-petit', style: { color: 'var(--alerte)', marginTop: '4px' } }, `Adresse actuelle : ${P.url_publique} — elle doit commencer par https://`))],
-        ['Créer le projet et activer les API', h('span', { class: 'petit muet' },
-          'Sur console.cloud.google.com, avec le compte Google qui gérera l’application : nouveau projet « EDIVID ». Puis API et services → Bibliothèque : activez « Google Drive API » et « YouTube Data API v3 ».')],
-        ['Écran de consentement', h('span', { class: 'petit muet' },
-          'Google Auth Platform (anciennement « Écran de consentement OAuth ») : type Externe, nom EDIVID, votre adresse de contact. Accès aux données : ajoutez les champs d’application …/auth/drive, …/auth/youtube.upload, openid, email et profile. Audience : ajoutez en utilisateurs test chaque compte Google qui se reliera.')],
-        ['Créer l’identifiant', h('div', {}, h('span', { class: 'petit muet' }, 'Clients → Créer un client → type « Application Web ». URI de redirection autorisé :'), blocCommande(retour))],
-        ['Coller l’identifiant ici', h('div', {},
-          champ('ID client', entreeG('client_id', { placeholder: '…apps.googleusercontent.com' })),
-          champ('Code secret du client', entreeG('client_secret', { type: 'password', autocomplete: 'new-password', placeholder: g.secret_defini ? '•••••••• (enregistré — laissez vide pour le garder)' : '' })),
-          h('button', { class: 'btn primaire', style: { marginTop: '10px' }, onclick: async () => {
-            try { await api('POST', '/api/parametres', { google: { client_id: g.client_id, client_secret: g.client_secret } }); toast('Identifiant Google enregistré.', 'ok'); afficherParametres(); }
-            catch (e) { toast(e.message, 'erreur'); }
-          } }, 'Enregistrer'))],
-        ['Relier, puis passer en production', h('span', { class: 'petit muet' },
-          'Cliquez « Autoriser et relier un compte Google » (plus haut) pour chaque compte, et acceptez Drive et YouTube. Une fois l’essai réussi, dans Audience, publiez l’application (« En production ») : sinon Google coupe la liaison au bout de 7 jours. Google affichera « application non validée » : il suffit de continuer.')],
-        ['Lever le verrou YouTube', h('span', { class: 'petit muet' },
-          'Tant que l’application n’a pas passé l’audit de l’API YouTube, Google garde en privé les vidéos envoyées par EDIVID. La demande se fait par le formulaire « YouTube API Services – Audit and Quota Extension ». Rien n’assure qu’une vidéo déjà verrouillée soit libérée ensuite : en attendant, téléchargez l’export YouTube et envoyez-le à la main depuis YouTube Studio.')],
-        ].map(([t, x], i) => h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, t), x))))));
+  const fichier = h('input', { type: 'file', accept: '.json,application/json', class: 'cache',
+    onchange: (e) => { if (e.target.files[0]) deposerIdentifiantGoogle(e.target.files[0], retour); } });
+  const depot = h('div', { class: 'depot', tabindex: '0', role: 'button', style: { marginTop: '8px', padding: '18px' }, onclick: () => fichier.click(),
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fichier.click(); } },
+    ondragover: (e) => { e.preventDefault(); depot.classList.add('survol'); },
+    ondragleave: () => depot.classList.remove('survol'),
+    ondrop: (e) => { e.preventDefault(); depot.classList.remove('survol'); if (e.dataTransfer.files[0]) deposerIdentifiantGoogle(e.dataTransfer.files[0], retour); } },
+  icone('televerser'), h('strong', {}, 'Déposez ici le fichier téléchargé'), h('span', { class: 'petit' }, 'client_secret_….json — ou cliquez pour le choisir'), fichier);
+  const etapes = [
+    !https ? ['Ouvrir EDIVID en HTTPS', h('div', {},
+      h('span', { class: 'petit muet' }, 'Google n’accepte qu’une adresse en HTTPS. Dans la console Tailscale (DNS), activez « HTTPS Certificates », puis sur azoth :'),
+      blocCommande('sudo tailscale serve --bg 8030'),
+      h('div', { class: 'tres-petit', style: { color: 'var(--alerte)', marginTop: '4px' } }, `Adresse actuelle : ${P.url_publique} — elle doit commencer par https:// (« Lien des courriels », plus bas).`))] : null,
+    ['Créer le projet', h('div', {},
+      h('span', { class: 'petit muet' }, 'Connectez-vous avec le compte Google qui gérera l’application, puis créez un projet nommé :'),
+      blocCommande('EDIVID', 'Nom copié.'), h('div', { style: { marginTop: '8px' } }, lienConsole('/projectcreate', 'Créer le projet')))],
+    ['Activer Drive et YouTube', h('div', {},
+      h('span', { class: 'petit muet' }, 'Vérifiez que le projet EDIVID est choisi en haut de la page, puis cliquez « Activer ».'),
+      h('div', { style: { marginTop: '8px' } }, lienConsole('/flows/enableapi?apiid=drive.googleapis.com,youtube.googleapis.com', 'Activer les deux API')))],
+    ['Présenter l’application', h('div', {},
+      h('span', { class: 'petit muet' }, '« Commencer » : nom de l’application EDIVID, votre adresse d’assistance, audience « Externe », votre adresse de contact, puis « Créer ».'),
+      h('div', { style: { marginTop: '8px' } }, lienConsole('/auth/branding', 'Ouvrir « Branding »')))],
+    ['Autoriser Drive et YouTube', h('div', {},
+      h('span', { class: 'petit muet' }, '« Ajouter ou supprimer des champs d’application », puis en bas « Ajouter manuellement » : collez ces deux champs, « Ajouter au tableau », « Mettre à jour », puis « Enregistrer ».'),
+      blocCommande(PORTEES_GOOGLE, 'Champs copiés.'), h('div', { style: { marginTop: '8px' } }, lienConsole('/auth/scopes', 'Ouvrir « Accès aux données »')))],
+    ['Ajouter les personnes', h('div', {},
+      h('span', { class: 'petit muet' }, '« Utilisateurs test » → « Add users » : l’adresse Gmail de chaque personne qui se connectera (la vôtre d’abord).'),
+      h('div', { style: { marginTop: '8px' } }, lienConsole('/auth/audience', 'Ouvrir « Audience »')))],
+    ['Créer l’identifiant', h('div', {},
+      h('span', { class: 'petit muet' }, '« Créer un client » : type « Application Web », nom EDIVID ; sous « URI de redirection autorisés », « Ajouter un URI » et collez :'),
+      blocCommande(retour, 'Adresse copiée.'),
+      h('span', { class: 'petit muet' }, '« Créer », puis dans la fenêtre qui s’ouvre : « Télécharger le fichier JSON ».'),
+      h('div', { style: { marginTop: '8px' } }, lienConsole('/auth/clients/create', 'Créer le client')))],
+    ['Déposer le fichier', h('div', {}, depot,
+      h('details', { style: { marginTop: '8px' } }, h('summary', { class: 'petit', style: { cursor: 'pointer' } }, 'Ou saisir l’identifiant à la main'),
+        champ('ID client', entreeG('client_id', { placeholder: '…apps.googleusercontent.com' })),
+        champ('Code secret du client', entreeG('client_secret', { type: 'password', autocomplete: 'new-password', placeholder: g.secret_defini ? '•••••••• (enregistré — laissez vide pour le garder)' : '' })),
+        h('button', { class: 'btn primaire', style: { marginTop: '10px' }, onclick: async () => {
+          try { await api('POST', '/api/parametres', { google: { client_id: g.client_id, client_secret: g.client_secret } }); toast('Identifiant Google enregistré.', 'ok'); afficherParametres(); }
+          catch (e) { toast(e.message, 'erreur'); }
+        } }, 'Enregistrer')))],
+    ['Essayer, puis passer en production', h('div', {},
+      h('span', { class: 'petit muet' }, 'Cliquez « Se connecter avec Google » dans la carte du dessus. Une fois l’essai réussi, dans « Audience », « Publier l’application » : sinon Google coupe la liaison au bout de 7 jours.'),
+      h('div', { style: { marginTop: '8px' } }, lienConsole('/auth/audience', 'Publier l’application')))],
+    ['Lever le verrou YouTube (facultatif)', h('span', { class: 'petit muet' },
+      'Tant que l’application n’a pas passé l’audit de l’API YouTube, Google garde en privé les vidéos envoyées par EDIVID. La demande se fait par le formulaire « YouTube API Services – Audit and Quota Extension ». Rien n’assure qu’une vidéo déjà verrouillée soit libérée ensuite : en attendant, téléchargez l’export YouTube et envoyez-le à la main depuis YouTube Studio.')],
+  ].filter(Boolean);
+  return h('details', { class: 'carte carte-corps', id: 'activation-google', style: { marginTop: '16px' } },
+    h('summary', { style: { cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' } }, icone('engrenage'),
+      h('b', {}, 'Activer la connexion Google'),
+      h('span', { class: 'tres-petit muet' }, g.configure ? '— déjà activée' : '— une seule fois, par la personne qui gère EDIVID')),
+    h('p', { class: 'petit muet' }, 'Google exige que chaque service qui accède au Drive ou à YouTube soit déclaré dans sa console. Chaque étape ouvre la bonne page dans un nouvel onglet ; revenez ici entre deux.'),
+    h('div', { class: 'guide-liste' }, etapes.map(([titre, x], i) =>
+      h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, titre), x)))));
 }
 
 // ------------------------------------------------------------------ transcription modifiable
@@ -2086,6 +2302,9 @@ function zoneRemplacer() {
 let catalogueLooks = null;
 let minuteriePostProd = null;
 
+/** Valeur signée pour un résumé : « +6 », « -3 », « 0 ». */
+function signe(v) { return `${v > 0 ? '+' : ''}${v}`; }
+
 function dessinerPostProd(corps) {
   const p = E.vue.projet;
   const pp = E.postprod = { ...p.postprod };
@@ -2120,7 +2339,8 @@ function dessinerPostProd(corps) {
   corps.append(
     h('div', { class: 'aide', style: { marginBottom: '14px' } }, icone('info'),
       h('span', {}, 'Le traitement de l’image sur toute la vidéo : couleur, teint, lumière, grain. Choisissez un look, ajustez, puis comparez avant/après sur l’image affichée. Les textes et sous-titres restent nets.')),
-    h('div', { class: 'section-reglages' }, h('h3', {}, 'Looks'),
+    blocOutil('pp_looks', { icone: 'etincelles', titre: 'Looks', famille: 'image',
+      resume: pp.look ? (catalogueLooks.looks.find((l) => l.cle === pp.look)?.nom || pp.look) : 'Réglage sur mesure' },
       h('div', { class: 'grille-looks' }, catalogueLooks.looks.map((l) => h('button', {
         class: `look ${pp.look === l.cle ? 'choisi' : ''}`, title: l.description,
         onclick: async () => {
@@ -2135,21 +2355,24 @@ function dessinerPostProd(corps) {
           } catch (e) { toast(e.message, 'erreur'); }
         },
       }, h('b', {}, l.nom), h('span', {}, l.description))))),
-    h('div', { class: 'section-reglages' }, h('h3', {}, 'Avant / après'),
+    blocOutil('pp_comparer', { icone: 'image', titre: 'Avant / après', famille: 'recettes', resume: 'Comparer sur l’image affichée dans le lecteur' },
       h('div', { class: 'reglage-aide' }, 'Sur l’image d’origine, à l’instant affiché dans le lecteur (mettez en pause là où le visage est bien visible).'),
       h('button', { class: 'btn petit doux', style: { marginTop: '8px' }, onclick: () => { E.comparaison = true; comparer(); } }, icone('image'), 'Comparer à l’instant affiché'),
       E.noeuds.comparaison),
-    h('div', { class: 'section-reglages' }, h('h3', {}, 'Couleur'),
+    blocOutil('pp_couleur', { icone: 'palette', titre: 'Couleur', famille: 'cadre',
+      resume: [catalogueLooks.couleurs.find((c) => c.cle === pp.couleur)?.nom, `expo ${signe(pp.exposition)}`, `contraste ${signe(pp.contraste)}`, `temp. ${signe(pp.temperature)}`].join(' · ') },
       h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Colorimétrie'), h('div', { class: 'reglage-aide' }, 'L’ambiance générale des couleurs.'), couleur),
       curseur('exposition', 'Exposition', 'Plus clair ou plus sombre.', -100, 100),
       curseur('contraste', 'Contraste', null, -100, 100),
       curseur('saturation', 'Saturation', 'Intensité des couleurs.', -100, 100),
       curseur('temperature', 'Température', 'Vers le bleu (froid) ou l’ambre (chaud).', -100, 100)),
-    h('div', { class: 'section-reglages' }, h('h3', {}, 'Peau et lumière'),
+    blocOutil('pp_peau', { icone: 'peau', titre: 'Peau et lumière', famille: 'montage',
+      resume: `lissage ${pp.lissage} · glow ${pp.diffusion} · netteté ${pp.nettete}` },
       curseur('lissage', 'Lissage du teint', 'Adoucit la peau et gomme les petites imperfections, sans flouter les yeux ni les contours.', 0, 100),
       curseur('diffusion', 'Diffusion (glow)', 'Un halo doux dans les lumières, comme un filtre « Pro-Mist » : peau lumineuse, image rêveuse.', 0, 100),
       curseur('nettete', 'Netteté', 'Relève les détails (cheveux, regard). À doser avec le lissage.', 0, 100)),
-    h('div', { class: 'section-reglages' }, h('h3', {}, 'Texture et cadre'),
+    blocOutil('pp_texture', { icone: 'grain', titre: 'Texture et cadre', famille: 'son',
+      resume: `grain ${pp.grain} · vignette ${pp.vignette}${pp.bandes ? ' · bandes cinéma' : ''}` },
       curseur('grain', 'Grain', 'Une texture de pellicule fine et vivante.', 0, 100),
       curseur('vignette', 'Vignette', 'Assombrit doucement les bords pour guider le regard au centre.', 0, 100),
       h('div', { class: 'reglage' }, h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, 'Bandes cinéma'),

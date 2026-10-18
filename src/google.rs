@@ -151,12 +151,21 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
         relier_rclone(&distant, &p.google.client_id, &p.google.client_secret, &jeton_rclone).await?;
         drive_relie = true;
     }
+    // La chaîne YouTube, si l'accès a été accordé : la personne voit où partiront ses vidéos.
+    let chaine = if jetons["scope"].as_str().unwrap_or("").contains("youtube") {
+        crate::youtube::nom_chaine(etat, acces_jeton).await.unwrap_or_default()
+    } else {
+        String::new()
+    };
     // Le compte est autorisé (liaison) ou mis à jour (connexion).
     let nouveau = {
         let mut params = etat.parametres.write().await;
         match params.comptes.iter_mut().find(|c| c.email.eq_ignore_ascii_case(&email)) {
             Some(c) => {
                 c.nom = nom.clone();
+                if !chaine.is_empty() {
+                    c.chaine = chaine.clone();
+                }
                 if drive_relie {
                     c.distant = format!("{distant}:");
                 }
@@ -166,6 +175,7 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
                 nom: nom.clone(),
                 distant: if drive_relie { format!("{distant}:") } else { String::new() },
                 veille: drive_relie,
+                chaine: chaine.clone(),
             }),
         }
         parametres::enregistrer(&etat.cfg.donnees, &params)?;

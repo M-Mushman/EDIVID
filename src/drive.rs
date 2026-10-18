@@ -231,7 +231,9 @@ fn nom_de_groupe(groupe: &str) -> String {
 
 async fn prendre(etat: &EtatPartage, d: &Drive, compte: &str, groupe: &str, fichiers: &[Fichier], registre: &mut Registre)
                  -> Result<()> {
-    let modele = if d.modele.is_empty() { None } else { etat.projet(&d.modele).await.ok() };
+    // Le modèle : un jeu de réglages (« jeu:<id> ») ou un projet dont on reprend aussi les consignes.
+    let jeu = d.modele.strip_prefix("jeu:").and_then(|j| crate::jeux::trouver(&etat.cfg.donnees, j));
+    let modele = if d.modele.is_empty() || d.modele.starts_with("jeu:") { None } else { etat.projet(&d.modele).await.ok() };
     let id = nouvel_id();
     let mut p = Projet {
         id: id.clone(),
@@ -239,7 +241,11 @@ async fn prendre(etat: &EtatPartage, d: &Drive, compte: &str, groupe: &str, fich
         cree: maintenant(),
         rushs: vec![],
         medias: vec![],
-        reglages: modele.as_ref().map(|m| m.reglages.clone()).unwrap_or_else(reglages::defauts),
+        reglages: jeu.as_ref().map(|j| {
+            let mut r = j.reglages.clone();
+            reglages::completer(&mut r);
+            r
+        }).or_else(|| modele.as_ref().map(|m| m.reglages.clone())).unwrap_or_else(reglages::defauts),
         montage: None,
         incrustations: vec![],
         discussion: vec![],
@@ -251,7 +257,7 @@ async fn prendre(etat: &EtatPartage, d: &Drive, compte: &str, groupe: &str, fich
         depot_drive: None,
         origine: "Google Drive".into(),
         compte: compte.to_string(),
-        postprod: modele.as_ref().map(|m| m.postprod.clone()).unwrap_or_default(),
+        postprod: jeu.as_ref().map(|j| j.postprod.clone()).or_else(|| modele.as_ref().map(|m| m.postprod.clone())).unwrap_or_default(),
         corrections: Default::default(),
         exports: vec![],
     };

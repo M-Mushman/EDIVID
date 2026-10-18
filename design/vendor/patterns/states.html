@@ -1,0 +1,23 @@
+<!-- Patron « états » (R-08) : chargement, vide, erreur, squelette — pour toute liste et tout formulaire. -->
+<div class="kd-stack">
+  <p class="kd-eyebrow">Patron · états</p>
+  <div class="kd-state kd-state--loading" role="status" aria-live="polite">
+    <div class="kd-spinner" aria-hidden="true"></div>
+    <p class="kd-state__title">Chargement des projets…</p>
+  </div>
+  <div class="kd-state kd-state--empty">
+    <p class="kd-state__title">Aucun projet pour l'instant</p>
+    <p>Créez votre premier projet pour commencer à écrire.</p>
+    <button class="kd-btn" type="button">Nouveau projet</button>
+  </div>
+  <div class="kd-state kd-state--error" role="alert">
+    <p class="kd-state__title">Le serveur n'a pas répondu</p>
+    <p>Vos données locales sont intactes. Réessayez, ou continuez hors ligne.</p>
+    <div class="kd-actions"><button class="kd-btn kd-btn--outline" type="button">Réessayer</button></div>
+  </div>
+  <div class="kd-card" aria-busy="true" aria-label="Contenu en cours de chargement">
+    <span class="kd-skeleton" style="width: 40%"></span>
+    <span class="kd-skeleton" style="width: 90%; margin-top: var(--space-3)"></span>
+    <span class="kd-skeleton" style="width: 70%; margin-top: var(--space-2)"></span>
+  </div>
+</div>

@@ -1,0 +1,23 @@
+<!-- Patron « formulaire » : champ + aide + erreur, case à cocher, actions alignées à droite. -->
+<form class="kd-form kd-card" action="#" method="post" novalidate>
+  <p class="kd-eyebrow">Patron · formulaire</p>
+  <div class="kd-field">
+    <label class="kd-label" for="kd-email">Adresse e-mail</label>
+    <input class="kd-input" id="kd-email" name="email" type="email" placeholder="vous@exemple.ch" autocomplete="email" aria-describedby="kd-email-help">
+    <p class="kd-help" id="kd-email-help">Sert à la connexion et aux reçus. Jamais transmise.</p>
+  </div>
+  <div class="kd-field">
+    <label class="kd-label" for="kd-pass">Mot de passe</label>
+    <input class="kd-input" id="kd-pass" name="password" type="password" aria-invalid="true" aria-describedby="kd-pass-err">
+    <p class="kd-error" id="kd-pass-err" role="alert">12 caractères minimum.</p>
+  </div>
+  <div class="kd-field">
+    <label class="kd-label" for="kd-note">Message <span class="kd-optional">(facultatif)</span></label>
+    <textarea class="kd-textarea" id="kd-note" name="note" placeholder="Votre message…"></textarea>
+  </div>
+  <label class="kd-check"><input type="checkbox" name="cgu"> J'accepte les conditions d'utilisation.</label>
+  <div class="kd-actions">
+    <button class="kd-btn kd-btn--ghost" type="reset">Annuler</button>
+    <button class="kd-btn" type="submit">Créer le compte</button>
+  </div>
+</form>
