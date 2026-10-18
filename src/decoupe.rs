@@ -22,6 +22,13 @@ const DUREE_MIN_PLAN: f64 = 0.3;
 /// reconstruction IA invente les traits : yeux redessinés, visage changé (mesuré le 2026-10-18 sur une
 /// source de 576 px : propre jusqu'à ×3, yeux abîmés dès ×3,8).
 pub const AGRANDISSEMENT_MAX: f64 = 3.0;
+/// Écart minimal entre deux cadrages pour qu'un changement se lise comme voulu : en dessous, l'œil le prend
+/// pour un sursaut de caméra.
+pub const PAS_MIN: f64 = 1.2;
+/// Durée minimale d'un cadrage avant d'en changer sur une coupe franche (secondes).
+const MAINTIEN_MIN: f64 = 2.5;
+/// Le visage peut s'écarter de l'ancrage du cadre de 10 % de sa taille avant qu'on recadre.
+const TOLERANCE_ANCRAGE: f64 = 0.10;
 
 pub fn normaliser(mot: &str) -> String {
     let mut s = String::new();
@@ -172,6 +179,10 @@ pub struct Plan {
     /// Largeur du visage à l'écran (part de la largeur de l'image) au début et à la fin du plan ; 0 sans visage.
     pub visage_debut: f64,
     pub visage_fin: f64,
+    /// Coupe à l'intérieur d'une phrase en rafale : un cran plus serré que le reste de la phrase.
+    pub punch: bool,
+    /// Phrase forte : le cadre avance d'un cran pendant le plan.
+    pub pousse: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -329,83 +340,150 @@ fn visage_median(a: &Analyse, t0: f64, t1: f64, yeux: bool) -> Option<[f64; 4]> 
     Some(res)
 }
 
-/// Cadre de sortie dans la partie utile de la source (sous la bande rognée en haut), centré sur (cx, cy).
-fn cadre_dans(source: (f64, f64), haut: f64, base: (f64, f64), z: f64, cx: f64, cy: f64) -> Rect {
-    let (w, h) = (base.0 / z, base.1 / z);
-    let x = (cx - w / 2.0).clamp(0.0, (source.0 - w).max(0.0));
-    let y = (cy - h / 2.0).clamp(haut, (source.1 - h).max(haut));
-    Rect { x, y, w, h }
+/// Où placer le visage dans le cadre (part de la hauteur, depuis le haut) : au tiers haut en plan large,
+/// un peu plus bas en gros plan.
+fn hauteur_visage(z: f64) -> f64 {
+    0.35 + 0.12 * (z.ln() / 3.3f64.ln()).clamp(0.0, 1.0)
 }
 
-struct Cadrage {
-    zone: Rect,
-    z_fin: f64,
-    centre_serre: (f64, f64),
-    agrandissement: f64,
-    visage_debut: f64,
-    visage_fin: f64,
+/// Grille de cadrage d'un rush : quelques zooms fixes, du plus large (l'image entière, sous la bande
+/// rognée) au plus serré que la source supporte sans perte, séparés d'un pas franc.
+struct Grille {
+    source: (f64, f64),
+    haut: f64,
+    base: (f64, f64),
+    niveaux: Vec<f64>,
 }
 
-/// `rognage` : part de la hauteur retirée en haut de la source (logo, filigrane).
-/// `borne` : tailles du visage à l'écran permises au début du plan (écart avec le plan précédent).
-#[allow(clippy::too_many_arguments)]
-fn cadrer(a: &Analyse, t0: f64, t1: f64, cadre: &str, z_mul_fin: f64, z_mul: f64, zooms: &str,
-          sortie: (u32, u32), z_transition: f64, rognage: f64, borne: Option<(f64, f64)>) -> Cadrage {
-    let source = (a.largeur as f64, a.hauteur as f64);
-    let haut = (source.1 * rognage.clamp(0.0, 0.3)).round();
-    let utile = (source.0, source.1 - haut);
-    let aspect = sortie.0 as f64 / sortie.1 as f64;
-    let base = if utile.0 / utile.1 > aspect { (utile.1 * aspect, utile.1) } else { (utile.0, utile.0 / aspect) };
-    let intensite = match zooms {
+impl Grille {
+    fn nouvelle(a: &Analyse, sortie: (u32, u32), rognage: f64, pas: f64) -> Grille {
+        let source = (a.largeur as f64, a.hauteur as f64);
+        let haut = (source.1 * rognage.clamp(0.0, 0.3)).round();
+        let utile = (source.0, source.1 - haut);
+        let aspect = sortie.0 as f64 / sortie.1 as f64;
+        let base = if utile.0 / utile.1 > aspect { (utile.1 * aspect, utile.1) } else { (utile.0, utile.0 / aspect) };
+        let plafond = ZOOM_MAX.min(AGRANDISSEMENT_MAX * base.0 / sortie.0 as f64).max(1.0);
+        // De l'image entière au plafond, en pas égaux : le nombre de pas qui approche le mieux le pas voulu,
+        // sans jamais descendre sous PAS_MIN (exemple : plafond ×1,47, pas voulu 30 % → deux pas de 21 %).
+        let etendue = plafond.ln();
+        let pas_retenu = (1..=12)
+            .map(|n| (etendue / n as f64).exp())
+            .take_while(|s| *s >= PAS_MIN - 1e-9)
+            .min_by(|a, b| (a.ln() - pas.ln()).abs().partial_cmp(&(b.ln() - pas.ln()).abs()).unwrap());
+        let niveaux = match pas_retenu {
+            Some(s) => {
+                let n = (etendue / s.ln()).round() as i32;
+                (0..=n).map(|k| s.powi(k)).collect()
+            }
+            None => vec![1.0],
+        };
+        Grille { source, haut, base, niveaux }
+    }
+
+    fn plus_serre(&self) -> usize {
+        self.niveaux.len() - 1
+    }
+
+    /// Le cran le plus proche d'un zoom voulu.
+    fn cran(&self, z: f64) -> usize {
+        let ecart = |i: usize| (self.niveaux[i].ln() - z.max(1.0).ln()).abs();
+        (0..self.niveaux.len()).min_by(|&i, &j| ecart(i).partial_cmp(&ecart(j)).unwrap()).unwrap_or(0)
+    }
+
+    /// Cadre au zoom z autour de l'ancrage (centre du visage), borné à la partie utile de la source.
+    fn cadre(&self, z: f64, ancre: (f64, f64)) -> Rect {
+        let (w, h) = (self.base.0 / z, self.base.1 / z);
+        let cy = ancre.1 + (0.5 - hauteur_visage(z)) * h;
+        let x = (ancre.0 - w / 2.0).clamp(0.0, (self.source.0 - w).max(0.0));
+        let y = (cy - h / 2.0).clamp(self.haut, (self.source.1 - h).max(self.haut));
+        Rect { x, y, w, h }
+    }
+}
+
+/// Visage d'un plan (centre et largeur, en pixels de la source), mesuré sur le plan élargi d'une seconde
+/// et demie de chaque côté, pour ne pas suivre le tremblement du repérage.
+fn visage_plan(a: &Analyse, t0: f64, t1: f64) -> Option<(f64, f64, f64)> {
+    visage_median(a, t0 - 1.5, t1 + 1.5, false).map(|b| {
+        let (l, h) = (a.largeur as f64, a.hauteur as f64);
+        (((b[0] + b[2]) / 2.0) * l, ((b[1] + b[3]) / 2.0) * h, (b[2] - b[0]) * l)
+    })
+}
+
+/// Cadre tous les plans, dans l'ordre du montage. Un cadrage tenu ne bouge pas d'un pixel. D'une coupe
+/// franche à la suivante, on garde le même cadre ou on change d'un cran entier de la grille, jamais d'un
+/// micro-recadrage, et pas avant d'avoir tenu le cadrage MAINTIEN_MIN. Le cadre ne se recentre sur le visage
+/// que s'il s'est vraiment déplacé, et alors avec un changement de cran. Une transition remet tout à plat.
+fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, r: &Reglages, finale: (u32, u32), sortie: (u32, u32)) {
+    let pas = (1.0 + nombre(r, "ecart_cadrage") / 100.0).max(PAS_MIN);
+    let rognage = nombre(r, "rognage_haut") / 100.0;
+    let intensite = match texte(r, "zooms").as_str() {
         "doux" => 0.8,
         "fort" => 1.2,
         _ => 1.0,
     };
-    let visage = visage_median(a, t0, t1, false);
-    let (fx, fy, fw) = match visage {
-        Some(b) => (((b[0] + b[2]) / 2.0) * source.0, ((b[1] + b[3]) / 2.0) * source.1, (b[2] - b[0]) * source.0),
-        None => (source.0 / 2.0, source.1 / 2.0, 0.0),
-    };
-    let (cible, hauteur) = match cadre {
-        "moyen" => (0.17, 0.36),
-        "visage" => (0.30, 0.42),
-        "yeux" => (0.46, 0.47),
-        _ => (0.0, 0.5),
-    };
-    // Plafond : le zoom maximal, et l'agrandissement que la source supporte sans perdre en qualité.
-    let plafond = ZOOM_MAX.min(AGRANDISSEMENT_MAX * base.0 / sortie.0 as f64).max(1.0);
-    let part = if fw > 0.0 { fw / base.0 } else { 0.0 };
-    let mut z = if cible > 0.0 && part > 0.0 { (cible * intensite / part).clamp(1.0, plafond) } else { 1.0 };
-    z = (z * z_mul).min(plafond);
-    // Écart avec le plan précédent : la taille du visage à l'écran reste dans la borne.
-    if let (Some((bas, haut_borne)), true) = (borne, part > 0.0) {
-        let mini = (bas / part).clamp(1.0, plafond);
-        let maxi = (haut_borne / part).clamp(mini, plafond);
-        z = z.clamp(mini, maxi);
-    }
-    let (mut cx, mut cy) = (fx, fy);
-    if cadre == "yeux" {
-        if let Some(b) = visage_median(a, t0, t1, true) {
-            cx = (b[0] + b[2]) / 2.0 * source.0;
-            cy = (b[1] + b[3]) / 2.0 * source.1;
+    let mut grilles: HashMap<String, Grille> = HashMap::new();
+    // Cadrage en cours : rush, cran atteint à la fin du plan précédent, ancrage, durée déjà tenue.
+    let mut courant: Option<(String, usize, (f64, f64), f64)> = None;
+    for pl in plans.iter_mut() {
+        let Some(a) = analyses.get(pl.rush.as_str()) else { continue };
+        let g = grilles.entry(pl.rush.clone()).or_insert_with(|| Grille::nouvelle(a, finale, rognage, pas));
+        let serre_max = g.plus_serre();
+        let (fx, fy, fw) = visage_plan(a, pl.t0, pl.t0 + pl.duree).unwrap_or((g.source.0 / 2.0, g.source.1 / 2.0, 0.0));
+        let part = if fw > 0.0 { fw / g.base.0 } else { 0.0 };
+        let cible = match pl.cadre.as_str() {
+            "moyen" => 0.17,
+            "visage" => 0.30,
+            "yeux" => 0.46,
+            _ => 0.0,
+        };
+        let mut voulu = if cible > 0.0 && part > 0.0 { g.cran(cible * intensite / part) } else { 0 };
+        if pl.punch {
+            voulu = if voulu < serre_max { voulu + 1 } else { voulu.saturating_sub(1) };
         }
+        let suite = courant.as_ref().filter(|c| c.0 == pl.rush && pl.transition.is_none());
+        let (cran, ancre) = match suite {
+            Some((_, prec, ancre, tenu)) => {
+                let prec = *prec;
+                // Un cran à la fois, et pas avant d'avoir tenu le cadrage.
+                let mut n = match voulu.cmp(&prec) {
+                    std::cmp::Ordering::Greater => prec + 1,
+                    std::cmp::Ordering::Less => prec - 1,
+                    std::cmp::Ordering::Equal => prec,
+                };
+                if n != prec && *tenu < MAINTIEN_MIN {
+                    n = prec;
+                }
+                let z = g.niveaux[n];
+                let deplace = (fx - ancre.0).abs() > TOLERANCE_ANCRAGE * g.base.0 / z
+                    || (fy - ancre.1).abs() > TOLERANCE_ANCRAGE * g.base.1 / z;
+                if deplace && n == prec && serre_max > 0 {
+                    // Le visage s'est déplacé : on le recentre, avec un changement de cran franc.
+                    n = if (voulu > prec || prec == 0) && prec < serre_max { prec + 1 } else { prec - 1 };
+                }
+                // Un changement de cran recentre sur le visage ; un cadrage tenu garde son ancrage.
+                (n, if n != prec { (fx, fy) } else { *ancre })
+            }
+            None => (voulu, (fx, fy)),
+        };
+        let fin = if pl.pousse && cran < serre_max { cran + 1 } else { cran };
+        let z_trans = if pl.transition.as_deref() == Some("zoom") { ZOOM_TRANSITION } else { 1.0 };
+        let zone = g.cadre(g.niveaux[cran], ancre);
+        let serre = g.cadre(g.niveaux[fin] * z_trans, ancre);
+        pl.zone = zone;
+        pl.z_fin = g.niveaux[fin] / g.niveaux[cran];
+        pl.centre_serre = (
+            ((serre.x + serre.w / 2.0 - zone.x) / zone.w).clamp(0.0, 1.0),
+            ((serre.y + serre.h / 2.0 - zone.y) / zone.h).clamp(0.0, 1.0),
+        );
+        pl.agrandissement = sortie.0 as f64 / serre.w;
+        pl.visage_debut = g.niveaux[cran] * part;
+        pl.visage_fin = g.niveaux[fin] * part;
+        let tenu = match suite {
+            Some((_, prec, _, t)) if *prec == cran => t + pl.duree,
+            _ => pl.duree,
+        };
+        courant = Some((pl.rush.clone(), fin, ancre, if fin != cran { 0.0 } else { tenu }));
     }
-    if cible > 0.0 {
-        cy += (0.5 - hauteur) * base.1 / z;
-    } else if visage.is_some() {
-        // Plan large : le visage reste au tiers supérieur si la source dépasse le cadre.
-        cy = fy + 0.15 * base.1;
-    }
-    let zone = cadre_dans(source, haut, base, z, cx, cy);
-    let z_fin_abs = (z * z_mul_fin).min(plafond.max(z));
-    let z_max_abs = (z_fin_abs * z_transition).min(ZOOM_MAX * ZOOM_TRANSITION);
-    let serre = cadre_dans(source, haut, base, z_max_abs, cx, cy);
-    let centre_serre = (
-        ((serre.x + serre.w / 2.0 - zone.x) / zone.w).clamp(0.0, 1.0),
-        ((serre.y + serre.h / 2.0 - zone.y) / zone.h).clamp(0.0, 1.0),
-    );
-    Cadrage { zone, z_fin: z_fin_abs / z, centre_serre, agrandissement: sortie.0 as f64 / serre.w,
-              visage_debut: z * part, visage_fin: z_fin_abs * part }
 }
 
 struct Entree<'a> {
@@ -426,11 +504,6 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
     let zooms = texte(r, "zooms");
     let style = texte(r, "transition");
     let nettete = texte(r, "nettete_ia");
-    let rognage = nombre(r, "rognage_haut") / 100.0;
-    // Coefficient de saut permis entre deux plans qui se suivent en coupe franche (1,30 = visage 30 % plus
-    // grand ou plus petit) ; 100 % : pas de lissage.
-    let ecart_max = 1.0 + nombre(r, "ecart_cadrage") / 100.0;
-    let mut visage_prec: Option<f64> = None;
     let rythme_max = match texte(r, "rythme").as_str() {
         "ample" => 0.55,
         "nerveux" => 0.18,
@@ -534,7 +607,9 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
 
     for e in &entrees {
         let ph = e.phrase;
-        let Some(a) = analyses_par_rush.get(ph.rush.as_str()) else { continue };
+        if !analyses_par_rush.contains_key(ph.rush.as_str()) {
+            continue;
+        }
         let son = &sons[ph.rush.as_str()];
         let mut d = e.decision.clone();
         if zooms == "aucun" {
@@ -602,22 +677,8 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
             let t0 = arrondi_image(*s0);
             let duree = arrondi_image(s1 - s0).max(1.0 / IPS);
             let punch = d.regime == "rafale" && k % 2 == 1 && vrai(r, "punch_jumpcut") && zooms != "aucun";
-            let z_mul = if punch { 1.12 } else { 1.0 };
-            let anime = vrai(r, "zoom_anime") && zooms != "aucun";
-            let z_mul_fin = match d.regime.as_str() {
-                "impact" if anime => 1.12,
-                "respiration" if anime => 1.05,
-                _ => 1.0,
-            };
+            let pousse = d.regime == "impact" && vrai(r, "zoom_anime") && zooms != "aucun";
             let trans = if k == 0 { transition.clone() } else { None };
-            let z_trans = if trans.as_deref() == Some("zoom") { ZOOM_TRANSITION } else { 1.0 };
-            // Une transition (fondu, flash…) marque le changement : le cadrage peut alors sauter librement.
-            let borne = match visage_prec {
-                Some(v) if trans.is_none() && ecart_max < 1.999 => Some((v / ecart_max, v * ecart_max)),
-                _ => None,
-            };
-            let c = cadrer(a, t0, t0 + duree, &d.cadre, z_mul_fin, z_mul, &zooms, (largeur, hauteur), z_trans, rognage, borne);
-            visage_prec = (c.visage_fin > 0.0).then_some(c.visage_fin);
             if k == 0 {
                 if let Some(t) = &trans {
                     transitions.push(sortie_t);
@@ -646,7 +707,6 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
                     fort: mots_forts.contains(&normaliser(&m.mot)),
                 });
             }
-            let veut_nettete = !apercu && nettete != "non";
             plans.push(Plan {
                 rush: ph.rush.clone(),
                 phrase: ph.cle.clone(),
@@ -656,18 +716,29 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
                 cadre: d.cadre.clone(),
                 regime: d.regime.clone(),
                 accroche: e.accroche,
-                zone: c.zone,
-                z_fin: c.z_fin,
-                centre_serre: c.centre_serre,
+                // Le cadrage se décide ensuite, sur toute la suite des plans (cadrer_plans).
+                zone: Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 },
+                z_fin: 1.0,
+                centre_serre: (0.5, 0.5),
                 transition: trans,
                 sortie: None,
-                agrandissement: c.agrandissement,
-                nettete: veut_nettete && c.agrandissement > SEUIL_NETTETE,
-                visage_debut: c.visage_debut,
-                visage_fin: c.visage_fin,
+                agrandissement: 1.0,
+                nettete: false,
+                visage_debut: 0.0,
+                visage_fin: 0.0,
+                punch,
+                pousse,
             });
             sortie_t += duree;
         }
+    }
+
+    // Cadrage d'ensemble, sur la grille de la définition finale : l'aperçu montre les mêmes cadres.
+    let finale = dimensions(r, analyses.first().map(|(_, a)| a.as_ref()), false);
+    cadrer_plans(&mut plans, &analyses_par_rush, r, finale, (largeur, hauteur));
+    let veut_nettete = !apercu && nettete != "non";
+    for pl in plans.iter_mut() {
+        pl.nettete = veut_nettete && pl.agrandissement > SEUIL_NETTETE;
     }
 
     // Incrustations, replacées sur le temps de sortie.
@@ -739,26 +810,43 @@ fn arr3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
 }
 
-/// Coefficient de saut de cadrage : à chaque coupe franche, rapport entre la taille du visage à l'écran
-/// avant et après la coupe (1,00 = même cadrage ; 1,50 = visage moitié plus grand ou plus petit).
+/// Cadre à la fin d'un plan (après un zoom qui avance).
+fn cadre_fin(p: &Plan) -> Rect {
+    let (w, h) = (p.zone.w / p.z_fin, p.zone.h / p.z_fin);
+    let (cx, cy) = (p.zone.x + p.centre_serre.0 * p.zone.w, p.zone.y + p.centre_serre.1 * p.zone.h);
+    Rect { x: cx - w / 2.0, y: cy - h / 2.0, w, h }
+}
+
+/// Coefficient de saut de cadrage, à chaque coupe franche : rapport de taille entre le cadre qui finit et
+/// celui qui commence, et déplacement de leur centre. Une coupe est « identique » (même cadre au pixel près),
+/// « franche » (au moins PAS_MIN), ou un « micro-recadrage » (entre les deux : l'œil y voit un sursaut).
 pub fn sauts_cadrage(prog: &Programme) -> Value {
-    let mut sauts: Vec<f64> = prog
-        .plans
-        .windows(2)
-        .filter(|p| p[1].transition.is_none() && p[0].visage_fin > 0.0 && p[1].visage_debut > 0.0)
-        .map(|p| p[0].visage_fin.max(p[1].visage_debut) / p[0].visage_fin.min(p[1].visage_debut))
-        .collect();
-    if sauts.is_empty() {
-        return json!({"coupes": 0});
+    let (mut identiques, mut micro) = (0usize, Vec::new());
+    let mut francs: Vec<f64> = Vec::new();
+    for p in prog.plans.windows(2) {
+        if p[1].transition.is_some() || p[0].rush != p[1].rush {
+            continue;
+        }
+        let (a, b) = (cadre_fin(&p[0]), p[1].zone);
+        let rapport = a.w.max(b.w) / a.w.min(b.w);
+        let decalage = (a.x + a.w / 2.0 - b.x - b.w / 2.0).hypot(a.y + a.h / 2.0 - b.y - b.h / 2.0) / a.w.min(b.w);
+        if rapport < 1.005 && decalage < 0.01 {
+            identiques += 1;
+        } else if rapport >= PAS_MIN - 0.005 {
+            francs.push(rapport);
+        } else {
+            micro.push(arr(p[1].sortie_t0));
+        }
     }
-    sauts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let q = |f: f64| arr(sauts[((sauts.len() - 1) as f64 * f).round() as usize]);
+    francs.sort_by(|a, b| a.partial_cmp(b).unwrap());
     json!({
-        "coupes": sauts.len(),
-        "median": q(0.5),
-        "p90": q(0.9),
-        "max": q(1.0),
-        "au_dela_de_1_5": sauts.iter().filter(|s| **s > 1.5).count(),
+        "coupes": identiques + francs.len() + micro.len(),
+        "identiques": identiques,
+        "francs": francs.len(),
+        "micro_recadrages": micro.len(),
+        "micro_a": micro.iter().take(10).collect::<Vec<_>>(),
+        "rapport_franc_median": francs.get(francs.len() / 2).map(|v| arr(*v)),
+        "rapport_max": francs.last().map(|v| arr(*v)),
     })
 }
 
@@ -770,7 +858,9 @@ pub fn plans_json(prog: &Programme) -> Value {
         .map(|pl| json!({"t": arr(pl.sortie_t0), "d": arr(pl.duree), "src": arr(pl.t0), "rush": pl.rush,
                          "phrase": pl.phrase, "regime": pl.regime, "cadre": pl.cadre, "accroche": pl.accroche,
                          "transition": pl.transition, "visage": [arr3(pl.visage_debut), arr3(pl.visage_fin)],
-                         "agrandissement": arr(pl.agrandissement)}))
+                         "agrandissement": arr(pl.agrandissement),
+                         "cadre_source": [arr(pl.zone.x), arr(pl.zone.y), arr(pl.zone.w), arr(pl.zone.h)],
+                         "zoom_fin": arr3(pl.z_fin)}))
         .collect::<Vec<_>>())
 }
 

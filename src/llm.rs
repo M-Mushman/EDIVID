@@ -78,8 +78,10 @@ pub fn consigne_monteur(p: &Projet, plusieurs_rushs: bool) -> String {
         } else {
             "jamais \"yeux\" (désactivé)"
         };
-        format!("cadre : \"large\" (image entière), \"moyen\" (punch-in léger), \"visage\" (gros plan), {yeux}. \
-                 En \"rafale\", ne garde jamais le même cadre deux phrases de suite. \"impact\" prend \"visage\" ou \"yeux\". \
+        format!("cadre : \"large\" (image entière), \"moyen\", \"visage\" (gros plan), {yeux}. \
+                 Un cadre se tient : garde le même sur les phrases d'une même idée (souvent deux à cinq de suite), et \
+                 change-le pour marquer une idée nouvelle, le début d'une énumération ou une phrase forte. Un changement de \
+                 cadre sans raison se voit comme un sursaut de caméra. \"impact\" prend \"visage\" ou \"yeux\". \
                  \"respiration\" prend \"large\" ou \"moyen\".")
     };
     let transitions = match texte(r, "transition").as_str() {
@@ -115,7 +117,7 @@ Phrase par phrase, tu décides :
 creuses. Si la même idée est dite deux fois de suite, garde la meilleure prise (souvent la seconde). Garde ce qui porte le sens, \
 l'émotion, la personnalité. {redites}
 - regime : \"respiration\" (récit, émotion, confidence, idée centrale : plan plus large, on laisse vivre les silences), \
-\"rafale\" (informatif, énumérations, listes : coupes serrées, cadres qui alternent), \"impact\" (phrase choc, formule qui \
+\"rafale\" (informatif, énumérations, listes : coupes serrées, rythme soutenu), \"impact\" (phrase choc, formule qui \
 résume, chute, chiffre marquant : zoom serré, coupe sèche). La majorité en \"rafale\" ; \"respiration\" et \"impact\" sont des \
 événements (chacun environ 10 à 20 % des phrases).
 - {cadres}
@@ -147,7 +149,7 @@ caméra. Relis-le comme un spectateur exigeant qui décroche à la moindre monot
 Vérifie :
 - l'accroche est-elle la plus forte possible, compréhensible sans contexte, et ne redit-elle pas l'introduction ?
 - y a-t-il des tunnels : plus de 4 phrases de suite au même régime, ou plus de 25 secondes sans changement de cadre ?
-- en \"rafale\", deux phrases consécutives ont-elles le même cadre ?
+- y a-t-il de l'agitation : un cadre qui change presque à chaque phrase, sans idée nouvelle pour le justifier ?
 - les \"impact\" sont-ils de vraies formules choc ? Les \"yeux\" sont-ils rares (trois au plus) et mérités ?
 - les \"respiration\" tombent-elles sur les vrais moments d'émotion ou de récit ?
 - a-t-on coupé une idée essentielle, un souvenir personnel, une phrase forte ? A-t-on gardé des répétitions ou faux départs ?
