@@ -43,7 +43,10 @@ async fn main() -> Result<()> {
             Ok(ecoute) => {
                 tracing::info!("EDIVID écoute sur http://{adresse}");
                 let app = app.clone();
-                serveurs.push(tokio::spawn(async move { axum::serve(ecoute, app).await }));
+                // L'adresse du client sert au garde d'accès (identité Tailscale crue seulement en local).
+                serveurs.push(tokio::spawn(async move {
+                    axum::serve(ecoute, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await
+                }));
             }
             Err(e) => tracing::warn!("impossible d'écouter sur {adresse} : {e}"),
         }

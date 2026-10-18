@@ -133,7 +133,7 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
     let nom = identite["name"].as_str().unwrap_or(&email).to_string();
     let deja = p.comptes.iter().any(|c| c.email.eq_ignore_ascii_case(&email));
     if mode == "connexion" && !deja {
-        bail!("le compte {email} n'est pas autorisé : ouvrez EDIVID avec le code d'accès, puis reliez ce compte dans Paramètres");
+        bail!("le compte {email} n'est pas autorisé : reliez-le d'abord dans Paramètres");
     }
     // Le Drive : rclone reçoit le jeton (il le renouvellera seul grâce au jeton de rafraîchissement).
     let distant = format!("edivid_{}", email.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect::<String>());

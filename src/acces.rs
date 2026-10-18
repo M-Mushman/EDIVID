@@ -1,7 +1,9 @@
-//! Accès : code d'accès (demandé une fois par navigateur) ou compte Google autorisé.
-//! Les ACL du tailnet restent la première porte ; ceci est la seconde.
+//! Accès : appareil du tailnet reconnu par Tailscale (sans rien saisir), sinon code d'accès (demandé une
+//! fois par navigateur) ou compte Google autorisé. Les ACL du tailnet restent la première porte.
 
-use axum::extract::{Request, State};
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -14,6 +16,10 @@ use crate::etat::EtatPartage;
 
 const TEMOIN: &str = "edivid_session";
 const DUREE_SESSION_GOOGLE_S: i64 = 30 * 24 * 3600;
+/// Posé par `tailscale serve` (HTTPS du tailnet) quand l'appareil appartient à une personne (pas à une
+/// étiquette comme le VPS) ; le relais efface celui qu'un client aurait fabriqué (vérifié le 2026-10-18).
+/// Il ne fait foi que par ce relais, qui arrive sur l'écoute locale : voir `garde`.
+const IDENTITE_TAILNET: &str = "tailscale-user-login";
 
 /// Qui est connecté : par le code (compte vide) ou par Google (son adresse).
 pub struct Session {
@@ -66,6 +72,10 @@ pub async fn session(etat: &EtatPartage, entetes: &HeaderMap) -> Option<Session>
             }
         }
     }
+    // Appareil du tailnet : il entre comme avec le code, sans que personne ait rien à saisir.
+    if entetes.get(IDENTITE_TAILNET).is_some_and(|v| !v.is_empty()) {
+        return Some(Session { email: None });
+    }
     let par_entete = entetes
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -95,7 +105,12 @@ async fn vers_https(etat: &EtatPartage, chemin: &str, get: bool, hote: &str, sui
     Some(axum::response::Redirect::temporary(&format!("{}{suite}", cible.trim_end_matches('/'))).into_response())
 }
 
-pub async fn garde(State(etat): State<EtatPartage>, requete: Request, suite: Next) -> Response {
+pub async fn garde(State(etat): State<EtatPartage>, mut requete: Request, suite: Next) -> Response {
+    // Sur l'adresse directe du tailnet (…:8030), n'importe quel appareil pourrait écrire l'identité : retirée.
+    let par_relais = requete.extensions().get::<ConnectInfo<SocketAddr>>().is_some_and(|c| c.0.ip().is_loopback());
+    if !par_relais {
+        requete.headers_mut().remove(IDENTITE_TAILNET);
+    }
     let chemin = requete.uri().path().to_string();
     let hote = requete.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("").to_string();
     let suite_url = requete.uri().path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| "/".into());

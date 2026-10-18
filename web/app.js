@@ -303,7 +303,7 @@ function afficherConnexion() {
       champ, erreur,
       h('button', { class: 'btn primaire', type: 'submit', style: { width: '100%', marginTop: '10px' } }, 'Entrer'),
       h('p', { class: 'tres-petit muet', style: { marginTop: '14px' } },
-        "Le code vous a été donné par la personne qui gère cet ordinateur. Il n'est demandé qu'une fois par navigateur."))));
+        "Les appareils du tailnet entrent sans code par l'adresse en https. Sinon, le code vous a été donné par la personne qui gère cet ordinateur ; il n'est demandé qu'une fois par navigateur."))));
   champ.focus();
 }
 
@@ -1983,7 +1983,7 @@ function sectionGoogle(P) {
   const comptes = P.comptes || [];
   return h('div', { class: 'carte carte-corps', style: { marginTop: '16px' } },
     h('h2', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, icone('google'), 'Connexion avec Google'),
-    h('p', { class: 'petit muet' }, 'Chacun se connecte avec son compte Google, sans code. La connexion relie aussi son Google Drive : les vidéos déposées depuis son iPhone sont montées et lui reviennent sur son Drive.'),
+    h('p', { class: 'petit muet' }, 'Les appareils du tailnet entrent sans code ni compte. Relier un compte Google sert à son Drive (les vidéos déposées depuis son iPhone sont montées et lui reviennent) et à la publication sur YouTube.'),
     g.configure
       ? h('div', {},
           comptes.length ? comptes.map((c) => h('div', { class: 'incrustation' },
@@ -2003,7 +2003,7 @@ function sectionGoogle(P) {
               } }, 'Retirer'))))
             : h('p', { class: 'petit muet' }, 'Aucun compte autorisé pour l’instant.'),
           h('a', { class: 'btn bouton-google', href: '/api/google/connexion?mode=liaison', style: { marginTop: '10px' } }, icone('google'), 'Autoriser et relier un compte Google'),
-          h('p', { class: 'tres-petit muet' }, 'La personne concernée clique ce bouton sur son propre ordinateur (après être entrée une fois avec le code d’accès), puis accepte chez Google.'))
+          h('p', { class: 'tres-petit muet' }, 'Une seule fois par compte Google, depuis n’importe quel appareil : la personne clique ce bouton et accepte chez Google.'))
       : h('div', { class: 'aide', style: { background: 'var(--alerte-doux)' } }, icone('alerte'), h('span', {}, 'Pas encore configurée : suivez la mise en place ci-dessous (une seule fois).')),
     h('details', { style: { marginTop: '14px' }, open: !g.configure },
       h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, 'Mise en place (une seule fois)'),

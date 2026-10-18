@@ -21,8 +21,10 @@ uv pip install --python .venv/bin/python faster-whisper opencv-python-headless n
 ./deploy/installer.sh
 ```
 
-Interface : `http://<machine>:8030` (localhost et adresse du tailnet). Le code d'accès est tiré au
-premier lancement dans `donnees/acces.json`.
+Interface : `https://<machine>.<tailnet>.ts.net` (par `tailscale serve`), ou `http://<machine>:8030`
+(localhost et adresse du tailnet, renvoyée vers l'https). Un appareil du tailnet appartenant à une
+personne entre sans code (identité `Tailscale-User-Login`, crue seulement par le relais local) ; sinon,
+code d'accès tiré au premier lancement dans `donnees/acces.json`.
 
 ## Fonctions
 
