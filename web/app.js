@@ -99,13 +99,30 @@ function lire(cle) { try { return localStorage.getItem(cle); } catch { return nu
 
 class ErreurApi extends Error {}
 
+// Un appel au LLM (conversation, commentaire, proposition YouTube) peut durer ; le reste répond en une fraction de seconde.
+const LONGS = ['/discussion', '/commentaire', '/youtube/proposer', '/parametres/courriel/essai', '/parametres/drive/verifier'];
+
 async function api(methode, chemin, corps) {
-  const r = await fetch(chemin, {
-    method: methode,
-    headers: corps !== undefined ? { 'Content-Type': 'application/json' } : {},
-    body: corps !== undefined ? JSON.stringify(corps) : undefined,
-    credentials: 'same-origin',
-  });
+  const delai = LONGS.some((l) => chemin.includes(l)) ? 600000 : 25000;
+  const arret = new AbortController();
+  const minuterieDelai = setTimeout(() => arret.abort(), delai);
+  let r;
+  try {
+    r = await fetch(chemin, {
+      method: methode,
+      headers: corps !== undefined ? { 'Content-Type': 'application/json' } : {},
+      body: corps !== undefined ? JSON.stringify(corps) : undefined,
+      credentials: 'same-origin',
+      signal: arret.signal,
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new ErreurApi('EDIVID ne répond pas. Fermez les onglets EDIVID en trop, ou ouvrez https://azoth.tailaae476.ts.net.');
+    }
+    throw new ErreurApi('Connexion à EDIVID impossible (réseau ou tailnet).');
+  } finally {
+    clearTimeout(minuterieDelai);
+  }
   if (r.status === 401 && chemin !== '/api/connexion') {
     afficherConnexion();
     throw new ErreurApi('session expirée');
@@ -347,6 +364,20 @@ function nouveauProjet() {
 
 // ------------------------------------------------------------------ projet
 
+/** Ouvre le flux d'événements du projet affiché. */
+function ouvrirFlux(id) {
+  fermerFlux();
+  E.source = new EventSource(`/api/projets/${id}/evenements`);
+  brancherFlux(E.source);
+}
+
+// Un onglet caché rend sa connexion d'événements ; il la reprend, et se remet à jour, quand on y revient.
+document.addEventListener('visibilitychange', () => {
+  if (!E.projetId) return;
+  if (document.hidden) fermerFlux();
+  else if (!E.source) { ouvrirFlux(E.projetId); rafraichir(); rafraichirEtat(); }
+});
+
 async function ouvrirProjet(id) {
   if (E.projetId !== id) {
     fermerFlux();
@@ -356,30 +387,39 @@ async function ouvrirProjet(id) {
     E.aMettreAJour = false;
     E.onglet = 'assistant';
     construireProjet();
-    E.source = new EventSource(`/api/projets/${id}/evenements`);
-    E.source.addEventListener('progression', (e) => {
+    if (!document.hidden) ouvrirFlux(id);
+  }
+  await rafraichir();
+  await rafraichirEtat();
+  api('GET', '/api/parametres').then((P) => { E.driveActif = !!(P.drive.actif && P.etat_drive?.rclone); dessinerBarre(); }).catch(() => {});
+  if (!lire('edivid_guide_vu')) { stocker('edivid_guide_vu', '1'); afficherGuide(); }
+}
+
+function brancherFlux(source) {
+  {
+    source.addEventListener('progression', (e) => {
       E.progression = JSON.parse(e.data).donnees;
       dessinerBarre();
       if (E.vue?.projet.rushs.some((r) => ['preparation', 'analyse'].includes(r.etat))) dessinerRushs();
     });
-    E.source.addEventListener('projet', () => rafraichirBientot());
-    E.source.addEventListener('file', () => rafraichirEtat());
-    E.source.addEventListener('erreur', (e) => {
+    source.addEventListener('projet', () => rafraichirBientot());
+    source.addEventListener('file', () => rafraichirEtat());
+    source.addEventListener('erreur', (e) => {
       const d = JSON.parse(e.data).donnees;
       toast(`${d.travail} : ${d.message}`, 'erreur');
       E.progression = null;
       rafraichir();
     });
-    E.source.addEventListener('drive', (e) => {
+    source.addEventListener('drive', (e) => {
       toast(`Vidéo déposée sur le Google Drive : ${JSON.parse(e.data).donnees.chemin}`, 'ok');
       rafraichir();
     });
-    E.source.addEventListener('youtube', (e) => {
+    source.addEventListener('youtube', (e) => {
       toast(`Vidéo en ligne sur YouTube : ${JSON.parse(e.data).donnees.lien}`, 'ok');
       E.progression = null;
       rafraichir();
     });
-    E.source.addEventListener('fini', (e) => {
+    source.addEventListener('fini', (e) => {
       const d = JSON.parse(e.data).donnees;
       E.progression = null;
       if (d.genre === 'export') { toast('Export prêt : téléchargez-le ou publiez-le depuis « Exporter ».', 'ok'); rafraichir(); return; }
@@ -388,10 +428,6 @@ async function ouvrirProjet(id) {
       rafraichir();
     });
   }
-  api('GET', '/api/parametres').then((P) => { E.driveActif = !!(P.drive.actif && P.etat_drive?.rclone); dessinerBarre(); }).catch(() => {});
-  await rafraichir();
-  await rafraichirEtat();
-  if (!lire('edivid_guide_vu')) { stocker('edivid_guide_vu', '1'); afficherGuide(); }
 }
 
 let minuterie = null;

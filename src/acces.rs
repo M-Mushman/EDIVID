@@ -75,12 +75,43 @@ pub async fn session(etat: &EtatPartage, entetes: &HeaderMap) -> Option<Session>
     par_entete.then_some(Session { email: None })
 }
 
+/// En HTTP/1.1 (adresse http://…:8030), un navigateur n'ouvre que six connexions par site ; chaque onglet
+/// EDIVID en garde une pour ses événements, et quelques onglets suffisent à tout bloquer (mesuré le
+/// 2026-10-18 : six onglets, plus rien ne répond). L'adresse HTTPS du tailnet passe par HTTP/2, sans
+/// cette limite : une page demandée en clair sur le tailnet y est donc renvoyée.
+async fn vers_https(etat: &EtatPartage, chemin: &str, get: bool, hote: &str, suite: &str) -> Option<Response> {
+    if chemin.starts_with("/api/") || !get {
+        return None;
+    }
+    let local = hote.starts_with("127.0.0.1") || hote.starts_with("localhost");
+    // tailscale serve relaie l'HTTPS vers 127.0.0.1 : seules les requêtes arrivées en clair sur le tailnet sont visées.
+    if local || !hote.ends_with(":8030") {
+        return None;
+    }
+    let cible = etat.parametres.read().await.url_publique.clone();
+    if !cible.starts_with("https://") {
+        return None;
+    }
+    Some(axum::response::Redirect::temporary(&format!("{}{suite}", cible.trim_end_matches('/'))).into_response())
+}
+
 pub async fn garde(State(etat): State<EtatPartage>, requete: Request, suite: Next) -> Response {
-    let chemin = requete.uri().path();
+    let chemin = requete.uri().path().to_string();
+    let hote = requete.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("").to_string();
+    let suite_url = requete.uri().path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| "/".into());
+    let get = requete.method() == axum::http::Method::GET;
+    if let Some(redirection) = vers_https(&etat, &chemin, get, &hote, &suite_url).await {
+        return redirection;
+    }
     let libre = !chemin.starts_with("/api/")
-        || matches!(chemin, "/api/session" | "/api/connexion" | "/api/deconnexion" | "/api/google/connexion" | "/api/google/retour");
+        || matches!(chemin.as_str(), "/api/session" | "/api/connexion" | "/api/deconnexion" | "/api/google/connexion" | "/api/google/retour");
     if libre || session(&etat, requete.headers()).await.is_some() {
-        suite.run(requete).await
+        let mut reponse = suite.run(requete).await;
+        // L'interface (HTML, JS, CSS) est revalidée à chaque chargement : jamais une ancienne version après une mise à jour.
+        if !chemin.starts_with("/api/") {
+            reponse.headers_mut().insert(header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-cache"));
+        }
+        reponse
     } else {
         (StatusCode::UNAUTHORIZED, Json(json!({"erreur": "connexion requise"}))).into_response()
     }
