@@ -50,6 +50,10 @@ code d'accès tiré au premier lancement dans `donnees/acces.json`.
   est borné sur les coupes franches (réglage « Écart entre deux cadrages ») et rapporté (médiane, p90,
   max) ; l'agrandissement est plafonné à ×3 de la source, au-delà duquel l'IA invente les traits.
 - Netteté IA : Real-ESRGAN mélangé à 60 % avec l'image d'origine agrandie, pour garder le grain de peau.
+- Habillage permanent (logos et textes sur toute la durée, place, taille, opacité) et générique (vidéo, ou
+  titre sur une image, avant et après le montage, enchaînés en fondu) ; repris par les jeux de réglages,
+  avec copie des médias nécessaires.
+- Choix de fichiers sur le Google Drive relié (rushs ou médiathèque), téléchargés avec progression.
 - Rognage du haut de la source (logo CapCut ou TikTok) ; timbre de voix clair, chaud ou naturel ;
   look « Lumière cinéma ».
 - Export YouTube (débits recommandés), léger (720p) ou qualité maximale ; publication sur YouTube

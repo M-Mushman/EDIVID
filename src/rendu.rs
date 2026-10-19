@@ -14,7 +14,7 @@ use tokio::process::Command;
 use crate::carte;
 use crate::decoupe::{self, Plan, Programme, IPS};
 use crate::etat::EtatPartage;
-use crate::modele::{maintenant, InfosSource, Projet, Sortie};
+use crate::modele::{maintenant, InfosSource, Projet, Sequence, Sortie};
 use crate::reglages::{nombre, texte, vrai};
 
 const PLANS_EN_PARALLELE: usize = 6;
@@ -436,6 +436,7 @@ fn sous_titres(prog: &Programme, p: &Projet) -> String {
                        titre.to_uppercase()));
     }
     textes(prog, &mut l);
+    habillage_textes(p, prog, &mut l);
     if !vrai(r, "sous_titres") {
         return l.join("\n") + "\n";
     }
@@ -509,6 +510,34 @@ fn echapper_ass(t: &str) -> String {
     t.replace('\\', "/").replace('{', "(").replace('}', ")").replace('\n', "\\N")
 }
 
+/// Textes d'habillage : posés sur toute la durée, dans un coin ou sur un bord, avec leur transparence.
+fn habillage_textes(p: &Projet, prog: &Programme, l: &mut Vec<String>) {
+    let (wo, ho) = (prog.largeur as f64, prog.hauteur as f64);
+    let marge = (0.04 * wo).round();
+    for hab in p.habillage.iter().filter(|x| x.genre == "texte" && !x.texte.trim().is_empty()) {
+        let (an, x, y) = match hab.position.as_str() {
+            "haut_gauche" => (7, marge, marge),
+            "bas_gauche" => (1, marge, ho - marge),
+            "bas_droite" => (3, wo - marge, ho - marge),
+            "haut" => (8, wo / 2.0, marge),
+            "bas" => (2, wo / 2.0, ho - marge),
+            _ => (9, wo - marge, marge),
+        };
+        let couleur = match hab.couleur.as_str() {
+            "noir" => "&H00000000&",
+            "jaune" => "&H0000E5FF&",
+            _ => "&H00FFFFFF&",
+        };
+        let contour = if hab.couleur == "noir" { "&H00FFFFFF&" } else { "&H00000000&" };
+        let alpha = ((1.0 - hab.opacite.clamp(0.1, 1.0)) * 255.0).round() as u8;
+        let taille = (hab.taille * wo).max(12.0);
+        l.push(format!(
+            "Dialogue: 3,{},{},Texte,,0,0,0,,{{\\an{an}\\pos({x:.0},{y:.0})\\fs{taille:.0}\\c{couleur}\\3c{contour}\\bord{:.1}\\shad1\\alpha&H{alpha:02X}&}}{}",
+            temps_ass(0.0), temps_ass(prog.duree), (taille * 0.06).max(1.0), echapper_ass(hab.texte.trim())
+        ));
+    }
+}
+
 /// Textes du module Texte : position, couleur, fond, effet d'entrée.
 fn textes(prog: &Programme, l: &mut Vec<String>) {
     let (wo, ho) = (prog.largeur as f64, prog.hauteur as f64);
@@ -558,6 +587,146 @@ fn textes(prog: &Programme, l: &mut Vec<String>) {
         let style = if boite { "TexteBoite" } else { "Texte" };
         l.push(format!("Dialogue: 2,{},{},{style},,0,0,0,,{{{tags}}}{corps}", temps_ass(inc.debut), temps_ass(inc.fin)));
     }
+}
+
+// ---------------------------------------------------------------- habillage et générique
+
+/// Coin ou bord d'un élément d'habillage, en expressions d'overlay (W, H : image ; w, h : élément).
+fn position_habillage(position: &str, marge: u32) -> (String, String) {
+    match position {
+        "haut_gauche" => (format!("{marge}"), format!("{marge}")),
+        "bas_gauche" => (format!("{marge}"), format!("H-h-{marge}")),
+        "bas_droite" => (format!("W-w-{marge}"), format!("H-h-{marge}")),
+        "haut" => ("(W-w)/2".into(), format!("{marge}")),
+        "bas" => ("(W-w)/2".into(), format!("H-h-{marge}")),
+        _ => (format!("W-w-{marge}"), format!("{marge}")),
+    }
+}
+
+/// Durées des séquences du générique (début, fin), 0 s'il n'y en a pas.
+pub fn durees_generique(p: &Projet) -> (f64, f64) {
+    let duree = |s: &Option<Sequence>| -> f64 {
+        let Some(s) = s else { return 0.0 };
+        if s.genre == "carton" {
+            return s.duree;
+        }
+        let d = p.medias.iter().find(|m| m.id == s.media).and_then(|m| m.duree).unwrap_or(0.0);
+        if s.duree > 0.0 { d.min(s.duree) } else { d }
+    };
+    let arrondi = |d: f64| (d * IPS as f64).floor() / IPS as f64;
+    (arrondi(duree(&p.generique.debut)), arrondi(duree(&p.generique.fin)))
+}
+
+/// Coupe un titre en lignes d'au plus `max` caractères, aux espaces.
+fn couper_lignes(texte: &str, max: usize) -> Vec<String> {
+    let mut lignes: Vec<String> = vec![String::new()];
+    for mot in texte.split_whitespace() {
+        let l = lignes.last_mut().unwrap();
+        if !l.is_empty() && l.chars().count() + 1 + mot.chars().count() > max {
+            lignes.push(mot.to_string());
+        } else {
+            if !l.is_empty() {
+                l.push(' ');
+            }
+            l.push_str(mot);
+        }
+    }
+    lignes
+}
+
+/// Une séquence du générique, au format du montage, dans le graphe : [gv{k}] (image) et [ga{k}] (son).
+/// Vidéo : cadrée sur fond flouté si son format diffère. Carton : titre et sous-titre centrés sur l'image
+/// choisie, ou sur un fond sombre ; silencieux.
+#[allow(clippy::too_many_arguments)]
+fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: usize, (wo, ho): (u32, u32),
+                      args: &mut Vec<String>, fc: &mut Vec<String>, entree: &mut usize, tmp: &Path) -> Result<()> {
+    let medias = etat.dossier_projet(&p.id).join("medias");
+    let media = p.medias.iter().find(|m| m.id == s.media);
+    let fondu = format!("fade=t=in:st=0:d=0.35,fade=t=out:st={:.3}:d=0.35", (d - 0.35).max(0.0));
+    let afondu = format!("afade=t=in:st=0:d=0.3,afade=t=out:st={:.3}:d=0.35", (d - 0.35).max(0.0));
+    let finir = format!("trim=0:{d:.3},setpts=PTS-STARTPTS,fps={IPS},setsar=1,format=yuv420p,{BT709},{fondu}");
+    let silence = |args: &mut Vec<String>, fc: &mut Vec<String>, entree: &mut usize| {
+        args.extend(["-f".into(), "lavfi".into(), "-t".into(), format!("{d:.3}"), "-i".into(), "anullsrc=r=48000:cl=stereo".into()]);
+        fc.push(format!("[{}:a]aresample=48000,asetpts=PTS-STARTPTS[ga{k}]", *entree));
+        *entree += 1;
+    };
+    if s.genre == "video" {
+        let m = media.ok_or_else(|| anyhow!("la vidéo du générique n'est plus dans la médiathèque"))?;
+        args.extend(["-t".into(), format!("{d:.3}"), "-i".into(), medias.join(&m.fichier).to_string_lossy().into()]);
+        let i = *entree;
+        *entree += 1;
+        fc.push(format!(
+            "[{i}:v]fps={IPS},split[gs{k}a][gs{k}b];\
+             [gs{k}b]scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho},gblur=sigma=30[gs{k}c];\
+             [gs{k}a]scale={wo}:{ho}:force_original_aspect_ratio=decrease[gs{k}d];\
+             [gs{k}c][gs{k}d]overlay=(W-w)/2:(H-h)/2,{finir}[gv{k}]"
+        ));
+        if m.a_son {
+            fc.push(format!(
+                "[{i}:a]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=0:{d:.3},asetpts=PTS-STARTPTS,\
+                 loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,{afondu}[ga{k}]"
+            ));
+        } else {
+            silence(args, fc, entree);
+        }
+        return Ok(());
+    }
+    // Carton.
+    let i = *entree;
+    match media {
+        Some(m) => {
+            if m.genre == "gif" {
+                args.extend(["-ignore_loop", "0"].map(String::from));
+            } else {
+                args.extend(["-loop", "1", "-framerate", "30"].map(String::from));
+            }
+            args.extend(["-t".into(), format!("{d:.3}"), "-i".into(), medias.join(&m.fichier).to_string_lossy().into()]);
+            let assombrir = if s.titre.is_empty() && s.sous_titre.is_empty() { "" } else { ",eq=brightness=-0.08" };
+            fc.push(format!("[{i}:v]scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho}{assombrir}[gc{k}]"));
+        }
+        None => {
+            args.extend(["-f".into(), "lavfi".into(), "-t".into(), format!("{d:.3}"), "-i".into(), format!("color=c=0x101014:s={wo}x{ho}:r={IPS}")]);
+            fc.push(format!("[{i}:v]null[gc{k}]"));
+        }
+    }
+    *entree += 1;
+    let vertical = wo < ho;
+    let police = etat.cfg.racine.join("modeles").join("polices").join("Anton-Regular.ttf");
+    let police_sous = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"].iter().map(Path::new).find(|f| f.exists())
+        .map(Path::to_path_buf).unwrap_or_else(|| police.clone());
+    // Une ligne par dessin : un saut de ligne dans le texte s'affiche comme un carré avec cette police.
+    let mut textes = Vec::new();
+    let deux = !s.titre.is_empty() && !s.sous_titre.is_empty();
+    let mut poser = |nom: &str, lignes: Vec<String>, taille: f64, police: &Path, couleur: &str, ombre: u32, y_bloc: &dyn Fn(f64) -> String|
+                     -> Result<()> {
+        let hauteur_ligne = (taille * 1.22).round();
+        let bloc = hauteur_ligne * lignes.len() as f64;
+        for (i, ligne) in lignes.iter().enumerate() {
+            let f = tmp.join(format!("generique{k}_{nom}{i}.txt"));
+            std::fs::write(&f, ligne)?;
+            textes.push(format!(
+                "drawtext=fontfile='{}':textfile='{}':fontsize={taille}:fontcolor={couleur}:x=(w-text_w)/2:y={}+{}:\
+                 shadowcolor=black@0.45:shadowx={ombre}:shadowy={}",
+                police.to_string_lossy(), f.to_string_lossy(), y_bloc(bloc), hauteur_ligne * i as f64, ombre + 1
+            ));
+        }
+        Ok(())
+    };
+    if !s.titre.is_empty() {
+        let taille = (wo as f64 * if vertical { 0.085 } else { 0.055 }).round();
+        // Seul : centré ; avec un sous-titre : posé juste au-dessus du milieu.
+        let y = move |bloc: f64| if deux { format!("h/2-h*0.012-{bloc}") } else { format!("(h-{bloc})/2") };
+        poser("titre", couper_lignes(&s.titre, if vertical { 16 } else { 28 }), taille, &police, "white", 2, &y)?;
+    }
+    if !s.sous_titre.is_empty() {
+        let taille = (wo as f64 * if vertical { 0.038 } else { 0.024 }).round();
+        let y = move |bloc: f64| if deux { "h/2+h*0.012".to_string() } else { format!("(h-{bloc})/2") };
+        poser("sous_titre", couper_lignes(&s.sous_titre, if vertical { 30 } else { 50 }), taille, &police_sous, "white@0.9", 1, &y)?;
+    }
+    let dessin = if textes.is_empty() { "null".to_string() } else { textes.join(",") };
+    fc.push(format!("[gc{k}]{dessin},{finir}[gv{k}]"));
+    silence(args, fc, entree);
+    Ok(())
 }
 
 // ---------------------------------------------------------------- assemblage
@@ -670,8 +839,27 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         }
         entree += 1;
     }
+    // Habillage : les logos, sur toute la durée du montage (les textes passent par les sous-titres).
+    for (j, hab) in p.habillage.iter().filter(|x| x.genre == "logo").enumerate() {
+        let Some(m) = p.medias.iter().find(|m| m.id == hab.media) else { continue };
+        let fichier = etat.dossier_projet(&p.id).join("medias").join(&m.fichier);
+        if m.genre == "gif" {
+            args.extend(["-ignore_loop", "0"].map(String::from));
+        } else {
+            args.extend(["-loop", "1", "-framerate", "30"].map(String::from));
+        }
+        args.extend(["-t".into(), format!("{total:.3}"), "-i".into(), fichier.to_string_lossy().into()]);
+        let largeur = ((wo as f64 * hab.taille) as u32 / 2 * 2).max(16);
+        let (x, y) = position_habillage(&hab.position, marge);
+        fc.push(format!("[{entree}:v]fps={IPS},scale={largeur}:-2,format=yuva420p,colorchannelmixer=aa={:.2}[hab{j}]", hab.opacite));
+        fc.push(format!("[{base}][hab{j}]overlay=x={x}:y={y}:eof_action=pass[vh{j}]"));
+        base = format!("vh{j}");
+        entree += 1;
+    }
     let polices = etat.cfg.racine.join("modeles").join("polices");
-    fc.push(format!("[{base}]subtitles=f={}:fontsdir={},{BT709}[v]", ass.to_string_lossy(), polices.to_string_lossy()));
+    // Pixels carrés : un recadrage d'effet (secousse) laisse sinon une forme de pixel à peine faussée (4064:4059),
+    // que l'enchaînement avec le générique refuse.
+    fc.push(format!("[{base}]subtitles=f={}:fontsdir={},{BT709},setsar=1[v]", ass.to_string_lossy(), polices.to_string_lossy()));
 
     // Son.
     // asetpts : le son suit son propre compte d'échantillons, sans hériter des arrondis de la concaténation.
@@ -745,9 +933,32 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     };
     fc.push(format!("[{mix}]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]"));
 
+    // Générique : une séquence avant le montage, une après, au même format, enchaînées en fondu.
+    let (avant, apres) = durees_generique(p);
+    let (mut v_final, mut a_final) = ("v", "a");
+    if avant > 0.0 || apres > 0.0 {
+        let tmp = ass.parent().unwrap_or(Path::new("."));
+        let mut suite = String::new();
+        let mut n = 1;
+        if let (Some(s), true) = (&p.generique.debut, avant > 0.0) {
+            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp)?;
+            suite.push_str("[gv0][ga0]");
+            n += 1;
+        }
+        suite.push_str("[v][a]");
+        if let (Some(s), true) = (&p.generique.fin, apres > 0.0) {
+            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp)?;
+            suite.push_str("[gv1][ga1]");
+            n += 1;
+        }
+        fc.push(format!("{suite}concat=n={n}:v=1:a=1[vg][ag]"));
+        (v_final, a_final) = ("vg", "ag");
+    }
+    let total = avant + total + apres;
+
     args.extend([
         "-filter_complex".into(), fc.join(";"),
-        "-map".into(), "[v]".into(), "-map".into(), "[a]".into(),
+        "-map".into(), format!("[{v_final}]"), "-map".into(), format!("[{a_final}]"),
         "-t".into(), format!("{total:.3}"),
     ]);
     args.extend(encodeur(nvenc, if apercu { "assemblage_apercu" } else { "assemblage" }));
@@ -759,6 +970,8 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         "-movflags".into(), "+faststart".into(),
         sortie.to_string_lossy().into(),
     ]);
+    // La commande reste à côté des plans : le dossier temporaire n'est gardé qu'en cas d'échec, pour le diagnostic.
+    let _ = tokio::fs::write(liste.with_file_name("assemblage.json"), serde_json::to_vec_pretty(&args).unwrap_or_default()).await;
     ffmpeg(etat, &p.id, "Assemblage, son et sous-titres", &args, total).await
 }
 
@@ -830,6 +1043,8 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["hauteur"] = json!(prog.hauteur);
     rapport["duree_rendu_s"] = json!(debut.elapsed().as_secs());
     rapport["encodeur"] = json!(if nvenc { "NVENC" } else { "x264" });
+    let (avant, apres) = durees_generique(&p);
+    rapport["generique"] = json!({"debut": avant, "fin": apres});
     rapport["plans_detail"] = decoupe::plans_json(&prog);
     // Contrôle : le son et l'image du fichier final ont la même durée ; sinon la voix dérive au fil des plans.
     if let Ok(d) = ffprobe(&sorties.join(&nom)).await {

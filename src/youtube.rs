@@ -218,10 +218,13 @@ pub async fn proposer(etat: &EtatPartage, projet: &str) -> Result<Value> {
     let gardees: Vec<String> = prog.plans.iter().filter(|pl| !pl.accroche).map(|pl| pl.phrase.clone()).collect();
     let texte: String = ps.iter().filter(|ph| gardees.contains(&ph.cle)).map(|ph| ph.texte.as_str()).collect::<Vec<_>>().join(" ");
     // Chapitres YouTube : « 0:00 » en premier, au moins trois, dix secondes chacun au minimum.
+    // Les titres sont au temps du montage : la séquence d'ouverture du générique les décale d'autant.
+    let (ouverture, _) = crate::rendu::durees_generique(&p);
     let mut chapitres: Vec<(f64, String)> = Vec::new();
     for (t, titre) in &prog.titres {
+        let t = t + ouverture;
         if chapitres.last().map(|(d, _)| t - d >= 10.0).unwrap_or(true) {
-            chapitres.push((*t, titre.clone()));
+            chapitres.push((t, titre.clone()));
         }
     }
     if chapitres.first().map(|(t, _)| *t > 0.5).unwrap_or(false) {

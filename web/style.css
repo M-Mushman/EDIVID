@@ -215,7 +215,7 @@ h3 { font-size: 14px; font-weight: 650; }
 
 /* transcription */
 .filtres { display: flex; gap: 6px; }
-.phrases { display: flex; flex-direction: column; gap: 2px; max-height: 560px; overflow-y: auto; margin: 0 -6px; padding: 0 6px; }
+.phrases { position: relative; display: flex; flex-direction: column; gap: 2px; max-height: 560px; overflow-y: auto; margin: 0 -6px; padding: 0 6px; }
 .phrase {
   display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 10px; align-items: start;
   padding: 8px 8px; border-radius: 10px; border-left: 3px solid transparent;
@@ -226,7 +226,12 @@ h3 { font-size: 14px; font-weight: 650; }
 .phrase.impact { border-left-color: var(--impact); }
 .phrase.coupee { border-left-color: var(--coupe); }
 .phrase.coupee .texte { text-decoration: line-through; color: var(--texte-3); }
-.phrase.joue { background: var(--accent-doux); }
+/* Phrase en cours de lecture : fond, contour et flèche ; le mot prononcé ressort. */
+.phrase.joue { background: color-mix(in oklch, var(--accent) 13%, var(--surface)); outline: 2px solid var(--accent); outline-offset: -2px; }
+.phrase.joue .temps { color: var(--accent); font-weight: 700; }
+.phrase.joue .temps::before { content: "▶ "; }
+.mot { border-radius: 4px; transition: background 80ms, color 80ms; }
+.mot.joue { background: var(--accent); color: var(--accent-texte); box-shadow: 0 0 0 2px var(--accent); }
 .phrase .temps { font-size: 12px; color: var(--texte-3); font-variant-numeric: tabular-nums; padding-top: 2px; }
 .phrase .texte { font-size: 14px; }
 .phrase .etiquettes { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
@@ -572,3 +577,29 @@ html, body { overflow-x: hidden; }
 a.btn { text-decoration: none; }
 #activation-google > summary { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 #activation-google > summary svg { width: 18px; height: 18px; flex: none; color: var(--accent); }
+
+/* ---------- incrustations d'une phrase ---------- */
+.puce-incrustation { display: inline-flex; align-items: center; gap: 4px; cursor: default; padding-right: 3px; }
+.puce-retirer { display: grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 50%; background: transparent; color: var(--texte-2); cursor: pointer; padding: 0; }
+.puce-retirer:hover { background: var(--erreur-doux); color: var(--erreur); }
+.puce-retirer svg { width: 12px; height: 12px; }
+
+/* ---------- habillage et générique ---------- */
+.element-habillage { margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--bord); border-radius: var(--radius-md); background: var(--surface-2); display: grid; gap: var(--space-2); }
+.element-habillage .reglage { margin: 0; }
+.habillage-tete { display: flex; gap: var(--space-3); align-items: center; }
+.habillage-tete .champ { margin-top: 4px; }
+.habillage-vignette { flex: none; width: 48px; height: 48px; border-radius: var(--radius-md); background: repeating-conic-gradient(var(--surface-3) 0 25%, var(--surface) 0 50%) 0 0 / 12px 12px; display: grid; place-items: center; overflow: hidden; color: var(--texte-2); }
+.habillage-vignette img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+/* ---------- Google Drive ---------- */
+.fil-drive { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-bottom: var(--space-2); font-size: 14px; }
+.lien { background: none; border: 0; padding: 2px 4px; color: var(--accent); cursor: pointer; font-weight: 600; border-radius: 6px; }
+.lien:hover { background: var(--accent-doux); }
+.liste-drive { max-height: 52vh; overflow-y: auto; border: 1px solid var(--bord); border-radius: var(--radius-md); }
+.drive-ligne { width: 100%; display: flex; align-items: center; gap: var(--space-3); padding: 10px 12px; border: 0; border-bottom: 1px solid var(--bord); background: var(--surface); color: var(--texte); text-align: left; cursor: pointer; }
+.drive-ligne:last-child { border-bottom: 0; }
+.drive-ligne:hover { background: var(--surface-2); }
+.drive-ligne svg { width: 18px; height: 18px; flex: none; color: var(--accent); }
+.drive-ligne input { width: 17px; height: 17px; accent-color: var(--accent); flex: none; }
+.drive-nom { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

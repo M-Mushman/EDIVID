@@ -30,7 +30,8 @@ use crate::postprod::{self, PostProd};
 use crate::youtube;
 use crate::etat::EtatPartage;
 use crate::llm;
-use crate::modele::{maintenant, nouvel_id, Decision, Echange, EtatRush, Incrustation, Media, Montage, Projet, Rush};
+use crate::modele::{maintenant, nouvel_id, Decision, Echange, EtatRush, Generique, Habillage, Incrustation, Media, Montage, Projet,
+                    Rush, Sequence};
 use crate::reglages;
 use crate::rendu;
 use crate::travaux::Genre;
@@ -112,6 +113,10 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/jeux", get(voir_jeux).post(ajouter_jeu))
         .route("/api/jeux/{jid}", delete(retirer_jeu))
         .route("/api/projets/{id}/jeux/{jid}", post(appliquer_jeu))
+        .route("/api/projets/{id}/habillage", post(changer_habillage))
+        .route("/api/projets/{id}/generique", post(changer_generique))
+        .route("/api/drive/parcourir", get(parcourir_drive))
+        .route("/api/projets/{id}/drive/importer", post(importer_drive))
         .route("/api/bibliotheque/{did}", delete(retirer_demande))
         .merge(televersement)
         .nest_service("/polices", ServeDir::new(etat.cfg.racine.join("modeles").join("polices")))
@@ -170,6 +175,8 @@ async fn creer_projet(State(etat): State<EtatPartage>, Json(n): Json<Nom>) -> Re
         postprod: Default::default(),
         corrections: Default::default(),
         exports: vec![],
+        habillage: vec![],
+        generique: Default::default(),
     };
     etat.enregistrer(&p).await?;
     let id = p.id.clone();
@@ -205,7 +212,10 @@ async fn voir_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) ->
         .iter()
         .enumerate()
         .map(|(i, ph)| json!({"n": i, "cle": ph.cle, "rush": ph.rush, "t0": ph.t0, "t1": ph.t1, "texte": ph.texte,
-                              "decision": decisions.get(ph.cle.as_str())}))
+                              "decision": decisions.get(ph.cle.as_str()),
+                              // Minutage des mots (début, fin, mot) : le texte suit la lecture mot à mot.
+                              "mots": ph.mots.iter().map(|m| json!([(m.t0 * 100.0).round() / 100.0, (m.t1 * 100.0).round() / 100.0, m.mot]))
+                                  .collect::<Vec<_>>()}))
         .collect();
     let tous_prets = !p.rushs.is_empty() && p.rushs.iter().all(|r| r.etat == EtatRush::Pret);
     let proxys: Vec<&str> = p.rushs.iter().filter(|r| etat.dossier_travail(&id, &r.id).join("proxy.mp4").exists())
@@ -339,6 +349,14 @@ async fn supprimer_media(State(etat): State<EtatPartage>, Path((id, mid)): Path<
             let f = p.medias.iter().find(|m| m.id == mid).map(|m| m.fichier.clone());
             p.medias.retain(|m| m.id != mid);
             p.incrustations.retain(|i| i.media != mid);
+            p.habillage.retain(|h| h.media != mid);
+            for s in [&mut p.generique.debut, &mut p.generique.fin] {
+                if s.as_ref().is_some_and(|s| s.media == mid && s.genre == "video") {
+                    *s = None;
+                } else if let Some(s) = s.as_mut().filter(|s| s.media == mid) {
+                    s.media.clear();
+                }
+            }
             if reglages::texte(&p.reglages, "musique") == mid {
                 p.reglages.insert("musique".into(), json!(""));
             }
@@ -1017,6 +1035,198 @@ async fn passage_drive(State(etat): State<EtatPartage>) -> Reponse {
     Ok(Json(json!({})))
 }
 
+// ---------------------------------------------------------------- habillage et générique
+
+const POSITIONS_HABILLAGE: &[&str] = &["haut_gauche", "haut_droite", "bas_gauche", "bas_droite", "haut", "bas"];
+
+/// Remplace l'habillage du projet (liste entière), après vérification de chaque élément.
+async fn changer_habillage(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(v): Json<Vec<Habillage>>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    if v.len() > 6 {
+        return Err(refus("six éléments d'habillage au plus"));
+    }
+    let mut propre = Vec::new();
+    for mut h in v {
+        match h.genre.as_str() {
+            "logo" => {
+                if !p.medias.iter().any(|m| m.id == h.media && (m.genre == "image" || m.genre == "gif")) {
+                    return Err(refus("le logo doit être une image de la médiathèque du projet"));
+                }
+                h.texte.clear();
+            }
+            "texte" => {
+                h.texte = h.texte.trim().chars().take(80).collect();
+                if h.texte.is_empty() {
+                    return Err(refus("le texte d'habillage est vide"));
+                }
+                h.media.clear();
+                if !["blanc", "noir", "jaune"].contains(&h.couleur.as_str()) {
+                    h.couleur = "blanc".into();
+                }
+            }
+            _ => return Err(refus("un élément d'habillage est un logo ou un texte")),
+        }
+        if !POSITIONS_HABILLAGE.contains(&h.position.as_str()) {
+            h.position = "haut_droite".into();
+        }
+        h.taille = if h.taille > 0.0 { h.taille.clamp(0.03, 0.6) } else if h.genre == "logo" { 0.18 } else { 0.04 };
+        h.opacite = if h.opacite > 0.0 { h.opacite.clamp(0.1, 1.0) } else { 0.9 };
+        if h.id.is_empty() {
+            h.id = nouvel_id();
+        }
+        propre.push(h);
+    }
+    etat.modifier(&id, |p| p.habillage = propre.clone()).await?;
+    Ok(Json(json!({"habillage": propre})))
+}
+
+/// Vérifie une séquence du générique : une vidéo de la médiathèque, ou un carton (titre, image facultative).
+fn borner_sequence(p: &Projet, s: Option<Sequence>) -> Result<Option<Sequence>, String> {
+    let Some(mut s) = s else { return Ok(None) };
+    s.titre = s.titre.trim().chars().take(80).collect();
+    s.sous_titre = s.sous_titre.trim().chars().take(120).collect();
+    match s.genre.as_str() {
+        "video" => {
+            if !p.medias.iter().any(|m| m.id == s.media && m.genre == "video") {
+                return Err("choisissez une vidéo de la médiathèque du projet".into());
+            }
+            s.duree = s.duree.clamp(0.0, 60.0);
+        }
+        "carton" => {
+            if !s.media.is_empty() && !p.medias.iter().any(|m| m.id == s.media && (m.genre == "image" || m.genre == "gif")) {
+                return Err("l'image du carton doit être une image de la médiathèque".into());
+            }
+            if s.titre.is_empty() && s.media.is_empty() {
+                return Err("un carton a besoin d'un titre ou d'une image".into());
+            }
+            s.duree = if s.duree > 0.0 { s.duree.clamp(1.5, 10.0) } else { 3.0 };
+        }
+        _ => return Err("une séquence du générique est une vidéo ou un carton".into()),
+    }
+    Ok(Some(s))
+}
+
+async fn changer_generique(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(g): Json<Generique>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let g = Generique { debut: borner_sequence(&p, g.debut).map_err(refus)?, fin: borner_sequence(&p, g.fin).map_err(refus)? };
+    etat.modifier(&id, |p| p.generique = g.clone()).await?;
+    Ok(Json(json!({"generique": g})))
+}
+
+// ---------------------------------------------------------------- Google Drive : choisir des fichiers
+
+#[derive(Deserialize)]
+struct Parcours {
+    #[serde(default)]
+    compte: String,
+    #[serde(default)]
+    chemin: String,
+    #[serde(default)]
+    genre: String,
+}
+
+/// Le Drive relié d'un compte (le premier s'il n'est pas précisé).
+async fn drive_du_compte(etat: &EtatPartage, compte: &str) -> Result<(String, String), Erreur> {
+    let p = etat.parametres.read().await;
+    p.comptes
+        .iter()
+        .filter(|c| !c.distant.is_empty())
+        .find(|c| compte.is_empty() || c.email.eq_ignore_ascii_case(compte))
+        .map(|c| (c.email.clone(), c.distant.clone()))
+        .ok_or_else(|| refus("aucun Google Drive relié : connectez votre compte Google dans Paramètres"))
+}
+
+async fn parcourir_drive(State(etat): State<EtatPartage>, Query(q): Query<Parcours>) -> Reponse {
+    let (email, distant) = drive_du_compte(&etat, &q.compte).await?;
+    let comptes: Vec<Value> = etat.parametres.read().await.comptes.iter().filter(|c| !c.distant.is_empty())
+        .map(|c| json!({"email": c.email, "nom": c.nom})).collect();
+    let mut v = drive::parcourir(&distant, q.chemin.trim_matches('/'), &q.genre).await?;
+    v["compte"] = json!(email);
+    v["comptes"] = json!(comptes);
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct FichierDrive {
+    chemin: String,
+    nom: String,
+    #[serde(default)]
+    taille: u64,
+}
+
+#[derive(Deserialize)]
+struct ImportDrive {
+    #[serde(default)]
+    compte: String,
+    fichiers: Vec<FichierDrive>,
+    /// « rushs » ou « medias ».
+    cible: String,
+}
+
+/// Télécharge des fichiers du Drive dans le projet : les rushs apparaissent aussitôt (« Téléchargement »),
+/// puis suivent le même chemin qu'un fichier déposé.
+async fn importer_drive(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(i): Json<ImportDrive>) -> Reponse {
+    etat.projet(&id).await?;
+    let (_, distant) = drive_du_compte(&etat, &i.compte).await?;
+    if i.fichiers.is_empty() {
+        return Err(refus("choisissez au moins un fichier"));
+    }
+    let rushs = i.cible == "rushs";
+    let dossier = etat.dossier_projet(&id).join(if rushs { "rushs" } else { "medias" });
+    tokio::fs::create_dir_all(&dossier).await.map_err(anyhow::Error::from)?;
+    let mut a_faire = Vec::new();
+    for f in &i.fichiers {
+        let fid = nouvel_id();
+        let fichier = format!("{fid}.{}", extension(&f.nom));
+        a_faire.push((fid, fichier, f.chemin.clone(), f.nom.chars().take(120).collect::<String>(), f.taille));
+    }
+    if rushs {
+        let nouveaux: Vec<Rush> = a_faire.iter().map(|(fid, fichier, _, nom, taille)| Rush {
+            id: fid.clone(), nom: nom.clone(), fichier: fichier.clone(), taille: *taille, etat: EtatRush::Telechargement,
+            erreur: None, source: None }).collect();
+        etat.modifier(&id, |p| p.rushs.extend(nouveaux)).await?;
+    }
+    let n = a_faire.len();
+    let etat2 = etat.clone();
+    tokio::spawn(async move {
+        for (k, (fid, fichier, chemin, nom, taille)) in a_faire.into_iter().enumerate() {
+            let local = dossier.join(&fichier);
+            let libelle = format!("Téléchargement depuis Google Drive ({}/{n}) : {nom}", k + 1);
+            let res = drive::telecharger(&etat2, &id, &distant, &chemin, &local, taille, &libelle).await;
+            if rushs {
+                let echec = res.as_ref().err().map(|e| format!("téléchargement depuis Google Drive impossible : {e:#}"));
+                let _ = etat2.modifier(&id, |p| {
+                    if let Some(r) = p.rushs.iter_mut().find(|r| r.id == fid) {
+                        r.etat = if echec.is_some() { EtatRush::Erreur } else { EtatRush::Televerse };
+                        r.erreur = echec.clone();
+                        if let Ok(t) = std::fs::metadata(&local).map(|m| m.len()) {
+                            r.taille = t;
+                        }
+                    }
+                }).await;
+                if res.is_ok() {
+                    etat2.file.ajouter(&etat2, &id, Genre::Preparer(fid));
+                }
+            } else {
+                let media = match res {
+                    Ok(()) => rendu::sonder_media(&local, &nom).await.map(|(genre, duree, a_son)| Media {
+                        id: fid, nom: nom.clone(), fichier: fichier.clone(), genre, duree, a_son }),
+                    Err(e) => Err(e),
+                };
+                match media {
+                    Ok(m) => { let _ = etat2.modifier(&id, |p| p.medias.push(m)).await; }
+                    Err(e) => {
+                        let _ = tokio::fs::remove_file(&local).await;
+                        etat2.emettre(&id, "erreur", json!({"travail": "Import depuis Google Drive", "message": format!("{nom} : {e:#}")}));
+                    }
+                }
+            }
+        }
+        etat2.signaler(&id, "Téléchargement depuis Google Drive", 100.0);
+    });
+    Ok(Json(json!({"lances": n})))
+}
+
 // ---------------------------------------------------------------- jeux de réglages
 
 async fn voir_jeux(State(etat): State<EtatPartage>) -> Json<Value> {
@@ -1032,7 +1242,8 @@ struct NouveauJeu {
 /// Enregistre les réglages et la PostProd du projet sous ce nom.
 async fn ajouter_jeu(State(etat): State<EtatPartage>, Json(j): Json<NouveauJeu>) -> Reponse {
     let p = etat.projet(&j.projet).await?;
-    Ok(Json(json!(jeux::ajouter(&etat.cfg.donnees, &j.nom, p.reglages.clone(), p.postprod.clone())?)))
+    let medias = etat.dossier_projet(&p.id).join("medias");
+    Ok(Json(json!(jeux::ajouter(&etat.cfg.donnees, &j.nom, &p, &medias).await?)))
 }
 
 async fn retirer_jeu(State(etat): State<EtatPartage>, Path(jid): Path<String>) -> Reponse {
@@ -1043,6 +1254,8 @@ async fn retirer_jeu(State(etat): State<EtatPartage>, Path(jid): Path<String>) -
 /// Recharge un jeu sur le projet : chaque réglage passe par la même validation qu'à la main.
 async fn appliquer_jeu(State(etat): State<EtatPartage>, Path((id, jid)): Path<(String, String)>) -> Reponse {
     let jeu = jeux::trouver(&etat.cfg.donnees, &jid).ok_or_else(|| refus("ce jeu de réglages n'existe plus"))?;
+    // Logos et vidéos du jeu : copiés dans la médiathèque du projet avant d'y faire référence.
+    jeux::copier_medias(&jeu.medias, &jeux::dossier(&etat.cfg.donnees, &jid), &etat.dossier_projet(&id).join("medias")).await?;
     let changements: serde_json::Map<String, Value> = jeu.reglages.clone().into_iter().collect();
     let (faits, refus_) = etat
         .modifier(&id, |p| {
@@ -1055,6 +1268,13 @@ async fn appliquer_jeu(State(etat): State<EtatPartage>, Path((id, jid)): Path<(S
             }
             let res = appliquer_reglages(p, &changements);
             p.postprod = jeu.postprod.clone();
+            for m in &jeu.medias {
+                if !p.medias.iter().any(|x| x.id == m.id) {
+                    p.medias.push(m.clone());
+                }
+            }
+            p.habillage = jeu.habillage.clone();
+            p.generique = jeu.generique.clone();
             res
         })
         .await?;

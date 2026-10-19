@@ -53,6 +53,53 @@ pub struct Projet {
     /// Versions exportées du rendu final.
     #[serde(default)]
     pub exports: Vec<Export>,
+    /// Logos et textes posés sur toute la durée du montage.
+    #[serde(default)]
+    pub habillage: Vec<Habillage>,
+    /// Séquences avant et après le montage.
+    #[serde(default)]
+    pub generique: Generique,
+}
+
+/// Élément posé sur toute la durée du montage : un logo (image de la médiathèque) ou un texte.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct Habillage {
+    pub id: String,
+    /// « logo » ou « texte ».
+    pub genre: String,
+    /// Image du logo (médiathèque du projet).
+    pub media: String,
+    pub texte: String,
+    /// haut_gauche, haut_droite, bas_gauche, bas_droite, haut ou bas.
+    pub position: String,
+    /// Logo : largeur ; texte : hauteur des lettres. En part de la largeur de l'image.
+    pub taille: f64,
+    /// De 0,1 (presque transparent) à 1.
+    pub opacite: f64,
+    /// Texte : blanc, noir ou jaune.
+    pub couleur: String,
+}
+
+/// Générique : une séquence avant le montage, une après.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct Generique {
+    pub debut: Option<Sequence>,
+    pub fin: Option<Sequence>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct Sequence {
+    /// « video » : une vidéo de la médiathèque ; « carton » : un titre sur une image (ou sur un fond uni).
+    pub genre: String,
+    /// La vidéo, ou l'image de fond du carton (vide : fond uni).
+    pub media: String,
+    pub titre: String,
+    pub sous_titre: String,
+    /// Carton : sa durée ; vidéo : durée maximale gardée (0 : entière). En secondes.
+    pub duree: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,6 +126,8 @@ pub struct Auto {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum EtatRush {
+    /// En cours de téléchargement depuis Google Drive.
+    Telechargement,
     Televerse,
     Preparation,
     Prepare,

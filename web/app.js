@@ -67,6 +67,7 @@ const TRACES = {
   youtube: '<rect x="2.5" y="5.5" width="19" height="13" rx="4"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor" stroke="none"/>',
   peau: '<circle cx="12" cy="12" r="8"/><path d="M8.5 14.5c1.8 1.4 5.2 1.4 7 0M9 10h.01M15 10h.01"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.5-1.5 0-1.2-1-1.5-1-2.5s.7-1.5 1.8-1.5H17a4 4 0 0 0 4-4C21 6.5 17 3 12 3z"/><path d="M7.5 11h.01M10 7h.01M15 7h.01"/>',
+  dossier: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/>',
   grain: '<path d="M5 5h.01M10 7h.01M15 5h.01M19 9h.01M7 11h.01M12 12h.01M17 14h.01M5 17h.01M10 18h.01M15 19h.01M19 18h.01"/>',
 };
 
@@ -611,6 +612,7 @@ function dessinerParcours() {
 // ------------------------------------------------------------------ rushs
 
 const ETATS_RUSH = {
+  telechargement: ['Téléchargement', 'pastille alerte'],
   televerse: ['En file', 'pastille'],
   preparation: ['Préparation', 'pastille alerte'],
   prepare: ['Préparé', 'pastille'],
@@ -699,6 +701,7 @@ function dessinerRushs() {
       p.rushs.length === 0 ? h('div', { class: 'aide', style: { marginBottom: '12px' } }, icone('info'),
         h('span', {}, "Déposez une vidéo entière, ou plusieurs prises : EDIVID les prépare (rotation, couleurs HDR de l'iPhone, cadence), puis les transcrit et repère le visage. Comptez environ une minute d’analyse pour cinq minutes de vidéo.")) : null,
       zoneDepot('Glissez vos vidéos ici', 'ou cliquez pour les choisir — MOV, MP4, HEVC, HDR', 'video/*,.mov,.mp4,.m4v,.mkv', (f) => televerser(f, 'rushs')),
+      h('button', { class: 'btn petit doux', style: { marginTop: '8px' }, onclick: () => choisirDepuisDrive('rushs') }, icone('google'), 'Choisir sur Google Drive'),
       h('div', { class: 'liste-rushs' }, p.rushs.map((r, i) => {
         const [libelle, classe] = ETATS_RUSH[r.etat] || [r.etat, 'pastille'];
         const prog = progRush(r);
@@ -733,6 +736,9 @@ function construireLecteur() {
   const n = E.noeuds;
   n.video = h('video', { controls: true, playsinline: true, preload: 'metadata' });
   n.video.addEventListener('timeupdate', suivreLecture);
+  // Pendant la lecture, le suivi passe à ~12 fois par seconde : le mot surligné suit la voix.
+  n.video.addEventListener('play', () => { clearInterval(E.suiviFin); E.suiviFin = setInterval(suivreLecture, 80); });
+  n.video.addEventListener('pause', () => clearInterval(E.suiviFin));
   n.video.addEventListener('pause', () => { dessinerOutilsLecteur(); dessinerCalque(); });
   n.video.addEventListener('play', () => { dessinerOutilsLecteur(); dessinerCalque(); });
   n.video.addEventListener('seeked', dessinerCalque);
@@ -848,9 +854,15 @@ function dessinerOutilsLecteur() {
 const NOMS_REGIME_LONG = { respiration: 'Respiration', rafale: 'Rafale', impact: 'Impact' };
 
 /** Plans de la vidéo affichée (aperçu ou rendu) : ce qui a été réellement rendu. */
+/** Durée de la séquence d'ouverture du générique dans une vidéo rendue (0 sans générique). */
+function decalageGenerique(s) { return s?.rapport?.generique?.debut || 0; }
+
+/** Plans de la vidéo jouée, au temps de la vidéo : l'ouverture du générique les décale. */
 function plansAffiches() {
   const s = E.lecteur === 'rendu' ? E.vue.projet.rendu : E.vue.projet.apercu;
-  return s?.rapport?.plans_detail || [];
+  const plans = s?.rapport?.plans_detail || [];
+  const d = decalageGenerique(s);
+  return d ? plans.map((x) => ({ ...x, t: x.t + d })) : plans;
 }
 
 function dessinerTimelines() {
@@ -868,7 +880,10 @@ function dessinerTimelines() {
         class: `bloc ${pl.regime} ${pl.accroche ? 'accroche' : ''} ${pl.transition ? 'trans' : ''}`,
         style: { flexGrow: pl.d, flexBasis: 0 },
         title: `${minutes(pl.t)} · ${NOMS_REGIME_LONG[pl.regime]} · cadre ${pl.cadre} · ${fr(pl.d)} s${pl.accroche ? ' · accroche' : ''}${pl.transition ? ` · transition ${pl.transition}` : ''}`,
-        onclick: () => { if (E.lecteur === 'origine') changerLecteur(p.apercu ? 'apercu' : 'rendu'); setTimeout(() => { n.video.currentTime = pl.t + 0.01; }, 50); },
+        onclick: () => {
+          if (E.lecteur === 'origine') changerLecteur(p.apercu ? 'apercu' : 'rendu');
+          setTimeout(() => { n.video.currentTime = pl.t + decalageGenerique(E.lecteur === 'rendu' ? p.rendu : p.apercu) + 0.01; }, 50);
+        },
       })));
     const repere = h('div', { class: 'reperes' });
     for (const i of prog?.incrustations || []) {
@@ -1101,7 +1116,8 @@ function suivreLecture() {
     const pl = (sMontage?.rapport?.plans_detail || []).find((x) => !x.accroche && x.rush === srcRush && t >= x.src && t < x.src + x.d);
     if (pl) tMontage = pl.t + (t - pl.src);
   } else {
-    tMontage = t;
+    tMontage = t - decalageGenerique(E.lecteur === 'rendu' ? p.rendu : p.apercu);
+    if (tMontage < 0 || tMontage > totalMontage) tMontage = null;
     const pl = plansAffiches().find((x) => t >= x.t && t < x.t + x.d);
     if (pl && pl.src != null) { srcRush = pl.rush; srcT = pl.src + (t - pl.t); }
   }
@@ -1129,9 +1145,35 @@ function suivreLecture() {
     if (el) {
       el.classList.add('joue');
       const liste = E.noeuds.listePhrases;
-      if (el.offsetTop < liste.scrollTop || el.offsetTop > liste.scrollTop + liste.clientHeight - 60) liste.scrollTo({ top: el.offsetTop - 80, behavior: 'smooth' });
+      if (el.offsetTop < liste.scrollTop + 20 || el.offsetTop + el.offsetHeight > liste.scrollTop + liste.clientHeight - 20) {
+        liste.scrollTo({ top: el.offsetTop - liste.clientHeight / 3, behavior: 'smooth' });
+      }
     }
   }
+  if (cle && srcT !== null) marquerMot(cle, srcT);
+}
+
+/** Dans la phrase jouée, le mot prononcé à l'instant srcT (temps du rush) est mis en évidence. */
+function marquerMot(cle, srcT) {
+  const el = E.noeuds.listePhrases?.querySelector(`[data-cle="${CSS.escape(cle)}"]`);
+  const zone = el?.querySelector('.texte');
+  const ph = E.vue.phrases.find((x) => x.cle === cle);
+  if (!zone || !ph?.mots?.length) return;
+  if (!zone.dataset.mots) {
+    zone.dataset.mots = '1';
+    const marque = zone.querySelector('.marque-corrige');
+    const morceaux = [];
+    ph.mots.forEach(([, , m], i) => {
+      if (i && !/^['’-]/.test(m)) morceaux.push(' ');
+      morceaux.push(h('span', { class: 'mot', 'data-i': i }, m));
+    });
+    remplir(zone, morceaux, marque);
+  }
+  const i = ph.mots.findIndex(([a, b]) => srcT >= a - 0.05 && srcT <= b + 0.12);
+  const actuel = zone.querySelector('.mot.joue');
+  if (actuel && Number(actuel.dataset.i) === i) return;
+  actuel?.classList.remove('joue');
+  if (i >= 0) zone.querySelector(`[data-i="${i}"]`)?.classList.add('joue');
 }
 
 function allerALaPhrase(cle) {
@@ -1281,7 +1323,10 @@ function dessinerPhrases() {
         d && d.garder ? h('div', { class: 'etiquettes' },
           h('button', { class: `puce ${d.regime}`, title: 'Régime de la phrase — cliquez pour changer', onclick: () => changerPhrase(ph.cle, { regime: REGIMES[(REGIMES.indexOf(d.regime) + 1) % 3] }) }, NOMS_REGIME[d.regime]),
           h('button', { class: 'puce', title: 'Cadre — cliquez pour changer', onclick: () => changerPhrase(ph.cle, { cadre: CADRES[(CADRES.indexOf(d.cadre) + 1) % 4] }) }, NOMS_CADRE[d.cadre]),
-          p.incrustations.filter((i) => i.phrase === ph.cle).length ? h('span', { class: 'puce', style: { cursor: 'default' } }, `✦ ${p.incrustations.filter((i) => i.phrase === ph.cle).length} incrustation(s)`) : null) : null),
+          p.incrustations.filter((i) => i.phrase === ph.cle).map((inc) => h('span', { class: 'puce puce-incrustation', title: `${nomIncrustation(inc)} — ${fr(inc.duree)} s` },
+            `✦ ${nomIncrustation(inc).slice(0, 26)}`,
+            h('button', { class: 'puce-retirer', title: 'Retirer cette incrustation', 'aria-label': `Retirer ${nomIncrustation(inc)}`,
+              onclick: async (e) => { e.stopPropagation(); await retirerIncrustation(inc); } }, icone('fermer'))))) : null),
       monte ? h('div', { class: 'boutons' },
         h('button', { class: 'btn icone fantome', title: 'Corriger le texte (orthographe, mot mal transcrit)', onclick: () => { E.edition = ph.cle; dessinerPhrases(); } }, icone('crayon')),
         h('button', { class: 'btn icone fantome', title: 'Ajouter une incrustation (image, GIF, vidéo, effet)', onclick: () => dialogueIncrustation(ph) }, icone('baguette')),
@@ -1473,6 +1518,215 @@ function sectionConsignes(corps) {
     h('button', { class: 'btn petit fantome', style: { marginTop: '6px' }, onclick: afficherCoulisses }, icone('livre'), 'Voir les consignes complètes du LLM')));
 }
 
+const POSITIONS_HABILLAGE = [['haut_gauche', 'En haut à gauche'], ['haut', 'En haut'], ['haut_droite', 'En haut à droite'],
+  ['bas_gauche', 'En bas à gauche'], ['bas', 'En bas'], ['bas_droite', 'En bas à droite']];
+
+/** Curseur d'un réglage d'élément : libellé, valeur affichée, et rappel à chaque mouvement. */
+function curseurElement(libelle, valeur, min, max, pas, format, changer) {
+  const sortie = h('b', { class: 'petit' }, format(valeur));
+  return h('div', { class: 'reglage' }, h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, libelle), sortie),
+    h('input', { type: 'range', min, max, step: pas, value: valeur, 'aria-label': libelle,
+      oninput: (e) => { sortie.textContent = format(Number(e.target.value)); changer(Number(e.target.value), false); },
+      onchange: (e) => changer(Number(e.target.value), true) }));
+}
+
+/** Habillage : logos et textes posés sur toute la durée du montage. */
+function blocHabillage(corps) {
+  const p = E.vue.projet;
+  const liste = (p.habillage || []).map((x) => ({ ...x }));
+  const images = p.medias.filter((m) => m.genre === 'image' || m.genre === 'gif');
+  let minuterie;
+  const enregistrer = (tout_de_suite = true, message = '') => {
+    clearTimeout(minuterie);
+    minuterie = setTimeout(async () => {
+      try {
+        const r = await api('POST', `/api/projets/${E.projetId}/habillage`, liste);
+        r.habillage.forEach((x, i) => { if (liste[i]) liste[i].id = x.id; });
+        E.aMettreAJour = true;
+        if (message) toast(message, 'ok');
+      } catch (e) { toast(e.message, 'erreur'); }
+    }, tout_de_suite ? 0 : 500);
+  };
+  const zone = h('div');
+  const ajouterLogo = () => {
+    if (images.length) {
+      liste.push({ genre: 'logo', media: images[0].id, position: 'haut_droite', taille: 0.16, opacite: 0.9 });
+      enregistrer(true, 'Logo ajouté : choisissez l’image, la place et la taille.');
+      dessiner();
+      return;
+    }
+    // Pas encore d'image : on choisit le fichier du logo, il entre dans la médiathèque puis dans l'habillage.
+    choisirFichiers('image/*,.png,.svg,.gif', false, async (fichiers) => {
+      const f = fichiers[0];
+      if (!f) return;
+      try {
+        const r = await fetch(`/api/projets/${E.projetId}/medias?nom=${encodeURIComponent(f.name)}`, { method: 'PUT', body: f });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.erreur || `erreur ${r.status}`);
+        liste.push({ genre: 'logo', media: j.id, position: 'haut_droite', taille: 0.16, opacite: 0.9 });
+        await api('POST', `/api/projets/${E.projetId}/habillage`, liste);
+        E.aMettreAJour = true;
+        toast('Logo ajouté à la médiathèque et posé sur la vidéo.', 'ok');
+      } catch (e) { toast(e.message, 'erreur'); }
+    });
+  };
+  const element = (x, i) => {
+    const retirer = h('button', { class: 'btn icone petit fantome danger', title: 'Retirer cet élément',
+      onclick: () => { liste.splice(i, 1); enregistrer(true, 'Élément retiré.'); dessiner(); } }, icone('corbeille'));
+    const position = h('select', { class: 'champ', 'aria-label': 'Place' }, POSITIONS_HABILLAGE.map(([v, l]) => h('option', { value: v, selected: x.position === v }, l)));
+    position.addEventListener('change', () => { x.position = position.value; enregistrer(); });
+    let tete;
+    if (x.genre === 'logo') {
+      const choix = h('select', { class: 'champ', 'aria-label': 'Image du logo' }, images.map((m) => h('option', { value: m.id, selected: x.media === m.id }, m.nom)));
+      choix.addEventListener('change', () => { x.media = choix.value; enregistrer(); dessiner(); });
+      tete = h('div', { class: 'habillage-tete' },
+        h('div', { class: 'habillage-vignette' }, x.media ? h('img', { src: `/api/projets/${E.projetId}/medias/${x.media}`, alt: '' }) : icone('image')),
+        h('div', { style: { flex: 1, minWidth: 0 } }, h('b', { class: 'petit' }, 'Logo'), choix), retirer);
+    } else {
+      const champ = h('input', { class: 'champ', value: x.texte || '', maxlength: '80', 'aria-label': 'Texte' });
+      champ.addEventListener('input', () => { x.texte = champ.value; enregistrer(false); });
+      tete = h('div', { class: 'habillage-tete' }, h('div', { class: 'habillage-vignette' }, icone('texte')),
+        h('div', { style: { flex: 1, minWidth: 0 } }, h('b', { class: 'petit' }, 'Texte'), champ), retirer);
+    }
+    return h('div', { class: 'element-habillage' }, tete,
+      h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Place'), position),
+      x.genre === 'logo'
+        ? curseurElement('Taille', Math.round((x.taille || 0.16) * 100), 5, 45, 1, (v) => `${v} % de la largeur`, (v, fin) => { x.taille = v / 100; enregistrer(fin); })
+        : curseurElement('Taille du texte', Math.round((x.taille || 0.035) * 1000) / 10, 2, 8, 0.5, (v) => `${fr(v)} %`, (v, fin) => { x.taille = v / 100; enregistrer(fin); }),
+      curseurElement('Opacité', Math.round((x.opacite || 0.9) * 100), 10, 100, 5, (v) => `${v} %`, (v, fin) => { x.opacite = v / 100; enregistrer(fin); }),
+      x.genre === 'texte' ? h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Couleur du texte', style: { marginTop: '8px' } },
+        [['blanc', 'Blanc'], ['noir', 'Noir'], ['jaune', 'Jaune']].map(([v, l]) => h('button', { class: (x.couleur || 'blanc') === v ? 'actif' : '',
+          onclick: () => { x.couleur = v; enregistrer(); dessiner(); } }, l))) : null);
+  };
+  const dessiner = () => remplir(zone,
+    h('div', { class: 'reglage-aide' }, 'Un logo ou un texte posé sur toute la durée du montage (pas sur le générique) : votre marque, votre nom, votre compte. Un PNG à fond transparent rend le mieux. Les sous-titres passent au-dessus.'),
+    liste.map(element),
+    h('div', { style: { display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' } },
+      h('button', { class: 'btn petit doux', onclick: ajouterLogo }, icone('image'), 'Ajouter un logo'),
+      h('button', { class: 'btn petit doux', onclick: () => {
+        liste.push({ genre: 'texte', texte: '@votrecompte', position: 'bas_droite', taille: 0.035, opacite: 0.85, couleur: 'blanc' });
+        enregistrer(true, 'Texte ajouté : écrivez-le, puis choisissez sa place.');
+        dessiner();
+      } }, icone('texte'), 'Ajouter un texte')));
+  dessiner();
+  const resume = liste.length ? liste.map((x) => (x.genre === 'logo' ? 'logo' : `« ${x.texte} »`)).join(' · ') : 'Rien sur toute la durée';
+  corps.append(blocOutil('habillage', { icone: 'etoile', titre: 'Habillage permanent', famille: 'image', resume }, zone));
+}
+
+/** Générique : une vidéo, ou un carton (titre sur une image), avant et après le montage. */
+function blocGenerique(corps) {
+  const p = E.vue.projet;
+  const g = { debut: p.generique?.debut ? { ...p.generique.debut } : null, fin: p.generique?.fin ? { ...p.generique.fin } : null };
+  const videos = p.medias.filter((m) => m.genre === 'video');
+  const images = p.medias.filter((m) => m.genre === 'image' || m.genre === 'gif');
+  let minuterie;
+  const enregistrer = (tout_de_suite = true) => {
+    clearTimeout(minuterie);
+    minuterie = setTimeout(async () => {
+      try { await api('POST', `/api/projets/${E.projetId}/generique`, g); E.aMettreAJour = true; }
+      catch (e) { toast(e.message, 'erreur'); }
+    }, tout_de_suite ? 0 : 500);
+  };
+  const zone = h('div');
+  const cote = (cle, libelle) => {
+    const s = g[cle];
+    const genre = s ? s.genre : 'aucun';
+    const choisir = (v) => {
+      if (v === 'aucun') g[cle] = null;
+      else if (v === 'video') {
+        if (!videos.length) { toast('Ajoutez d’abord la vidéo dans l’onglet Médias (ou depuis Google Drive).', 'erreur'); return; }
+        g[cle] = { genre: 'video', media: videos[0].id, duree: 0 };
+      } else g[cle] = { genre: 'carton', titre: cle === 'debut' ? p.nom : 'Merci d’avoir regardé', sous_titre: '', media: '', duree: 3 };
+      enregistrer();
+      dessiner();
+    };
+    const parties = [h('div', { class: 'segments', role: 'radiogroup', 'aria-label': libelle },
+      [['aucun', 'Aucun'], ['video', 'Vidéo'], ['carton', 'Titre + image']].map(([v, l]) => h('button', { class: genre === v ? 'actif' : '', onclick: () => choisir(v) }, l)))];
+    if (s?.genre === 'video') {
+      const choix = h('select', { class: 'champ', 'aria-label': 'Vidéo' }, videos.map((m) => h('option', { value: m.id, selected: s.media === m.id }, `${m.nom}${m.duree ? ` (${fr(m.duree)} s)` : ''}`)));
+      choix.addEventListener('change', () => { s.media = choix.value; enregistrer(); });
+      parties.push(h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Vidéo'), choix),
+        curseurElement('Durée gardée', s.duree || 0, 0, 30, 1, (v) => (v ? `${v} s au plus` : 'entière'), (v, fin) => { s.duree = v; enregistrer(fin); }));
+    } else if (s?.genre === 'carton') {
+      const titre = h('input', { class: 'champ', value: s.titre || '', maxlength: '80', placeholder: 'Titre', 'aria-label': 'Titre' });
+      titre.addEventListener('input', () => { s.titre = titre.value; enregistrer(false); });
+      const sous = h('input', { class: 'champ', value: s.sous_titre || '', maxlength: '120', placeholder: 'Sous-titre (facultatif)', 'aria-label': 'Sous-titre' });
+      sous.addEventListener('input', () => { s.sous_titre = sous.value; enregistrer(false); });
+      const image = h('select', { class: 'champ', 'aria-label': 'Image de fond' }, h('option', { value: '' }, 'Fond sombre uni'),
+        images.map((m) => h('option', { value: m.id, selected: s.media === m.id }, m.nom)));
+      image.addEventListener('change', () => { s.media = image.value; enregistrer(); });
+      parties.push(h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Titre'), titre, h('div', { style: { height: '6px' } }), sous),
+        h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Image de fond'), image),
+        curseurElement('Durée', s.duree || 3, 1.5, 10, 0.5, (v) => `${fr(v)} s`, (v, fin) => { s.duree = v; enregistrer(fin); }));
+    }
+    return h('div', { class: 'element-habillage' }, h('b', { class: 'petit' }, libelle), ...parties);
+  };
+  const dessiner = () => remplir(zone,
+    h('div', { class: 'reglage-aide' }, 'Une séquence avant le montage et une après : votre vidéo d’ouverture ou de fin (onglet Médias), ou un titre sur une image. Elles s’enchaînent en fondu ; les sous-titres et l’habillage ne s’y posent pas.'),
+    cote('debut', 'Avant le montage'), cote('fin', 'Après le montage'));
+  dessiner();
+  const decrire = (s) => (!s ? 'aucun' : s.genre === 'video' ? 'vidéo' : `« ${s.titre || 'carton'} »`);
+  corps.append(blocOutil('generique', { icone: 'film', titre: 'Générique : début et fin', famille: 'montage',
+    resume: `Début : ${decrire(g.debut)} · Fin : ${decrire(g.fin)}` }, zone));
+}
+
+/** Choisir des fichiers sur le Google Drive relié et les télécharger dans le projet (rushs ou médias). */
+function choisirDepuisDrive(cible) {
+  const choisis = new Map();
+  let compte = '';
+  fenetre(cible === 'rushs' ? 'Choisir des vidéos sur Google Drive' : 'Choisir des médias sur Google Drive', (fermer) => {
+    const zone = h('div', {}, h('p', { class: 'petit muet' }, 'Lecture du Drive…'));
+    const bouton = h('button', { class: 'btn primaire', disabled: true, onclick: async () => {
+      bouton.disabled = true;
+      try {
+        const r = await api('POST', `/api/projets/${E.projetId}/drive/importer`, { compte, cible, fichiers: [...choisis.values()] });
+        toast(`${r.lances} fichier(s) en téléchargement depuis Google Drive : ${cible === 'rushs' ? 'ils apparaissent dans « Vos rushs », puis sont analysés' : 'ils arrivent dans la médiathèque'}.`, 'ok');
+        fermer();
+        rafraichir();
+      } catch (e) { toast(e.message, 'erreur'); bouton.disabled = false; }
+    } }, 'Importer');
+    const maj = () => {
+      bouton.disabled = !choisis.size;
+      bouton.textContent = choisis.size ? `Importer ${choisis.size} fichier${choisis.size > 1 ? 's' : ''}` : 'Importer';
+    };
+    const aller = async (chemin) => {
+      remplir(zone, h('p', { class: 'petit muet' }, 'Lecture du Drive…'));
+      let r;
+      try {
+        r = await api('GET', `/api/drive/parcourir?compte=${encodeURIComponent(compte)}&chemin=${encodeURIComponent(chemin)}&genre=${cible}`);
+      } catch (e) {
+        remplir(zone, h('div', { class: 'aide', style: { background: 'var(--erreur-doux)' } }, icone('alerte'), h('span', {}, e.message)),
+          h('a', { class: 'btn petit doux', href: '#/parametres', style: { marginTop: '10px' }, onclick: fermer }, icone('engrenage'), 'Ouvrir les Paramètres'));
+        return;
+      }
+      compte = r.compte;
+      const morceaux = chemin ? chemin.split('/') : [];
+      const choixCompte = r.comptes.length > 1 ? h('select', { class: 'champ', style: { marginBottom: '10px' }, 'aria-label': 'Compte Google',
+        onchange: (e) => { compte = e.target.value; choisis.clear(); maj(); aller(''); } },
+      r.comptes.map((c) => h('option', { value: c.email, selected: c.email === compte }, `${c.nom || c.email} — ${c.email}`))) : null;
+      remplir(zone, choixCompte,
+        h('div', { class: 'fil-drive' }, h('button', { class: 'lien', onclick: () => aller('') }, 'Mon Drive'),
+          morceaux.map((m, i) => [h('span', { class: 'muet' }, ' / '), h('button', { class: 'lien', onclick: () => aller(morceaux.slice(0, i + 1).join('/')) }, m)])),
+        h('div', { class: 'liste-drive' },
+          r.dossiers.map((d) => h('button', { class: 'drive-ligne', onclick: () => aller(chemin ? `${chemin}/${d}` : d) }, icone('dossier'), h('span', { class: 'drive-nom' }, d))),
+          r.fichiers.map((f) => h('label', { class: 'drive-ligne' },
+            h('input', { type: 'checkbox', checked: choisis.has(f.chemin), onchange: (e) => { if (e.target.checked) choisis.set(f.chemin, f); else choisis.delete(f.chemin); maj(); } }),
+            icone(/\.(mov|mp4|m4v|mkv|avi|mts|hevc|webm|3gp)$/i.test(f.nom) ? 'film' : /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f.nom) ? 'musique' : 'image'),
+            h('span', { class: 'drive-nom' }, f.nom),
+            h('span', { class: 'tres-petit muet' }, `${taille(f.taille)}${f.modifie ? ` · ${new Date(f.modifie).toLocaleDateString('fr-FR')}` : ''}`))),
+          !r.dossiers.length && !r.fichiers.length ? h('p', { class: 'petit muet', style: { padding: '10px' } },
+            cible === 'rushs' ? 'Aucune vidéo dans ce dossier.' : 'Aucun média dans ce dossier.') : null));
+    };
+    aller('');
+    return h('div', {},
+      h('p', { class: 'petit muet', style: { marginTop: 0 } }, cible === 'rushs'
+        ? 'Cochez une ou plusieurs vidéos : elles sont téléchargées dans le projet en qualité d’origine, puis analysées.'
+        : 'Cochez des images, vidéos ou musiques : elles entrent dans la médiathèque du projet.'),
+      zone,
+      h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' } }, h('button', { class: 'btn', onclick: fermer }, 'Annuler'), bouton));
+  }, { large: true });
+}
+
 /** Jeux de réglages : enregistrer ceux du projet sous un nom, en recharger un d'un clic. */
 function blocJeux(corps) {
   const zone = h('div', {}, h('p', { class: 'petit muet' }, 'Chargement…'));
@@ -1525,6 +1779,8 @@ function dessinerReglages(corps) {
     h('span', {}, 'Ouvrez un bloc pour régler. Chaque changement est enregistré aussitôt ; cliquez ensuite sur « Mettre à jour l’aperçu ». Vous pouvez aussi simplement le demander à l’assistant.')));
   blocJeux(corps);
   sectionConsignes(corps);
+  blocHabillage(corps);
+  blocGenerique(corps);
   const sections = [...new Set(E.catalogue.map((r) => r.section))];
   for (const s of sections) {
     const [famille, ic] = SECTIONS_REGLAGES[s] || ['recettes', 'reglages'];
@@ -1558,6 +1814,7 @@ function dessinerMedias(corps) {
     h('div', { class: 'aide', style: { marginBottom: '12px' } }, icone('info'),
       h('span', {}, 'Vos images, GIF, vidéos et sons. Les images et vidéos se posent sur une phrase (la baguette dans le texte, ou en le demandant à l’assistant) ; les sons servent de musique de fond (onglet Réglages).')),
     zoneDepot('Ajoutez des médias', 'Images, GIF, vidéos courtes, musiques', 'image/*,video/*,audio/*,.gif', (f) => televerser(f, 'medias')),
+    h('button', { class: 'btn petit doux', style: { marginTop: '8px' }, onclick: () => choisirDepuisDrive('medias') }, icone('google'), 'Choisir sur Google Drive'),
     E.noeuds.televersementsMedias,
     p.medias.some((m) => m.genre !== 'son') ? h('p', { class: 'tres-petit muet', style: { margin: '10px 0 0' } }, 'Astuce : mettez la vidéo en pause, puis glissez une image ou un GIF directement sur la vidéo, à l’endroit voulu.') : null,
     p.medias.length ? h('div', { class: 'grille-medias' }, p.medias.map((m) =>
@@ -1683,6 +1940,21 @@ function dessinerEffets(corps) {
           E.aMettreAJour = true;
         } }, icone('corbeille')))));
   }
+}
+
+/** Ce qu'une incrustation pose : son texte, son effet ou le nom de son média. */
+function nomIncrustation(inc) {
+  if (inc.texte) return `« ${inc.texte} »`;
+  if (inc.effet) return EFFETS[inc.effet]?.[0] || inc.effet;
+  return E.vue.projet.medias.find((m) => m.id === inc.media)?.nom || '(média retiré)';
+}
+
+async function retirerIncrustation(inc) {
+  try {
+    await api('DELETE', `/api/projets/${E.projetId}/incrustations/${inc.id}`);
+    E.aMettreAJour = true;
+    toast(`${nomIncrustation(inc)} retiré. Mettez à jour l’aperçu pour le voir.`, 'ok');
+  } catch (e) { toast(e.message, 'erreur'); }
 }
 
 function dialogueIncrustation(ph) {

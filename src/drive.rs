@@ -88,6 +88,68 @@ async fn rclone_cmd(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&sortie.stdout).to_string())
 }
 
+/// Extensions proposées quand on choisit des fichiers sur le Drive.
+const VIDEOS: &[&str] = &["mov", "mp4", "m4v", "mkv", "avi", "mts", "hevc", "webm", "3gp"];
+const AUTRES_MEDIAS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "heic", "mp3", "wav", "m4a", "aac", "ogg", "flac"];
+
+/// Un dossier du Drive : ses sous-dossiers et ses fichiers utiles (vidéos pour les rushs ; vidéos, images
+/// et sons pour la médiathèque), les plus récents d'abord.
+pub async fn parcourir(distant: &str, dossier: &str, genre: &str) -> Result<Value> {
+    let cible = if dossier.is_empty() { distant.to_string() } else { chemin(distant, dossier) };
+    let brut = rclone_cmd(&["lsjson", "--no-mimetype", &cible]).await?;
+    let entrees: Vec<Value> = serde_json::from_str(&brut).context("réponse du Drive illisible")?;
+    let utile = |nom: &str| {
+        let ext = nom.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+        VIDEOS.contains(&ext.as_str()) || (genre == "medias" && AUTRES_MEDIAS.contains(&ext.as_str()))
+    };
+    let mut dossiers: Vec<String> = entrees.iter().filter(|e| e["IsDir"] == true)
+        .filter_map(|e| e["Name"].as_str().map(str::to_string)).collect();
+    dossiers.sort_by_key(|d| d.to_lowercase());
+    let mut fichiers: Vec<Value> = entrees.iter()
+        .filter(|e| e["IsDir"] != true && e["Name"].as_str().is_some_and(utile))
+        .map(|e| json!({"nom": e["Name"], "taille": e["Size"], "modifie": e["ModTime"],
+                        "chemin": if dossier.is_empty() { e["Name"].as_str().unwrap_or("").to_string() }
+                                  else { format!("{dossier}/{}", e["Name"].as_str().unwrap_or("")) }}))
+        .collect();
+    fichiers.sort_by(|a, b| b["modifie"].as_str().cmp(&a["modifie"].as_str()));
+    Ok(json!({"chemin": dossier, "dossiers": dossiers, "fichiers": fichiers}))
+}
+
+/// Télécharge un fichier du Drive ; la progression (taille déjà écrite) s'affiche dans l'interface.
+pub async fn telecharger(etat: &EtatPartage, projet: &str, distant: &str, source: &str, local: &Path, taille: u64,
+                         libelle: &str) -> Result<()> {
+    let mut enfant = Command::new(rclone())
+        .args(["copyto", "--inplace", &chemin(distant, source), &local.to_string_lossy()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .context("rclone introuvable")?;
+    loop {
+        tokio::select! {
+            statut = enfant.wait() => {
+                let statut = statut?;
+                if !statut.success() {
+                    let mut err = String::new();
+                    if let Some(mut e) = enfant.stderr.take() {
+                        use tokio::io::AsyncReadExt;
+                        let _ = e.read_to_string(&mut err).await;
+                    }
+                    let _ = tokio::fs::remove_file(local).await;
+                    bail!("{}", err.lines().filter(|l| !l.trim().is_empty()).last().unwrap_or("échec du téléchargement"));
+                }
+                return Ok(());
+            }
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                let fait = tokio::fs::metadata(local).await.map(|m| m.len()).unwrap_or(0);
+                if taille > 0 {
+                    etat.signaler(projet, libelle, (100.0 * fait as f64 / taille as f64).min(99.0));
+                }
+            }
+        }
+    }
+}
+
 /// Vérifie la liaison et crée les dossiers s'il le faut.
 pub async fn verifier(d: &Drive) -> Result<String> {
     if d.distant.ends_with(':') {
@@ -260,7 +322,20 @@ async fn prendre(etat: &EtatPartage, d: &Drive, compte: &str, groupe: &str, fich
         postprod: jeu.as_ref().map(|j| j.postprod.clone()).or_else(|| modele.as_ref().map(|m| m.postprod.clone())).unwrap_or_default(),
         corrections: Default::default(),
         exports: vec![],
+        habillage: jeu.as_ref().map(|j| j.habillage.clone()).or_else(|| modele.as_ref().map(|m| m.habillage.clone())).unwrap_or_default(),
+        generique: jeu.as_ref().map(|j| j.generique.clone()).or_else(|| modele.as_ref().map(|m| m.generique.clone())).unwrap_or_default(),
     };
+    // Les logos et vidéos de cet habillage et de ce générique, copiés dans la médiathèque du nouveau projet.
+    let dossier_medias = etat.dossier_projet(&id).join("medias");
+    if let Some(j) = &jeu {
+        crate::jeux::copier_medias(&j.medias, &crate::jeux::dossier(&etat.cfg.donnees, &j.id), &dossier_medias).await?;
+        p.medias.extend(j.medias.iter().cloned());
+    } else if let Some(m) = &modele {
+        let utiles = crate::jeux::medias_utiles(&m.habillage, &m.generique);
+        let medias: Vec<_> = m.medias.iter().filter(|x| utiles.contains(&x.id)).cloned().collect();
+        crate::jeux::copier_medias(&medias, &etat.dossier_projet(&m.id).join("medias"), &dossier_medias).await?;
+        p.medias.extend(medias);
+    }
     let mut tries: Vec<&Fichier> = fichiers.iter().collect();
     tries.sort_by(|a, b| a.chemin.cmp(&b.chemin));
     let dossier_rushs = etat.dossier_projet(&id).join("rushs");

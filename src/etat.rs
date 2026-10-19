@@ -61,6 +61,11 @@ impl Etat {
                             }
                         }
                         reglages::completer(&mut p.reglages);
+                        // Un téléchargement depuis le Drive ne survit pas à un redémarrage.
+                        for r in p.rushs.iter_mut().filter(|r| r.etat == crate::modele::EtatRush::Telechargement) {
+                            r.etat = crate::modele::EtatRush::Erreur;
+                            r.erreur = Some("téléchargement depuis Google Drive interrompu : retirez ce rush et relancez l'import".into());
+                        }
                         projets.insert(p.id.clone(), p);
                     }
                     Err(e) => tracing::warn!("projet illisible {}: {e}", chemin.display()),
