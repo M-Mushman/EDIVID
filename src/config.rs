@@ -22,6 +22,8 @@ pub struct Config {
     pub python: PathBuf,
     /// Python du débruiteur IA (environnement à part : le paquet fige d'anciennes versions).
     pub python_rehaussement: PathBuf,
+    /// Python de la reconstruction du timbre (VoiceFixer, environnement à part).
+    pub python_voicefixer: PathBuf,
     pub code_acces: String,
     /// Valeur du témoin de session, dérivée du code.
     pub jeton: String,
@@ -72,6 +74,7 @@ impl Config {
         Ok(Self {
             python: racine.join(".venv/bin/python"),
             python_rehaussement: racine.join(".venv-rehaussement/bin/python"),
+            python_voicefixer: racine.join(".venv-voicefixer/bin/python"),
             racine,
             donnees,
             ecoute,

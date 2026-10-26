@@ -7,7 +7,9 @@ transitions, sous-titres — puis on l'ajuste en discutant avec lui, dans une in
 - `src/` : serveur Rust (axum) — file de travaux, découpe et cadrage, rendu ffmpeg, LLM, API.
 - `capteurs/` : adaptateurs de modèles en Python — `analyse.py` (Whisper large-v3, enveloppe
   sonore, visage YuNet), `nettete.py` (Real-ESRGAN, GFPGAN), `rehausse.py` (écho et bruit retirés par IA : débruiteur de Resemble Enhance,
-  environnement à part `.venv-rehaussement`, poids dans `modeles/resemble-enhance`).
+  environnement à part `.venv-rehaussement`, poids dans `modeles/resemble-enhance`), `restaure.py` (timbre
+  reconstruit par VoiceFixer, `.venv-voicefixer`), `verifie_voix.py` (garde-fou : Whisper retranscrit la voix
+  reconstruite ; là où un mot change, la voix débruitée reste).
 - `web/` : interface (HTML, CSS, JavaScript sans dépendance).
 - `deploy/` : service utilisateur systemd et script d'installation.
 - `docs/plan-v0.1.md` : plan technique ; `p0/` : la preuve de concept d'origine.
@@ -28,6 +30,12 @@ uv pip install --python .venv-rehaussement/bin/python omegaconf librosa resampy 
     "numpy<2" "pandas<2.3" "scipy<1.15" "matplotlib<3.10"
 # poids (licence MIT) dans modeles/resemble-enhance/enhancer_stage2 : hparams.yaml, ds/G/latest,
 # ds/G/default/mp_rank_00_model_states.pt (huggingface.co/ResembleAI/resemble-enhance)
+# timbre reconstruit par IA (VoiceFixer, licence MIT), son propre environnement ; poids téléchargés au premier usage
+# dans ~/.cache/voicefixer :
+uv venv --python 3.11 .venv-voicefixer
+uv pip install --python .venv-voicefixer/bin/python --index-url https://download.pytorch.org/whl/cu130 \
+    --extra-index-url https://pypi.org/simple torch==2.14.0 torchaudio
+uv pip install --python .venv-voicefixer/bin/python voicefixer==0.1.3
 ./deploy/installer.sh
 ```
 

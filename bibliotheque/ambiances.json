@@ -4,7 +4,7 @@
    "cle": "studio_feutre",
    "famille": "Voix",
    "nom": "Studio feutré",
-   "description": "Son chaud et velouté, sans écho ni bruit (retirés par l'IA) : la voix d'une cabine de studio tapissée de mousse.",
+   "description": "Son chaud et velouté, sans écho ni bruit, timbre de studio reconstruit par l'IA (vérifié mot à mot) : la voix d'une cabine tapissée de mousse.",
    "reglages": {
     "debruitage": "non",
     "dereverberation": "forte",
@@ -12,7 +12,8 @@
     "voix": true,
     "timbre_voix": "chaud",
     "deesseur": true,
-    "espace": "aucun"
+    "espace": "aucun",
+    "restauration": true
    }
   },
   {
@@ -27,7 +28,8 @@
     "voix": true,
     "timbre_voix": "proche",
     "deesseur": true,
-    "espace": "chambre"
+    "espace": "chambre",
+    "restauration": true
    }
   },
   {
@@ -42,7 +44,8 @@
     "voix": true,
     "timbre_voix": "podcast",
     "deesseur": false,
-    "espace": "aucun"
+    "espace": "aucun",
+    "restauration": true
    }
   },
   {
@@ -57,7 +60,8 @@
     "voix": true,
     "timbre_voix": "chaud",
     "deesseur": true,
-    "espace": "aucun"
+    "espace": "aucun",
+    "restauration": true
    }
   },
   {
@@ -72,7 +76,8 @@
     "voix": true,
     "timbre_voix": "naturel",
     "deesseur": false,
-    "espace": "aucun"
+    "espace": "aucun",
+    "restauration": false
    }
   },
   {
@@ -87,7 +92,8 @@
     "voix": true,
     "timbre_voix": "exterieur",
     "deesseur": true,
-    "espace": "aucun"
+    "espace": "aucun",
+    "restauration": false
    }
   },
   {
@@ -102,7 +108,8 @@
     "voix": true,
     "timbre_voix": "radio",
     "deesseur": false,
-    "espace": "aucun"
+    "espace": "aucun",
+    "restauration": false
    }
   },
   {
@@ -117,7 +124,8 @@
     "voix": true,
     "timbre_voix": "telephone",
     "deesseur": false,
-    "espace": "aucun"
+    "espace": "aucun",
+    "restauration": false
    }
   }
  ]

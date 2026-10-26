@@ -2348,6 +2348,7 @@ function blocsSon(corps) {
     inscrit.dereverberation !== r.dereverberation ? `l’écho retiré par l’IA (« ${libelle('dereverberation', inscrit.dereverberation)} » au lieu de « ${libelle('dereverberation', r.dereverberation)} »)` : null,
     inscrit.debruitage !== r.debruitage ? `la réduction du bruit (« ${libelle('debruitage', inscrit.debruitage)} » au lieu de « ${libelle('debruitage', r.debruitage)} »)` : null,
     inscrit.calage_son !== r.calage_son ? 'le calage son/image' : null,
+    !!inscrit.restauration !== !!r.restauration ? (r.restauration ? 'le timbre reconstruit par l’IA' : 'la voix sans timbre reconstruit') : null,
   ].filter(Boolean) : [];
   if (ecarts.length) {
     corps.append(h('div', { class: 'aide', style: { background: 'var(--alerte-doux)', marginBottom: '10px' } }, icone('alerte'),
@@ -2368,6 +2369,7 @@ function blocsSon(corps) {
     'Léger : la traîne qui suit chaque phrase baisse. Moyen et Fort : une IA retire aussi l’écho et le bruit pendant que la voix parle, sans changer les mots (quelques secondes par rush sur la carte graphique, au prochain aperçu). Très fort : en plus, la traîne est coupée net, au risque de raboter la fin des mots doux.',
     [echo, niveau ? null : h('div', { class: 'tres-petit muet', style: { marginTop: '6px' } }, 'Réglage sur mesure (venu d’un jeu de réglages ou de l’assistant) : choisissez un niveau pour revenir à l’un d’eux.')], 'partiel'),
   ligne('debruitage', 'apercu'),
+  ligne('restauration', 'apercu'),
   ligne('espace', 'direct', 'Ajouter la résonance d’un lieu', 'L’inverse du retrait de l’écho : prête à la voix, déjà nettoyée, la résonance d’un lieu choisi — petite pièce, salle de conférence, grande salle, cathédrale.')));
 
   corps.append(blocOutil('son_musique', { icone: 'musique', titre: 'Musique et calage', famille: 'son',

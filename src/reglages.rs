@@ -273,6 +273,16 @@ pub const CATALOGUE: &[Reglage] = &[
     },
     Reglage {
         section: "Son",
+        cle: "restauration",
+        titre: "Reconstruire le timbre (IA)",
+        aide: "Après le retrait de l'écho et du bruit, une IA reconstruit le timbre d'une voix de studio (VoiceFixer). Elle peut \
+               se tromper sur un mot : EDIVID retranscrit le résultat et garde, à ces endroits, la voix seulement débruitée. Un \
+               peu moins de deux minutes par dizaine de minutes de rush, la première fois.",
+        genre: Genre::Interrupteur,
+        defaut: || json!(false),
+    },
+    Reglage {
+        section: "Son",
         cle: "harmoniques",
         titre: "Harmoniques",
         aide: "Ajoute à la voix des harmoniques dans les aigus (excitateur) : plus de présence et d'air, une voix qui « brille ». \
