@@ -239,7 +239,8 @@ pub const CATALOGUE: &[Reglage] = &[
         aide: "Avec « Voix plus présente ». Clair : voix en avant, aigus soulignés. Chaud : plus de corps, aigus adoucis. Naturel : seulement lissée. \
                Podcast : voix de studio, très régulière. Graves renforcés, Aigus adoucis : une seule correction. Radio, Téléphone : effets de style.",
         genre: Genre::Choix(&[("clair", "Clair et présent"), ("chaud", "Chaud et profond"), ("naturel", "Naturel"), ("podcast", "Podcast"),
-                              ("graves", "Graves renforcés"), ("aigus_doux", "Aigus adoucis"), ("radio", "Radio"), ("telephone", "Téléphone")]),
+                              ("graves", "Graves renforcés"), ("aigus_doux", "Aigus adoucis"), ("radio", "Radio"), ("telephone", "Téléphone"), ("proche", "Proche"),
+                              ("exterieur", "Extérieur")]),
         defaut: || json!("clair"),
     },
     Reglage {
@@ -250,6 +251,24 @@ pub const CATALOGUE: &[Reglage] = &[
                L'écho mêlé à la voix pendant qu'elle parle reste.",
         genre: Genre::Choix(&[("non", "Non"), ("attenuer", "Atténuer"), ("forte", "Atténuer fortement")]),
         defaut: || json!("non"),
+    },
+    Reglage {
+        section: "Son",
+        cle: "dereverberation",
+        titre: "Retirer l'écho de la voix",
+        aide: "Retranche l'écho mêlé à la voix pendant qu'elle parle (méthode WPE, sur le processeur ; environ une minute par \
+               dizaine de minutes de rush, la première fois). Douce : en partie, le son garde de l'air.",
+        genre: Genre::Choix(&[("non", "Non"), ("douce", "Douce"), ("forte", "Forte")]),
+        defaut: || json!("non"),
+    },
+    Reglage {
+        section: "Son",
+        cle: "espace",
+        titre: "Acoustique d'un lieu",
+        aide: "Prête à la voix la résonance d'un lieu : une petite pièce, une salle de conférence, une grande salle, une cathédrale.",
+        genre: Genre::Choix(&[("aucun", "Aucune"), ("chambre", "Petite pièce"), ("conference", "Salle de conférence"),
+                              ("salle", "Grande salle"), ("cathedrale", "Cathédrale")]),
+        defaut: || json!("aucun"),
     },
     Reglage {
         section: "Son",

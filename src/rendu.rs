@@ -261,6 +261,7 @@ pub async fn capteur(etat: &EtatPartage, projet: &str, script: &str, args: &[Str
             "transcription" => "Transcription de la parole",
             "visage" => "Repérage du visage",
             "nettete" => "Netteté IA",
+            "echo" => "Retrait de l'écho de la voix",
             _ => continue,
         };
         if dernier.elapsed().as_millis() > 400 {
@@ -356,8 +357,8 @@ fn filtre_plan(p: &Plan, largeur_entree: u32, sortie: (u32, u32), nette: bool) -
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, source: (u32, u32), sortie: (u32, u32),
-                     fichier: &Path, apercu: bool, nvenc: bool) -> Result<()> {
+async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, voix: Option<&Path>, source: (u32, u32),
+                     sortie: (u32, u32), fichier: &Path, apercu: bool, nvenc: bool) -> Result<()> {
     let zone = zone_entiere(p, source);
     let n = (p.duree * IPS).round().max(1.0) as u32;
     // Image et son de durée exacte : n images et n × 1 600 échantillons. Avec « -frames:v », ffmpeg coupait
@@ -375,7 +376,12 @@ async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, source: (u32, 
     args.extend([
         "-ss".into(), format!("{:.3}", p.t0), "-t".into(), format!("{:.3}", p.duree), "-i".into(), mezz.to_string_lossy().into(),
     ]);
-    let (v, a) = if nette.is_some() { ("0:v", "1:a") } else { ("0:v", "0:a") };
+    let (v, mut a) = if nette.is_some() { ("0:v", "1:a") } else { ("0:v", "0:a") };
+    // Voix sans écho : même découpe, dans le son du rush traité (calé à l'échantillon sur le rush).
+    if let Some(f) = voix {
+        args.extend(["-ss".into(), format!("{:.3}", p.t0), "-t".into(), format!("{:.3}", p.duree), "-i".into(), f.to_string_lossy().into()]);
+        a = if nette.is_some() { "2:a" } else { "1:a" };
+    }
     args.extend([
         "-map".into(), v.into(), "-map".into(), a.into(),
         "-vf".into(), format!("{vf},tpad=stop_mode=clone:stop_duration=1,trim=end_frame={n},setpts=PTS-STARTPTS"),
@@ -568,6 +574,8 @@ fn textes(prog: &Programme, l: &mut Vec<String>) {
             "glisse_gauche" => tags.push_str(&format!("\\move({:.0},{y:.0},{x:.0},{y:.0},0,300)\\fad(0,200)", -0.4 * wo)),
             "glisse_droite" => tags.push_str(&format!("\\move({:.0},{y:.0},{x:.0},{y:.0},0,300)\\fad(0,200)", 1.4 * wo)),
             "glisse_haut" => tags.push_str(&format!("\\move({x:.0},{:.0},{x:.0},{y:.0},0,300)\\fad(0,200)", -0.15 * ho)),
+            "glisse_bas" => tags.push_str(&format!("\\move({x:.0},{:.0},{x:.0},{y:.0},0,300)\\fad(0,200)", 1.15 * ho)),
+            "zoom" => tags.push_str("\\pos(X,Y)\\fscx10\\fscy10\\t(0,250,\\fscx100\\fscy100)\\fad(0,200)"),
             "aucune" | "machine" => tags.push_str("\\pos(X,Y)"),
             _ => tags.push_str("\\pos(X,Y)\\fad(250,250)"),
         }
@@ -753,7 +761,176 @@ async fn bruitage(etat: &EtatPartage) -> Result<PathBuf> {
     Ok(f)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Chaîne de la voix, de l'entrée `entree` à la sortie `sortie` du graphe de filtres : niveau, bruit, écho,
+/// timbre, sifflantes, acoustique de lieu, calage. Le rendu et l'écoute d'essai partagent la même.
+fn graphe_voix(r: &crate::reglages::Reglages, gain: f64, entree: &str, sortie: &str, ir: Option<&(PathBuf, f64)>) -> Vec<String> {
+    // asetpts : le son suit son propre compte d'échantillons, sans hériter des arrondis de la concaténation.
+    let mut a: Vec<String> = vec!["aresample=48000".into(), "asetpts=N/SR/TB".into()];
+    // La voix est d'abord ramenée à un niveau connu (−23 LUFS) : les seuils du compresseur et de la porte sont
+    // réglés pour ce niveau. Sans cela, un rush enregistré bas (−43 LUFS) passait sous tous les seuils.
+    a.push(format!("volume={gain:.1}dB"));
+    // afftdn retarde le son d'exactement 1 200 échantillons (mesuré au témoin flash + bip) : on les retire.
+    let compensation = format!(",atrim=start_sample={LATENCE_AFFTDN},asetpts=PTS-STARTPTS,apad=pad_len={LATENCE_AFFTDN}");
+    match texte(r, "debruitage").as_str() {
+        "leger" => a.push(format!("afftdn=nr=10:nf=-40:tn=1{compensation}")),
+        "fort" => a.push(format!("afftdn=nr=22:nf=-35:tn=1{compensation}")),
+        _ => {}
+    }
+    // Écho de la pièce : une porte douce baisse la traîne entre les phrases, après avoir retiré le grave boueux.
+    match texte(r, "reverberation").as_str() {
+        "attenuer" => a.push("highpass=f=90,equalizer=f=300:t=q:w=1:g=-3,agate=threshold=0.015:ratio=3:range=0.2:attack=3:release=120:knee=2".into()),
+        "forte" => a.push("highpass=f=100,equalizer=f=300:t=q:w=1:g=-4,equalizer=f=600:t=q:w=1.2:g=-2,\
+                           agate=threshold=0.02:ratio=5:range=0.1:attack=2:release=90:knee=1.5".into()),
+        _ => {}
+    }
+    if vrai(r, "voix") {
+        a.push(match texte(r, "timbre_voix").as_str() {
+            // Chaud et profond : du corps dans le bas (150 Hz), moins de nasal (400 Hz), une présence douce, des
+            // aigus adoucis, une compression lente qui ne pompe pas.
+            "chaud" => "highpass=f=70,bass=g=3.5:f=150:w=0.7,equalizer=f=420:t=q:w=1.3:g=-2,\
+                        equalizer=f=2800:t=q:w=1.4:g=1.5,treble=g=-3:f=7500:w=0.6,deesser=i=0.3,\
+                        acompressor=threshold=-22dB:ratio=2.5:attack=20:release=250:knee=4:makeup=2.5",
+            "naturel" => "highpass=f=70,acompressor=threshold=-22dB:ratio=2:attack=15:release=200:makeup=1.5",
+            // Voix de studio : présence, air, compression rapide et limiteur, très régulière.
+            "podcast" => "highpass=f=80,equalizer=f=200:t=q:w=1:g=-1.5,equalizer=f=3000:t=q:w=1.5:g=2.5,\
+                          equalizer=f=10000:t=q:w=1:g=1.5,deesser=i=0.3,\
+                          acompressor=threshold=-26dB:ratio=4:attack=5:release=120:knee=3:makeup=3,alimiter=limit=0.9",
+            "graves" => "highpass=f=60,bass=g=6:f=120:w=0.8,acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
+            "aigus_doux" => "highpass=f=70,treble=g=-6:f=6000:w=0.6,deesser=i=0.4,\
+                             acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
+            "radio" => "highpass=f=200,lowpass=f=5000,equalizer=f=1500:t=q:w=1:g=3,\
+                        acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=4",
+            "telephone" => "highpass=f=300,lowpass=f=3400,equalizer=f=1800:t=q:w=1:g=4,\
+                            acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=3",
+            // Proche : l'effet de proximité d'un micro tout près (grave chaud), présence, compression marquée.
+            "proche" => "highpass=f=60,bass=g=4:f=180:w=0.9,equalizer=f=3000:t=q:w=1.4:g=1,treble=g=-2:f=8000:w=0.6,\
+                         acompressor=threshold=-24dB:ratio=3:attack=10:release=180:knee=3:makeup=2.5",
+            // Extérieur : coupe le grondement du vent et de la circulation, garde l'intelligibilité.
+            "exterieur" => "highpass=f=130,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3000:t=q:w=1.4:g=2.5,\
+                            acompressor=threshold=-24dB:ratio=3:attack=8:release=150:makeup=2.5",
+            _ => "highpass=f=80,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=3,\
+                  acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2",
+        }
+        .to_string());
+    }
+    if vrai(r, "deesseur") {
+        a.push("deesser=i=0.4".into());
+    }
+    // Calage demandé par la personne : positif = son retardé, négatif = son avancé.
+    let calage_ms = nombre(r, "calage_son").round() as i64;
+    let calage = if calage_ms > 0 {
+        format!(",adelay=delays={calage_ms}:all=1")
+    } else if calage_ms < 0 {
+        let n = (-calage_ms) * 48;
+        format!(",atrim=start_sample={n},asetpts=PTS-STARTPTS,apad=pad_len={n}")
+    } else {
+        String::new()
+    };
+    let chaine = a.join(",");
+    match ir {
+        // Acoustique d'un lieu : la voix sèche, plus sa convolution par la réponse du lieu, dosée.
+        Some((fichier, part)) => vec![
+            format!("[{entree}]{chaine},asplit=2[vsec][vmou]"),
+            format!("amovie=filename={},aresample=48000,aformat=channel_layouts=stereo[vir]", fichier.to_string_lossy()),
+            // irnorm=2 : réponse normalisée en énergie ; elle ressort alors 9 dB au-dessus de la voix (mesuré le
+            // 2026-10-26), que le dosage du lieu ramène sous elle.
+            "[vmou][vir]afir=irnorm=2[vrev]".into(),
+            format!("[vsec][vrev]amix=inputs=2:weights='1 {part:.3}':normalize=0{calage}[{sortie}]"),
+        ],
+        None => vec![format!("[{entree}]{chaine}{calage}[{sortie}]")],
+    }
+}
+
+/// Son du rush sans l'écho de la pièce (WPE, capteurs/echo.py), calculé une fois par rush et par dosage.
+async fn voix_sans_echo(etat: &EtatPartage, projet: &str, rush: &str, force: &str) -> Result<Option<PathBuf>> {
+    let part = match force {
+        "douce" => 0.6,
+        "forte" => 1.0,
+        _ => return Ok(None),
+    };
+    let dossier = etat.dossier_travail(projet, rush);
+    let f = dossier.join(format!("voix_sans_echo_{force}.wav"));
+    if !f.exists() {
+        let provisoire = dossier.join(format!("voix_sans_echo_{force}.en-cours.wav"));
+        capteur(etat, projet, "echo.py", &[dossier.join("mezz.mkv").to_string_lossy().into(),
+                                           provisoire.to_string_lossy().into(), format!("{part}")]).await?;
+        tokio::fs::rename(&provisoire, &f).await?;
+    }
+    Ok(Some(f))
+}
+
+/// Écoute d'essai : `duree` secondes d'un rush à partir de `debut`, traitées avec les réglages de son donnés, en
+/// MP3. Tout se fait sur le processeur ; le résultat est gardé (même extrait, mêmes réglages : même fichier).
+pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64, duree: f64, r: &crate::reglages::Reglages) -> Result<Vec<u8>> {
+    let cles = ["debruitage", "dereverberation", "reverberation", "voix", "timbre_voix", "deesseur", "espace"];
+    let empreinte = {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        format!("{debut:.2}-{duree:.2}-{}", cles.iter().map(|c| r.get(*c).map(|v| v.to_string()).unwrap_or_default()).collect::<Vec<_>>().join("|"))
+            .hash(&mut h);
+        format!("{:016x}", h.finish())
+    };
+    let dossier = etat.dossier_travail(projet, rush).join("essais");
+    let mp3 = dossier.join(format!("{empreinte}.mp3"));
+    if let Ok(b) = tokio::fs::read(&mp3).await {
+        return Ok(b);
+    }
+    tokio::fs::create_dir_all(&dossier).await?;
+    let extrait = dossier.join(format!("{empreinte}.wav"));
+    ffmpeg_simple(vec!["-ss".into(), format!("{debut:.3}"), "-t".into(), format!("{duree:.3}"), "-i".into(),
+                       etat.dossier_travail(projet, rush).join("mezz.mkv").to_string_lossy().into(),
+                       "-vn".into(), "-ar".into(), "48000".into(), "-c:a".into(), "pcm_s16le".into(), extrait.to_string_lossy().into()])
+        .await?;
+    let mut source = extrait.clone();
+    let part = match texte(r, "dereverberation").as_str() { "douce" => Some(0.6), "forte" => Some(1.0), _ => None };
+    if let Some(part) = part {
+        let sans = dossier.join(format!("{empreinte}-sans-echo.wav"));
+        capteur(etat, projet, "echo.py", &[extrait.to_string_lossy().into(), sans.to_string_lossy().into(), format!("{part}")]).await?;
+        source = sans;
+    }
+    let gain = sonie_rush(etat, projet, rush).await.map(|i| (-23.0 - i).clamp(-12.0, 30.0)).unwrap_or(0.0);
+    let ir = reponse_espace(etat, &texte(r, "espace")).await?;
+    let mut fc = graphe_voix(r, gain, "0:a", "voix", ir.as_ref());
+    fc.push("[voix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]".into());
+    ffmpeg_simple(vec!["-i".into(), source.to_string_lossy().into(), "-filter_complex".into(), fc.join(";"),
+                       "-map".into(), "[a]".into(), "-c:a".into(), "libmp3lame".into(), "-q:a".into(), "3".into(), mp3.to_string_lossy().into()])
+        .await?;
+    for f in [&extrait, &source] {
+        let _ = tokio::fs::remove_file(f).await;
+    }
+    Ok(tokio::fs::read(&mp3).await?)
+}
+
+/// Lieux que l'on peut prêter à la voix : durée de la traîne (s), passe-bas (Hz), pré-délai (ms), dosage. Le
+/// dosage met la résonance sous la voix sèche : −18 dB (petite pièce), −12, −9, −6 dB (cathédrale).
+fn lieu(nom: &str) -> Option<(f64, u32, u32, f64)> {
+    let dosage = |sous_la_voix: f64| 10f64.powf((sous_la_voix - 9.0) / 20.0);
+    match nom {
+        "chambre" => Some((0.3, 7000, 3, dosage(-18.0))),
+        "conference" => Some((1.0, 5000, 15, dosage(-12.0))),
+        "salle" => Some((1.8, 4500, 25, dosage(-9.0))),
+        "cathedrale" => Some((4.5, 3500, 45, dosage(-6.0))),
+        _ => None,
+    }
+}
+
+/// Réponse impulsionnelle d'un lieu (bruit rose stéréo qui s'éteint), fabriquée une fois puis gardée.
+async fn reponse_espace(etat: &EtatPartage, nom: &str) -> Result<Option<(PathBuf, f64)>> {
+    let Some((duree, passe_bas, predelai, part)) = lieu(nom) else { return Ok(None) };
+    let f = etat.cfg.donnees.join("sons").join(format!("lieu_{nom}.wav"));
+    if !f.exists() {
+        tokio::fs::create_dir_all(f.parent().unwrap()).await?;
+        ffmpeg_simple(vec![
+            "-filter_complex".into(),
+            format!("anoisesrc=d={duree}:c=pink:r=48000:a=0.8:s=11[g];anoisesrc=d={duree}:c=pink:r=48000:a=0.8:s=23[d];\
+                     [g][d]amerge=inputs=2,afade=t=out:st=0:d={duree}:curve=exp,lowpass=f={passe_bas},\
+                     adelay=delays={predelai}:all=1"),
+            "-ac".into(), "2".into(), f.to_string_lossy().into(),
+        ])
+        .await?;
+    }
+    Ok(Some((f, part)))
+}
+
 /// Sonie intégrée d'un rush (LUFS), mesurée une fois sur sa version de travail puis gardée.
 async fn sonie_rush(etat: &EtatPartage, projet: &str, rush: &str) -> Option<f64> {
     let dossier = etat.dossier_travail(projet, rush);
@@ -812,6 +989,7 @@ pub fn resume_son(r: &crate::reglages::Reglages) -> String {
     morceaux.join(" · ")
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Path, ass: &Path, sortie: &Path,
                    apercu: bool, nvenc: bool) -> Result<()> {
     let r = &p.reglages;
@@ -854,6 +1032,9 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         let largeur = ((wo as f64 * inc.taille) as u32 / 2 * 2).max(16);
         let echelle = if plein {
             format!("scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho}")
+        } else if inc.entree == "zoom" {
+            // Le média grandit de 10 % à sa taille en 0,25 s, sans dépasser.
+            format!("scale=w='max(2,trunc({largeur}*if(lt(t,0.25),max(0.1,1-pow(1-t/0.25,2)),1)/2)*2)':h=-2:eval=frame")
         } else if inc.entree == "splash" {
             // Le média grandit jusqu'à 115 %, puis se pose à sa taille (t est le temps propre du média).
             format!("scale=w='max(2,trunc({largeur}*if(lt(t,0.21),max(0.1,1.15*t/0.21),if(lt(t,0.3),1.15-0.15*(t-0.21)/0.09,1))/2)*2)':h=-2:eval=frame")
@@ -889,6 +1070,13 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
             "glisse_gauche" => x = format!("({x})-(({x})+w)*{reste}"),
             "glisse_droite" => x = format!("({x})+(W-({x}))*{reste}"),
             "glisse_haut" => y = format!("({y})-(({y})+h)*{reste}"),
+            "glisse_bas" => y = format!("({y})+(H-({y}))*{reste}"),
+            // Secousse : le média tremble en arrivant, de moins en moins, pendant 0,45 s.
+            "secousse" => {
+                let amorti = format!("max(0,1-(t-{:.3})/0.45)", inc.debut);
+                x = format!("({x})+W*0.025*sin((t-{:.3})*70)*{amorti}", inc.debut);
+                y = format!("({y})+H*0.02*cos((t-{:.3})*83)*{amorti}", inc.debut);
+            }
             _ => {}
         }
         fc.push(format!("[{base}][inc{k}]overlay=x={x}:y={y}:enable='between(t,{:.3},{:.3})':eof_action=pass[vi{k}]",
@@ -924,62 +1112,9 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     fc.push(format!("[{base}]subtitles=f={}:fontsdir={},{BT709},setsar=1[v]", ass.to_string_lossy(), polices.to_string_lossy()));
 
     // Son.
-    // asetpts : le son suit son propre compte d'échantillons, sans hériter des arrondis de la concaténation.
-    let mut a: Vec<String> = vec!["aresample=48000".into(), "asetpts=N/SR/TB".into()];
-    // La voix est d'abord ramenée à un niveau connu (−23 LUFS) : les seuils du compresseur et de la porte sont
-    // réglés pour ce niveau. Sans cela, un rush enregistré bas (−43 LUFS) passait sous tous les seuils.
     let gain = gain_voix(etat, p, prog).await;
-    a.push(format!("volume={gain:.1}dB"));
-    // afftdn retarde le son d'exactement 1 200 échantillons (mesuré au témoin flash + bip) : on les retire.
-    let compensation = format!(",atrim=start_sample={LATENCE_AFFTDN},asetpts=PTS-STARTPTS,apad=pad_len={LATENCE_AFFTDN}");
-    match texte(r, "debruitage").as_str() {
-        "leger" => a.push(format!("afftdn=nr=10:nf=-40:tn=1{compensation}")),
-        "fort" => a.push(format!("afftdn=nr=22:nf=-35:tn=1{compensation}")),
-        _ => {}
-    }
-    // Écho de la pièce : une porte douce baisse la traîne entre les phrases, après avoir retiré le grave boueux.
-    match texte(r, "reverberation").as_str() {
-        "attenuer" => a.push("highpass=f=90,equalizer=f=300:t=q:w=1:g=-3,agate=threshold=0.015:ratio=3:range=0.2:attack=3:release=120:knee=2".into()),
-        "forte" => a.push("highpass=f=100,equalizer=f=300:t=q:w=1:g=-4,equalizer=f=600:t=q:w=1.2:g=-2,\
-                           agate=threshold=0.02:ratio=5:range=0.1:attack=2:release=90:knee=1.5".into()),
-        _ => {}
-    }
-    if vrai(r, "voix") {
-        a.push(match texte(r, "timbre_voix").as_str() {
-            // Chaud et profond : du corps dans le bas (150 Hz), moins de nasal (400 Hz), une présence douce, des
-            // aigus adoucis, une compression lente qui ne pompe pas.
-            "chaud" => "highpass=f=70,bass=g=3.5:f=150:w=0.7,equalizer=f=420:t=q:w=1.3:g=-2,\
-                        equalizer=f=2800:t=q:w=1.4:g=1.5,treble=g=-3:f=7500:w=0.6,deesser=i=0.3,\
-                        acompressor=threshold=-22dB:ratio=2.5:attack=20:release=250:knee=4:makeup=2.5",
-            "naturel" => "highpass=f=70,acompressor=threshold=-22dB:ratio=2:attack=15:release=200:makeup=1.5",
-            // Voix de studio : présence, air, compression rapide et limiteur, très régulière.
-            "podcast" => "highpass=f=80,equalizer=f=200:t=q:w=1:g=-1.5,equalizer=f=3000:t=q:w=1.5:g=2.5,\
-                          equalizer=f=10000:t=q:w=1:g=1.5,deesser=i=0.3,\
-                          acompressor=threshold=-26dB:ratio=4:attack=5:release=120:knee=3:makeup=3,alimiter=limit=0.9",
-            "graves" => "highpass=f=60,bass=g=6:f=120:w=0.8,acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
-            "aigus_doux" => "highpass=f=70,treble=g=-6:f=6000:w=0.6,deesser=i=0.4,\
-                             acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
-            "radio" => "highpass=f=200,lowpass=f=5000,equalizer=f=1500:t=q:w=1:g=3,\
-                        acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=4",
-            "telephone" => "highpass=f=300,lowpass=f=3400,equalizer=f=1800:t=q:w=1:g=4,\
-                            acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=3",
-            _ => "highpass=f=80,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=3,\
-                  acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2",
-        }
-        .to_string());
-    }
-    if vrai(r, "deesseur") {
-        a.push("deesser=i=0.4".into());
-    }
-    // Calage demandé par la personne : positif = son retardé, négatif = son avancé.
-    let calage = nombre(r, "calage_son").round() as i64;
-    if calage > 0 {
-        a.push(format!("adelay=delays={calage}:all=1"));
-    } else if calage < 0 {
-        let n = (-calage) * 48;
-        a.push(format!("atrim=start_sample={n},asetpts=PTS-STARTPTS,apad=pad_len={n}"));
-    }
-    fc.push(format!("[0:a]{}[voix]", a.join(",")));
+    let ir = reponse_espace(etat, &texte(r, "espace")).await?;
+    fc.extend(graphe_voix(r, gain, "0:a", "voix", ir.as_ref()));
     let mut melange = vec!["voix".to_string()];
     let musique = texte(r, "musique");
     if let Some(m) = p.medias.iter().find(|m| m.id == musique && nombre(r, "volume_musique") > 0.0) {
@@ -1159,6 +1294,12 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
     let sources: std::collections::HashMap<String, (u32, u32)> =
         analyses.iter().map(|(id, a)| (id.clone(), (a.largeur, a.hauteur))).collect();
     let mezz = |rush: &str| etat.dossier_travail(projet, rush).join("mezz.mkv");
+    let mut voix: std::collections::HashMap<String, PathBuf> = Default::default();
+    for (rush, _) in analyses {
+        if let Some(f) = voix_sans_echo(etat, projet, rush, &texte(&p.reglages, "dereverberation")).await? {
+            voix.insert(rush.clone(), f);
+        }
+    }
     // Plans.
     let sortie_dims = (prog.largeur, prog.hauteur);
     let total = prog.plans.len();
@@ -1174,7 +1315,8 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
             let nette = nettes.get(&i).cloned();
             let f = fichiers[i].clone();
             let src = sources[&pl.rush];
-            async move { rendre_plan(&pl, &m, nette.as_deref(), src, sortie_dims, &f, apercu, nvenc).await }
+            let v = voix.get(&pl.rush).cloned();
+            async move { rendre_plan(&pl, &m, nette.as_deref(), v.as_deref(), src, sortie_dims, &f, apercu, nvenc).await }
         })
         .collect();
     let mut flux = stream::iter(taches).buffer_unordered(PLANS_EN_PARALLELE);
@@ -1265,4 +1407,28 @@ pub async fn exporter(etat: &EtatPartage, projet: &str, preset: &str) -> Result<
     let taille = tokio::fs::metadata(dossier.join(&nom)).await.map(|m| m.len()).unwrap_or(0);
     Ok(crate::modele::Export { id: crate::modele::nouvel_id(), preset: preset.into(), fichier: nom, cree: maintenant(), taille,
                                largeur: lo, hauteur: ho, youtube: None })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Écrit le graphe de chaque ambiance de la bibliothèque : `EDIVID_GRAPHES=<dossier> cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn graphes_des_ambiances() {
+        let dossier = PathBuf::from(std::env::var("EDIVID_GRAPHES").expect("EDIVID_GRAPHES"));
+        let tout: Value = serde_json::from_str(include_str!("../bibliotheque/ambiances.json")).unwrap();
+        for a in tout["ambiances"].as_array().unwrap() {
+            let mut r = crate::reglages::defauts();
+            for (k, v) in a["reglages"].as_object().unwrap() {
+                assert!(crate::reglages::valider(k, v).is_ok(), "{} : {k} = {v} refusé", a["cle"]);
+                r.insert(k.clone(), v.clone());
+            }
+            let ir = lieu(&texte(&r, "espace")).map(|(_, _, _, part)| (dossier.join(format!("lieu_{}.wav", texte(&r, "espace"))), part));
+            let mut fc = graphe_voix(&r, 20.0, "0:a", "voix", ir.as_ref());
+            fc.push("[voix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]".into());
+            std::fs::write(dossier.join(format!("{}.graphe", a["cle"].as_str().unwrap())), fc.join(";")).unwrap();
+        }
+    }
 }

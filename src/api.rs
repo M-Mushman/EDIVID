@@ -104,6 +104,8 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/parametres/drive/verifier", post(verifier_drive))
         .route("/api/parametres/drive/maintenant", post(passage_drive))
         .route("/api/postprod/looks", get(looks))
+        .route("/api/son/ambiances", get(ambiances))
+        .route("/api/projets/{id}/son/essai", get(essai_son))
         .route("/api/projets/{id}/postprod", post(changer_postprod))
         .route("/api/projets/{id}/postprod/image", get(image_postprod))
         .route("/api/projets/{id}/correction", post(corriger_phrase))
@@ -733,7 +735,8 @@ struct NouvelleIncrustation {
     y: Option<f64>,
 }
 
-const ENTREES: &[&str] = &["", "aucune", "fondu", "splash", "glisse_gauche", "glisse_droite", "glisse_haut", "machine"];
+const ENTREES: &[&str] = &["", "aucune", "fondu", "splash", "zoom", "secousse", "glisse_gauche", "glisse_droite", "glisse_haut",
+                            "glisse_bas", "machine"];
 const POSITIONS: &[&str] = &["plein", "centre", "haut", "bas", "haut_gauche", "haut_droite", "bas_gauche", "bas_droite"];
 
 fn valider_incrustation(p: &Projet, n: NouvelleIncrustation) -> Result<Incrustation, String> {
@@ -768,6 +771,7 @@ fn valider_incrustation(p: &Projet, n: NouvelleIncrustation) -> Result<Incrustat
 /// Déplacer, raccourcir, réécrire une incrustation (calque d'aperçu, module Texte).
 async fn modifier_incrustation(State(etat): State<EtatPartage>, Path((id, iid)): Path<(String, String)>,
                                Json(v): Json<Value>) -> Reponse {
+    let medias: Vec<String> = etat.projet(&id).await?.medias.iter().filter(|m| m.genre != "son").map(|m| m.id.clone()).collect();
     let trouve = etat
         .modifier(&id, |p| {
             let Some(i) = p.incrustations.iter_mut().find(|i| i.id == iid) else { return false };
@@ -795,6 +799,21 @@ async fn modifier_incrustation(State(etat): State<EtatPartage>, Path((id, iid)):
             }
             if let Some(f) = v["fond"].as_str().filter(|f| ["aucun", "boite", "bandeau"].contains(f)) {
                 i.fond = f.to_string();
+            }
+            // Une place nommée remplace la position libre posée à la main sur la vidéo.
+            if let Some(pos) = v["position"].as_str().filter(|s| !s.is_empty()) {
+                i.position = pos.to_string();
+                i.x = None;
+                i.y = None;
+            }
+            if let Some(m) = v["media"].as_str().filter(|m| !i.media.is_empty() && medias.contains(&m.to_string())) {
+                i.media = m.to_string();
+            }
+            if let Some(b) = v["fond_vert"].as_bool() {
+                i.fond_vert = b;
+            }
+            if let Some(b) = v["son"].as_bool() {
+                i.son = b;
             }
             true
         })
@@ -1572,6 +1591,41 @@ async fn retirer_compte(State(etat): State<EtatPartage>, Path(email): Path<Strin
 }
 
 // ---------------------------------------------------------------- PostProd
+
+const AMBIANCES: &str = include_str!("../bibliotheque/ambiances.json");
+
+async fn ambiances() -> Json<Value> {
+    Json(serde_json::from_str(AMBIANCES).expect("bibliotheque/ambiances.json invalide"))
+}
+
+#[derive(Deserialize)]
+struct Essai {
+    /// Ambiance de la bibliothèque à essayer ; absente : les réglages actuels du projet.
+    #[serde(default)]
+    ambiance: String,
+}
+
+/// Vingt secondes du premier rush, traitées avec une ambiance (ou les réglages du projet) : on compare à l'oreille.
+async fn essai_son(State(etat): State<EtatPartage>, Path(id): Path<String>, Query(q): Query<Essai>) -> Result<Response, Erreur> {
+    let p = etat.projet(&id).await?;
+    let analyses = etat.analyses_du_projet(&p).await?;
+    let (rush, _) = analyses.first().ok_or_else(|| refus("aucun rush prêt"))?;
+    let mut r = p.reglages.clone();
+    if !q.ambiance.is_empty() {
+        let tout: Value = serde_json::from_str(AMBIANCES).expect("bibliotheque/ambiances.json invalide");
+        let a = tout["ambiances"].as_array().into_iter().flatten().find(|a| a["cle"] == q.ambiance.as_str())
+            .ok_or_else(|| refus("ambiance inconnue"))?;
+        for (k, v) in a["reglages"].as_object().into_iter().flatten() {
+            r.insert(k.clone(), v.clone());
+        }
+    }
+    // Un passage parlé : la première phrase gardée du rush, et ce qui suit.
+    let ps = decoupe::phrases_projet(&p, &analyses);
+    let gardee = |cle: &str| p.montage.as_ref().and_then(|m| m.phrases.iter().find(|d| d.cle == cle)).map(|d| d.garder).unwrap_or(true);
+    let debut = ps.iter().find(|ph| &ph.rush == rush && gardee(&ph.cle)).map(|ph| (ph.t0 - 0.3).max(0.0)).unwrap_or(0.0);
+    let octets = rendu::essai_son(&etat, &id, rush, debut, 20.0, &r).await?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "audio/mpeg")], octets).into_response())
+}
 
 async fn looks() -> Json<Value> {
     Json(json!({

@@ -24,6 +24,7 @@ function h(tag, attrs, ...enfants) {
 
 const TRACES = {
   lecture: '<path d="M7 5l12 7-12 7z" fill="currentColor" stroke="none"/>',
+  pause: '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" stroke="none"/>',
   televerser: '<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>',
   film: '<path d="M4 4h16v16H4zM8 4v16M16 4v16M4 9h4M4 15h4M16 9h4M16 15h4"/>',
   ciseaux: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.6 7.6L20 18M8.6 16.4L20 6"/>',
@@ -260,6 +261,7 @@ const SECTIONS_REGLAGES = {
   Image: ['image', 'image'],
   Son: ['son', 'onde'],
 };
+
 
 // ------------------------------------------------------------------ état
 
@@ -750,6 +752,9 @@ function construireLecteur() {
   n.video.addEventListener('play', () => { clearInterval(E.suiviFin); E.suiviFin = setInterval(suivreLecture, 80); });
   n.video.addEventListener('pause', () => clearInterval(E.suiviFin));
   n.video.addEventListener('pause', () => { dessinerOutilsLecteur(); dessinerCalque(); });
+  const enLecture = () => E.noeuds.listePhrases?.classList.toggle('en-lecture', !n.video.paused);
+  n.video.addEventListener('play', enLecture);
+  n.video.addEventListener('pause', enLecture);
   n.video.addEventListener('play', () => { dessinerOutilsLecteur(); dessinerCalque(); });
   n.video.addEventListener('seeked', dessinerCalque);
   n.video.addEventListener('loadedmetadata', dessinerCalque);
@@ -1191,6 +1196,11 @@ function marquerMot(cle, srcT) {
 
 function allerALaPhrase(cle) {
   const n = E.noeuds;
+  // La phrase en cours de lecture : un clic la met en pause, le suivant reprend là où elle en était.
+  if (cle === E.phraseJouee && n.video.dataset.url) {
+    if (n.video.paused) n.video.play(); else n.video.pause();
+    return;
+  }
   const ph = E.vue.phrases.find((x) => x.cle === cle);
   if (E.lecteur === 'origine' && ph) {
     changerLecteur('origine', ph.rush);
@@ -1488,6 +1498,19 @@ function ligneChapitre(c) {
     h('button', { class: 'btn icone fantome', title: 'Supprimer cette partie et son titre', onclick: () => enregistrer('') }, icone('corbeille')));
 }
 
+/** Images et vidéos posées sur la phrase, en vignettes sous ses outils : un clic rouvre leurs réglages. */
+function vignettesIncrustations(ph) {
+  const p = E.vue.projet;
+  const liste = p.incrustations.filter((i) => i.phrase === ph.cle && i.media);
+  if (!liste.length) return null;
+  return h('div', { class: 'vignettes-incrustations' }, liste.map((inc) => {
+    const m = p.medias.find((x) => x.id === inc.media);
+    const arrivee = ARRIVEES.find(([v]) => v === (inc.entree || 'fondu'))?.[1] || inc.entree;
+    return h('button', { class: 'vignette-incrustation', title: `${m?.nom || 'Média'} — ${arrivee}, ${fr(inc.duree)} s. Cliquez pour régler.`,
+      onclick: () => dialogueIncrustation(ph, inc) }, m ? vignetteMedia(m) : icone('image'));
+  }));
+}
+
 /** Actions plus rares d'une phrase : accroche, soudure avec une voisine du même rush. */
 function menuPhraseActions(ph, phrases) {
   const i = phrases.indexOf(ph);
@@ -1527,11 +1550,12 @@ function dessinerPhrases() {
     if (E.edition === ph.cle) return ligneEdition(ph, corrigee);
     const zoneTexte = h('div', { class: 'texte', style: { cursor: 'pointer' }, title: 'Clic : écouter ce passage — double-clic : corriger le texte',
       onclick: () => allerALaPhrase(ph.cle), ondblclick: () => { E.edition = ph.cle; dessinerPhrases(); } });
-    remplir(zoneTexte, monte && d?.garder && E.programme ? motsPhrase(ph, zoneTexte) : ph.texte,
-      corrigee ? h('span', { class: 'marque-corrige', title: 'Texte corrigé à la main' }, 'corrigé') : null);
+    remplir(zoneTexte, monte && d?.garder && E.programme ? motsPhrase(ph, zoneTexte) : ph.texte);
     const editeur = E.editionSt === ph.cle && d?.garder ? editeurSousTitres(ph, zoneTexte) : null;
     return h('div', { class: `phrase ${classe}${editeur ? ' edition-st' : ''}`, 'data-cle': ph.cle },
-      h('div', { class: 'temps' }, minutes(ph.t0)),
+      // Lecture et pause : l'icône suit la vidéo (classe « en-lecture » de la liste, posée par le lecteur).
+      h('button', { class: 'temps', title: 'Écouter ce passage, ou le mettre en pause', onclick: () => allerALaPhrase(ph.cle) },
+        h('span', { class: 'ic-lecture' }, icone('lecture')), h('span', { class: 'ic-pause' }, icone('pause')), minutes(ph.t0)),
       h('div', { style: { minWidth: 0 } },
         zoneTexte, editeur,
         d && d.garder ? h('div', { class: 'etiquettes' },
@@ -1542,7 +1566,7 @@ function dessinerPhrases() {
             { ...NOMS_TRANSITION, auto: `Entrée auto : ${transitionJouee(ph.cle) ? NOMS_TRANSITION[transitionJouee(ph.cle)] || transitionJouee(ph.cle) : 'coupe franche'}` },
             AIDE_TRANSITION, 'Transition d’entrée'),
           ph.fusionnees?.length ? h('span', { class: 'puce', title: 'Phrase soudée à la main' }, '⛓ soudée') : null,
-          p.incrustations.filter((i) => i.phrase === ph.cle).map((inc) => h('span', { class: 'puce puce-incrustation', title: `${nomIncrustation(inc)} — ${fr(inc.duree)} s` },
+          p.incrustations.filter((i) => i.phrase === ph.cle && !i.media).map((inc) => h('span', { class: 'puce puce-incrustation', title: `${nomIncrustation(inc)} — ${fr(inc.duree)} s` },
             `✦ ${nomIncrustation(inc).slice(0, 26)}`,
             h('button', { class: 'puce-retirer', title: 'Retirer cette incrustation', 'aria-label': `Retirer ${nomIncrustation(inc)}`,
               onclick: async (e) => { e.stopPropagation(); await retirerIncrustation(inc); } }, icone('fermer'))))) : null),
@@ -1551,7 +1575,8 @@ function dessinerPhrases() {
         h('button', { class: 'btn icone fantome', title: 'Ajouter une incrustation (image, GIF, vidéo, effet)', onclick: () => dialogueIncrustation(ph) }, icone('baguette')),
         h('button', { class: 'btn icone fantome', title: d && !d.garder ? 'Rétablir cette phrase' : 'Couper cette phrase', onclick: () => changerPhrase(ph.cle, { garder: !(d ? d.garder : true) }) },
           icone(d && !d.garder ? 'relancer' : 'ciseaux')),
-        menuPhraseActions(ph, phrases)) : h('div', { class: 'boutons' },
+        menuPhraseActions(ph, phrases),
+        vignettesIncrustations(ph)) : h('div', { class: 'boutons' },
         h('button', { class: 'btn icone fantome', title: 'Corriger le texte', onclick: () => { E.edition = ph.cle; dessinerPhrases(); } }, icone('crayon'))));
   }
   appliquerReplie(E.noeuds.phrases, 'phrases');
@@ -1567,6 +1592,7 @@ function dessinerPhrases() {
       phrases.length ? zoneRemplacer() : null,
       E.noeuds.listePhrases));
   E.noeuds.listePhrases.scrollTop = debut;
+  E.noeuds.listePhrases.classList.toggle('en-lecture', !E.noeuds.video.paused);
   E.phraseJouee = null;
   suivreLecture();
 }
@@ -2048,6 +2074,7 @@ function dessinerReglages(corps) {
   sectionConsignes(corps);
   blocHabillage(corps);
   blocGenerique(corps);
+  blocAmbiances(corps);
   const sections = [...new Set(E.catalogue.map((r) => r.section))];
   for (const s of sections) {
     const [famille, ic] = SECTIONS_REGLAGES[s] || ['recettes', 'reglages'];
@@ -2063,6 +2090,66 @@ function dessinerReglages(corps) {
           enLigne ? null : controleReglage(r, valeur));
       })));
   }
+}
+
+// ------------------------------------------------------------------ ambiances sonores
+
+let catalogueAmbiances = null;
+const ecoute = { audio: null, cle: null, attente: null };
+
+/** Écoute d'essai : vingt secondes du rush traitées par le serveur ; un second clic met en pause. */
+function ecouter(cle, bouton) {
+  if (ecoute.cle === cle && ecoute.audio && !ecoute.audio.paused) { ecoute.audio.pause(); dessinerPanneau(); return; }
+  ecoute.audio?.pause();
+  E.noeuds.video?.pause();
+  ecoute.cle = cle;
+  ecoute.attente = cle;
+  if (bouton) { bouton.disabled = true; bouton.lastChild.textContent = 'Préparation…'; }
+  const a = new Audio(`/api/projets/${E.projetId}/son/essai${cle === 'actuel' ? '' : `?ambiance=${encodeURIComponent(cle)}`}`);
+  ecoute.audio = a;
+  a.addEventListener('playing', () => { ecoute.attente = null; dessinerPanneau(); });
+  a.addEventListener('pause', () => dessinerPanneau());
+  a.addEventListener('ended', () => dessinerPanneau());
+  a.addEventListener('error', () => { ecoute.attente = null; toast('Écoute impossible : le rush est-il analysé ?', 'erreur'); dessinerPanneau(); });
+  a.play().catch(() => {});
+}
+
+function boutonEcoute(cle, libelle) {
+  const joue = ecoute.cle === cle && ecoute.audio && !ecoute.audio.paused;
+  const prepare = ecoute.attente === cle;
+  const b = h('button', { class: 'btn petit doux', disabled: prepare, title: 'Vingt secondes de votre rush avec ce son ; recliquez pour mettre en pause',
+    onclick: (e) => { e.stopPropagation(); ecouter(cle, b); } },
+  icone(joue ? 'pause' : 'lecture'), h('span', {}, prepare ? 'Préparation…' : joue ? 'Pause' : libelle));
+  return b;
+}
+
+/** Bibliothèque d'ambiances : un clic applique d'un coup tous les réglages de son d'une ambiance. */
+function blocAmbiances(corps) {
+  const p = E.vue.projet;
+  if (!catalogueAmbiances) {
+    api('GET', '/api/son/ambiances').then((c) => { catalogueAmbiances = c.ambiances; dessinerPanneau(); }).catch(() => {});
+    return;
+  }
+  const active = catalogueAmbiances.find((a) => Object.entries(a.reglages).every(([k, v]) => p.reglages[k] === v));
+  const familles = [...new Set(catalogueAmbiances.map((a) => a.famille))];
+  corps.append(blocOutil('ambiances', { icone: 'onde', titre: 'Ambiances sonores', famille: 'son', resume: active ? active.nom : 'Son réglé sur mesure' },
+    h('div', { class: 'reglage-aide', style: { marginBottom: '8px' } },
+      'Un son complet en un clic : écho, bruit, timbre et lieu. Écoutez d’abord vingt secondes de votre rush avec chaque ambiance (la première écoute qui retire l’écho prend quelques secondes). Le détail reste réglable dans le bloc Son.'),
+    h('div', { style: { marginBottom: '10px' } }, boutonEcoute('actuel', 'Écouter le son actuel')),
+    familles.map((fam) => [
+      h('h4', { class: 'titre-famille' }, fam),
+      h('div', { class: 'grille-looks' }, catalogueAmbiances.filter((a) => a.famille === fam).map((a) => h('div', {
+        class: `look ${active?.cle === a.cle ? 'choisi' : ''}` },
+      h('b', {}, a.nom), h('span', {}, a.description),
+      h('div', { class: 'actions-look' }, boutonEcoute(a.cle, 'Écouter'),
+        h('button', { class: 'btn petit', disabled: active?.cle === a.cle, onclick: async () => {
+          try {
+            await api('POST', `/api/projets/${E.projetId}/reglages`, a.reglages);
+            E.aMettreAJour = true;
+            toast(`Ambiance « ${a.nom} » appliquée : mettez l’aperçu à jour pour l’entendre dans le montage.`, 'ok');
+          } catch (e) { toast(e.message, 'erreur'); }
+        } }, active?.cle === a.cle ? 'Appliquée ✓' : 'Appliquer'))))),
+    ])));
 }
 
 const GENRES_MEDIA = { image: 'Image', gif: 'GIF animé', video: 'Vidéo', son: 'Son' };
@@ -2227,18 +2314,32 @@ async function retirerIncrustation(inc) {
   } catch (e) { toast(e.message, 'erreur'); }
 }
 
-function dialogueIncrustation(ph) {
+/** Arrivée d'une image à l'écran : clé, nom, petite animation de l'icône dans la palette. */
+const ARRIVEES = [
+  ['fondu', 'Fondu', 'Apparaît en douceur'], ['aucune', 'Sans transition', 'Là d’un coup'],
+  ['splash', 'Splash', 'Jaillit, dépasse, se pose'], ['zoom', 'Zoom', 'Grandit jusqu’à sa taille'],
+  ['secousse', 'Secousse', 'Arrive en tremblant'], ['glisse_gauche', 'Glissé gauche', 'Entre par la gauche'],
+  ['glisse_droite', 'Glissé droite', 'Entre par la droite'], ['glisse_haut', 'Glissé haut', 'Descend du haut'],
+  ['glisse_bas', 'Glissé bas', 'Monte du bas'],
+];
+
+/** Ajouter une incrustation sur une phrase, ou régler une incrustation existante (`existante`). */
+function dialogueIncrustation(ph, existante = null) {
   const p = E.vue.projet;
   const visuels = p.medias.filter((m) => m.genre !== 'son');
-  const choix = { genre: visuels.length ? 'media' : 'effet', media: visuels[0]?.id || '', effet: 'secousse', position: 'centre', taille: 40, duree: 2, decalage: 0, fond_vert: false, son: false };
+  const choix = existante
+    ? { genre: existante.effet ? 'effet' : 'media', media: existante.media, effet: existante.effet || 'secousse', position: existante.x != null ? 'libre' : (existante.position || 'centre'),
+        taille: Math.round((existante.taille || 0.4) * 100), duree: existante.duree, decalage: existante.decalage || 0, fond_vert: !!existante.fond_vert, son: !!existante.son,
+        entree: existante.entree || 'fondu' }
+    : { genre: visuels.length ? 'media' : 'effet', media: visuels[0]?.id || '', effet: 'secousse', position: 'centre', taille: 40, duree: 2, decalage: 0, fond_vert: false, son: false, entree: 'fondu' };
   const dureePhrase = Math.max(0.5, ph.t1 - ph.t0);
-  fenetre('Ajouter une incrustation', (fermer) => {
+  fenetre(existante ? 'Régler l’incrustation' : 'Ajouter une incrustation', (fermer) => {
     const zone = h('div');
     const redessiner = () => {
       const media = p.medias.find((m) => m.id === choix.media);
       remplir(zone, 
         h('p', { class: 'petit muet', style: { marginTop: 0 } }, `Sur la phrase : « ${ph.texte} »`),
-        h('div', { class: 'segments' },
+        existante ? null : h('div', { class: 'segments' },
           h('button', { class: choix.genre === 'media' ? 'actif' : '', onclick: () => { choix.genre = 'media'; redessiner(); } }, 'Un média'),
           h('button', { class: choix.genre === 'effet' ? 'actif' : '', onclick: () => { choix.genre = 'effet'; redessiner(); } }, 'Un effet')),
         choix.genre === 'media'
@@ -2250,7 +2351,11 @@ function dialogueIncrustation(ph) {
           : h('div', { class: 'grille-medias' }, Object.entries(EFFETS).map(([k, [t, d]]) =>
               h('button', { class: `carte ${choix.effet === k ? 'media choisi' : 'media'}`, style: { cursor: 'pointer', padding: '12px', textAlign: 'left' }, onclick: () => { choix.effet = k; redessiner(); } },
                 h('b', {}, t), h('div', { class: 'tres-petit muet', style: { marginTop: '4px' } }, d)))),
-        choix.genre === 'media' ? h('div', { class: 'ligne-champ' }, h('label', {}, 'Position'),
+        choix.genre === 'media' ? h('div', { class: 'ligne-champ' }, h('label', {}, 'Arrivée à l’écran'),
+          h('div', { class: 'palette-arrivees' }, ARRIVEES.map(([v, l, d]) =>
+            h('button', { class: `arrivee arrivee-${v} ${choix.entree === v ? 'actif' : ''}`, title: d, onclick: () => { choix.entree = v; redessiner(); } },
+              h('span', { class: 'arrivee-scene' }, h('i')), h('b', {}, l))))) : null,
+        choix.genre === 'media' ? h('div', { class: 'ligne-champ' }, h('label', {}, choix.position === 'libre' ? 'Position (posée à la main sur la vidéo — choisir une place la remplace)' : 'Position'),
           h('div', { class: 'grille-positions' }, POSITIONS.map(([v, l]) =>
             h('button', { class: choix.position === v ? 'actif' : '', onclick: () => { choix.position = v; redessiner(); } }, l)))) : null,
         choix.genre === 'media' && choix.position !== 'plein' ? h('div', { class: 'ligne-champ' }, h('label', {}, `Taille : ${choix.taille} % de la largeur`),
@@ -2265,13 +2370,25 @@ function dialogueIncrustation(ph) {
         choix.genre === 'media' && media?.genre === 'video' && media.a_son ? h('div', { class: 'reglage' }, h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, 'Garder son son'),
           h('label', { class: 'interrupteur' }, h('input', { type: 'checkbox', checked: choix.son, onchange: (e) => { choix.son = e.target.checked; } }), h('span')))) : null,
         h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '20px' } },
+          existante ? h('button', { class: 'btn danger', style: { marginRight: 'auto' }, onclick: async () => { await retirerIncrustation(existante); fermer(); } }, icone('corbeille'), 'Retirer') : null,
           h('button', { class: 'btn', onclick: fermer }, 'Annuler'),
-          h('button', { class: 'btn primaire', disabled: choix.genre === 'media' && !choix.media, onclick: async () => {
+          existante ? h('button', { class: 'btn primaire', onclick: async () => {
+            try {
+              await api('POST', `/api/projets/${E.projetId}/incrustations/${existante.id}`, {
+                media: choix.genre === 'media' ? choix.media : undefined, entree: choix.genre === 'media' ? choix.entree : undefined,
+                position: choix.position === 'libre' ? undefined : choix.position, taille: choix.taille / 100,
+                duree: choix.duree, decalage: choix.decalage, fond_vert: choix.fond_vert, son: choix.son,
+              });
+              E.aMettreAJour = true;
+              fermer();
+              toast('Incrustation réglée. Mettez à jour l’aperçu pour la voir.', 'ok');
+            } catch (e) { toast(e.message, 'erreur'); }
+          } }, icone('ok'), 'Enregistrer') : h('button', { class: 'btn primaire', disabled: choix.genre === 'media' && !choix.media, onclick: async () => {
             try {
               await api('POST', `/api/projets/${E.projetId}/incrustations`, {
                 media: choix.genre === 'media' ? choix.media : '', effet: choix.genre === 'effet' ? choix.effet : '',
                 phrase: ph.cle, decalage: choix.decalage, duree: choix.duree, position: choix.position,
-                taille: choix.taille / 100, fond_vert: choix.fond_vert, son: choix.son,
+                taille: choix.taille / 100, fond_vert: choix.fond_vert, son: choix.son, entree: choix.genre === 'media' ? choix.entree : '',
               });
               E.aMettreAJour = true;
               fermer();

@@ -250,7 +250,7 @@ h3 { font-size: 14px; font-weight: 650; }
 /* Phrase en cours de lecture : fond, contour et flèche ; le mot prononcé ressort. */
 .phrase.joue { background: color-mix(in oklch, var(--accent) 13%, var(--surface)); outline: 2px solid var(--accent); outline-offset: -2px; }
 .phrase.joue .temps { color: var(--accent); font-weight: 700; }
-.phrase.joue .temps::before { content: "▶ "; }
+/* Le ▶ de la phrase jouée est désormais un bouton lecture / pause (.ic-lecture, .ic-pause). */
 .mot { border-radius: 4px; transition: background 80ms, color 80ms; }
 .mot.joue { background: var(--accent); color: var(--accent-texte); box-shadow: 0 0 0 2px var(--accent); }
 .phrase .temps { font-size: 12px; color: var(--texte-3); font-variant-numeric: tabular-nums; padding-top: 2px; }
@@ -672,3 +672,54 @@ a.btn { text-decoration: none; }
 .partie { display: flex; align-items: center; gap: 8px; padding: 10px 8px 4px; border-top: 1px solid var(--bord); margin-top: 6px; }
 .partie .etiquette-accroche { margin: 0; color: var(--accent); white-space: nowrap; }
 .partie .titre-partie { margin: 0; padding: 5px 9px; font-weight: 700; font-size: 13.5px; flex: 1; min-width: 0; }
+
+/* ---------- lecture / pause d'une phrase ---------- */
+button.temps { border: 0; background: transparent; padding: 2px 0 0; cursor: pointer; font: inherit; font-size: 12px; color: var(--texte-3);
+  font-variant-numeric: tabular-nums; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+button.temps svg { width: 14px; height: 14px; }
+button.temps .ic-lecture, button.temps .ic-pause { display: none; color: var(--accent); }
+.phrase:hover button.temps .ic-lecture, .phrase.joue button.temps .ic-lecture { display: inline-flex; }
+.phrases.en-lecture .phrase.joue button.temps .ic-lecture { display: none; }
+.phrases.en-lecture .phrase.joue button.temps .ic-pause { display: inline-flex; }
+button.temps:hover { color: var(--accent); }
+
+/* ---------- ambiances sonores ---------- */
+.titre-famille { margin: 12px 0 6px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--texte-3); }
+.grille-looks .look { cursor: default; }
+.actions-look { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.actions-look .btn { flex: 1 1 auto; justify-content: center; }
+
+/* ---------- incrustations : palette d'arrivée, vignettes ---------- */
+.palette-arrivees { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; margin-top: 6px; }
+.arrivee { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px 7px; border: 1px solid var(--bord); border-radius: 10px;
+  background: var(--surface); cursor: pointer; font: inherit; font-size: 12px; color: var(--texte-2); }
+.arrivee:hover { border-color: var(--accent); }
+.arrivee.actif { border-color: var(--accent); background: var(--accent-doux); color: var(--accent); }
+.arrivee-scene { position: relative; width: 64px; height: 36px; border-radius: 5px; background: var(--surface-3); overflow: hidden; }
+.arrivee-scene i { position: absolute; left: 22px; top: 9px; width: 20px; height: 18px; border-radius: 3px; background: var(--accent); }
+/* La petite image de la palette rejoue l'arrivée au survol et quand elle est choisie. */
+.arrivee:hover .arrivee-scene i, .arrivee.actif .arrivee-scene i { animation: 1.2s ease-out infinite; }
+.arrivee-fondu .arrivee-scene i { animation-name: a-fondu; }
+.arrivee-splash .arrivee-scene i { animation-name: a-splash; }
+.arrivee-zoom .arrivee-scene i { animation-name: a-zoom; }
+.arrivee-secousse .arrivee-scene i { animation-name: a-secousse; }
+.arrivee-glisse_gauche .arrivee-scene i { animation-name: a-gauche; }
+.arrivee-glisse_droite .arrivee-scene i { animation-name: a-droite; }
+.arrivee-glisse_haut .arrivee-scene i { animation-name: a-haut; }
+.arrivee-glisse_bas .arrivee-scene i { animation-name: a-bas; }
+@keyframes a-fondu { 0% { opacity: 0; } 40%, 100% { opacity: 1; } }
+@keyframes a-splash { 0% { transform: scale(.1); } 25% { transform: scale(1.15); } 35%, 100% { transform: scale(1); } }
+@keyframes a-zoom { 0% { transform: scale(.1); } 30%, 100% { transform: scale(1); } }
+@keyframes a-secousse { 0% { transform: translate(3px, -2px); } 8% { transform: translate(-3px, 2px); } 16% { transform: translate(2px, 1px); } 24% { transform: translate(-1px, -1px); } 32%, 100% { transform: none; } }
+@keyframes a-gauche { 0% { transform: translateX(-46px); } 30%, 100% { transform: none; } }
+@keyframes a-droite { 0% { transform: translateX(46px); } 30%, 100% { transform: none; } }
+@keyframes a-haut { 0% { transform: translateY(-30px); } 30%, 100% { transform: none; } }
+@keyframes a-bas { 0% { transform: translateY(30px); } 30%, 100% { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .arrivee-scene i { animation: none !important; } }
+.phrase .boutons { flex-wrap: wrap; justify-content: flex-end; align-content: flex-start; max-width: 190px; }
+.vignettes-incrustations { flex-basis: 100%; display: flex; justify-content: flex-end; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.vignette-incrustation { width: 52px; height: 32px; padding: 0; border: 1px solid var(--bord); border-radius: 6px; overflow: hidden; cursor: pointer; background: var(--surface-3); display: grid; place-items: center; }
+.vignette-incrustation:hover { outline: 2px solid var(--accent); }
+.vignette-incrustation img, .vignette-incrustation video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vignette-incrustation svg { width: 16px; height: 16px; color: var(--texte-2); }
+.phrase:has(.vignettes-incrustations) .boutons { opacity: 1; }

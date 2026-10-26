@@ -268,7 +268,7 @@ fn schema_incrustations() -> Value {
         "required": ["media", "effet", "texte", "phrase", "duree", "position", "taille", "entree", "fond_vert", "son"]}})
 }
 
-const ENTREES: &[&str] = &["fondu", "splash", "glisse_gauche", "glisse_droite", "glisse_haut", "machine", "aucune"];
+const ENTREES: &[&str] = &["fondu", "splash", "zoom", "secousse", "glisse_gauche", "glisse_droite", "glisse_haut", "glisse_bas", "machine", "aucune"];
 
 fn schema_discussion() -> Value {
     json!({
