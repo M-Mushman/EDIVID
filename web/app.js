@@ -1503,46 +1503,62 @@ function editeurSousTitres(ph, zone) {
   const d = ph.decision || {};
   const st = new Map(E.programme?.sous_titres?.[ph.cle] || []);
   const choix = () => [...E.selectionSt].sort((a, b) => a - b);
-  let glisse = null;
-  const selectionner = (i, etendre) => {
-    if (etendre && glisse !== null) {
-      E.selectionSt = new Set();
-      for (let k = Math.min(glisse, i); k <= Math.max(glisse, i); k++) E.selectionSt.add(k);
-    } else if (E.selectionSt.has(i) && !etendre) E.selectionSt.delete(i);
-    else E.selectionSt.add(i);
-    zone.querySelectorAll('.mot').forEach((el) => el.classList.toggle('choisi', E.selectionSt.has(Number(el.dataset.i))));
+  const montrer = () => zone.querySelectorAll('.mot').forEach((el) => el.classList.toggle('choisi', E.selectionSt.has(Number(el.dataset.i))));
+  // Clic : ce mot seul. Glisser ou Maj+clic : tous les mots entre l'ancre et celui-ci. Ctrl+clic : ajouter ou retirer.
+  const plage = (a, b) => { E.selectionSt = new Set(); for (let k = Math.min(a, b); k <= Math.max(a, b); k++) E.selectionSt.add(k); };
+  zone.addEventListener('mousedown', (e) => {
+    const el = e.target.closest('.mot');
+    if (!el) return;
+    e.preventDefault();
+    const i = Number(el.dataset.i);
+    if (e.shiftKey && E.ancreSt != null) plage(E.ancreSt, i);
+    else if (e.ctrlKey || e.metaKey) { if (E.selectionSt.has(i)) E.selectionSt.delete(i); else E.selectionSt.add(i); E.ancreSt = i; }
+    else { E.selectionSt = new Set([i]); E.ancreSt = i; }
+    montrer();
+    const suivre = (ev) => { const m = ev.target.closest?.('.mot'); if (m && zone.contains(m) && ev.buttons) { plage(E.ancreSt, Number(m.dataset.i)); montrer(); } };
+    zone.addEventListener('mouseover', suivre);
+    document.addEventListener('mouseup', () => zone.removeEventListener('mouseover', suivre), { once: true });
+  });
+  // Chaque action attend la réponse du serveur puis recharge le texte : la suivante part de l'état à jour.
+  let occupe = false;
+  const appliquer = async (changement) => {
+    if (occupe) return;
+    occupe = true;
+    try { await changerPhrase(ph.cle, changement); await rafraichir(); } finally { occupe = false; }
   };
-  zone.onmousedown = (e) => { const el = e.target.closest('.mot'); if (!el) return; e.preventDefault(); glisse = Number(el.dataset.i); selectionner(glisse, false); };
-  zone.onmouseover = (e) => { const el = e.target.closest('.mot'); if (el && glisse !== null && e.buttons) selectionner(Number(el.dataset.i), true); };
-  document.addEventListener('mouseup', () => { glisse = null; }, { once: true });
-  zone.onclick = null;
-  zone.ondblclick = null;
-  zone.style.cursor = 'text';
-  const gras = () => {
+  const exiger = () => {
     const c = choix();
-    if (!c.length) { toast('Choisissez d’abord des mots : clic, ou glisser sur plusieurs mots.'); return; }
-    const masques = new Set(d.masques || []);
+    if (!c.length) toast('Choisissez d’abord des mots : clic sur un mot, ou glisser sur plusieurs.');
+    return c;
+  };
+  const masques = new Set(d.masques || []);
+  const gras = () => {
+    const c = exiger();
+    if (!c.length) return;
     const tousAffiches = c.every((i) => !masques.has(i));
     c.forEach((i) => (tousAffiches ? masques.add(i) : masques.delete(i)));
-    changerPhrase(ph.cle, { masques: [...masques] });
+    appliquer({ masques: [...masques] });
   };
   const surligner = () => {
-    const c = choix();
-    if (!c.length) { toast('Choisissez d’abord des mots : clic, ou glisser sur plusieurs mots.'); return; }
+    const c = exiger();
+    if (!c.length) return;
     const emphase = new Set(d.emphase || [...st].filter(([, fort]) => fort).map(([i]) => i));
     const tous = c.every((i) => emphase.has(i));
     c.forEach((i) => (tous ? emphase.delete(i) : emphase.add(i)));
-    changerPhrase(ph.cle, { emphase: [...emphase] });
+    appliquer({ emphase: [...emphase] });
   };
+  const nbHors = ph.mots.filter((_, i) => !st.has(i) && !masques.has(i)).length;
   return h('div', { class: 'editeur-st' },
     h('button', { class: 'btn petit', title: 'Afficher ou retirer des sous-titres les mots choisis', onclick: gras }, h('b', {}, 'G'), 'Affiché'),
-    h('button', { class: 'btn petit', title: 'Donner ou retirer l’emphase (couleur et taille, style dynamique)', onclick: surligner }, h('span', { class: 'emphase' }, 'S'), 'Emphase'),
-    h('button', { class: 'btn petit fantome', title: 'Remettre tous les mots dans les sous-titres', onclick: () => changerPhrase(ph.cle, { masques: [] }) }, 'Tout afficher'),
-    d.emphase ? h('button', { class: 'btn petit fantome', title: 'Revenir aux mots forts choisis par le LLM', onclick: () => changerPhrase(ph.cle, { emphase_auto: true }) }, 'Emphase du LLM') : null,
+    h('button', { class: 'btn petit', title: 'Donner ou retirer l’emphase aux mots choisis (couleur et taille, style dynamique)', onclick: surligner }, h('span', { class: 'emphase' }, 'S'), 'Emphase'),
+    h('button', { class: 'btn petit fantome', disabled: !masques.size, title: masques.size ? 'Remettre dans les sous-titres les mots retirés à la main' : 'Aucun mot retiré à la main',
+      onclick: () => appliquer({ masques: [] }) }, masques.size ? `Tout afficher (${masques.size} retiré${masques.size > 1 ? 's' : ''})` : 'Tout afficher'),
+    d.emphase ? h('button', { class: 'btn petit fantome', title: 'Revenir aux mots forts choisis par le LLM', onclick: () => appliquer({ emphase_auto: true }) }, 'Emphase du LLM') : null,
     h('span', { class: 'espace' }),
     h('button', { class: 'btn petit primaire', onclick: () => { E.editionSt = null; dessinerPhrases(); } }, 'Fermer'),
     h('div', { class: 'tres-petit muet', style: { flexBasis: '100%' } },
-      'Choisissez des mots (clic, ou glisser), puis Affiché ou Emphase. Gras : à l’écran. Surligné : en emphase. Grisé : pas à l’écran.',
+      'Clic sur un mot pour le choisir (glisser, ou Maj+clic, pour plusieurs), puis Affiché ou Emphase. Gras : à l’écran. Surligné : en emphase. Barré : retiré à la main.',
+      nbHors ? ` Grisé : coupé au montage (hésitation, silence), ${nbHors} mot${nbHors > 1 ? 's' : ''} — il n’est pas dans la vidéo, il ne peut donc pas s’afficher.` : '',
       texte_style_sous_titres()));
 }
 
@@ -1591,7 +1607,12 @@ function menuPhraseActions(ph, phrases) {
   const dans = accroche.includes(ph.cle);
   const partie = (E.vue.projet.montage?.chapitres || []).some((c) => c.cle === ph.cle);
   return menuActions('Plus d’actions sur cette phrase', [
-    ['texte', 'Régler les sous-titres de cette phrase', () => { E.editionSt = ph.cle; E.selectionSt = new Set(); dessinerPhrases(); }],
+    ['texte', 'Régler les sous-titres de cette phrase', () => {
+      // La lecture fait défiler le texte : on la met en pause pendant le réglage.
+      E.noeuds.video.pause();
+      E.editionSt = ph.cle; E.selectionSt = new Set(); E.ancreSt = null;
+      dessinerPhrases();
+    }],
     partie ? null : ['signet', 'Commencer une partie ici', () => api('POST', `/api/projets/${E.projetId}/chapitre`, { cle: ph.cle, titre: 'Nouvelle partie' })
       .then(() => { E.aMettreAJour = true; dessinerBarre(); }).catch((e) => toast(e.message, 'erreur'))],
     ['etoile', dans ? 'Retirer de l’accroche' : 'Ajouter à l’accroche', () => changerAccroche(dans ? accroche.filter((c) => c !== ph.cle) : [...accroche, ph.cle])],
@@ -1619,10 +1640,14 @@ function dessinerPhrases() {
     const classe = d ? (d.garder ? d.regime : 'coupee') : '';
     const corrigee = !!p.corrections?.[ph.cle];
     if (E.edition === ph.cle) return ligneEdition(ph, corrigee);
-    const zoneTexte = h('div', { class: 'texte', style: { cursor: 'pointer' }, title: 'Clic : écouter ce passage — double-clic : corriger le texte',
-      onclick: () => allerALaPhrase(ph.cle), ondblclick: () => { E.edition = ph.cle; dessinerPhrases(); } });
+    // En réglage des sous-titres, un clic choisit des mots : il ne lance pas la lecture.
+    const enReglage = E.editionSt === ph.cle && d?.garder;
+    const zoneTexte = enReglage
+      ? h('div', { class: 'texte', style: { cursor: 'text' }, title: 'Clic : choisir un mot — glisser ou Maj+clic : plusieurs — Ctrl+clic : ajouter ou retirer un mot' })
+      : h('div', { class: 'texte', style: { cursor: 'pointer' }, title: 'Clic : écouter ce passage — double-clic : corriger le texte',
+        onclick: () => allerALaPhrase(ph.cle), ondblclick: () => { E.edition = ph.cle; dessinerPhrases(); } });
     remplir(zoneTexte, monte && d?.garder && E.programme ? motsPhrase(ph, zoneTexte) : ph.texte);
-    const editeur = E.editionSt === ph.cle && d?.garder ? editeurSousTitres(ph, zoneTexte) : null;
+    const editeur = enReglage ? editeurSousTitres(ph, zoneTexte) : null;
     return h('div', { class: `phrase ${classe}${editeur ? ' edition-st' : ''}`, 'data-cle': ph.cle },
       // Lecture et pause : l'icône suit la vidéo (classe « en-lecture » de la liste, posée par le lecteur).
       h('button', { class: 'temps', title: 'Écouter ce passage, ou le mettre en pause', onclick: () => allerALaPhrase(ph.cle) },
