@@ -1039,7 +1039,10 @@ pub fn programme_json(prog: &Programme) -> Value {
         "hauteur": prog.hauteur,
         "plans": plans_json(prog),
         "titres": prog.titres.iter().map(|(t, titre)| json!({"t": arr(*t), "titre": titre})).collect::<Vec<_>>(),
-        "incrustations": prog.incrustations.iter().map(|i| json!({"id": i.id, "debut": arr(i.debut), "fin": arr(i.fin)}))
+        "incrustations": prog.incrustations.iter().map(|i| json!({"id": i.id, "debut": arr(i.debut), "fin": arr(i.fin),
+            // Tout ce qu'il faut pour les dessiner en direct sur l'aperçu, comme le rendu les place.
+            "texte": i.texte, "couleur": i.couleur, "fond": i.fond, "entree": i.entree, "x": i.x, "y": i.y, "media": i.media,
+            "effet": i.effet, "position": i.position, "taille": i.taille, "fond_vert": i.fond_vert}))
             .collect::<Vec<_>>(),
         // Par phrase : les mots qui passent en sous-titre (rang, emphase).
         "sous_titres": sous_titres_par_phrase(prog),
@@ -1177,6 +1180,17 @@ mod tests {
             u.sort_by(|a, b| b.partial_cmp(a).unwrap());
             u.dedup();
             println!("{k:7} {} plans, largeurs du cadre dans la source : {u:?}", v.len());
+        }
+        if let Ok(d) = std::env::var("EDIVID_SORTIE") {
+            // Le programme de l'aperçu (960 × 540) : ses sous-titres ASS du rendu, et ce que reçoit le navigateur.
+            let prog_a = programme(&p, &analyses, &ps, true);
+            let d = std::path::PathBuf::from(d);
+            std::fs::write(d.join("rendu.ass"), crate::rendu::sous_titres_pour_essai(&prog_a, &p)).unwrap();
+            let mut v = programme_json(&prog_a);
+            v["sous_titres_groupes"] = json!(crate::rendu::groupes_sous_titres(&prog_a, &p.reglages).iter()
+                .map(|g| json!([g.debut, g.fin, g.mots])).collect::<Vec<_>>());
+            std::fs::write(d.join("programme.json"), v.to_string()).unwrap();
+            std::fs::write(d.join("reglages.json"), serde_json::to_string(&p.reglages).unwrap()).unwrap();
         }
         if let Ok(t) = std::env::var("EDIVID_SOURCE") {
             let t: f64 = t.parse().unwrap();

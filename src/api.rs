@@ -1144,6 +1144,10 @@ async fn programme(State(etat): State<EtatPartage>, Path(id): Path<String>) -> R
     let prog = decoupe::programme(&p, &analyses, &ps, true);
     let mut v = decoupe::programme_json(&prog);
     v["rushs"] = json!(analyses.iter().map(|(rid, a)| json!({"id": rid, "duree": a.duree})).collect::<Vec<_>>());
+    // Les sous-titres tels que le rendu les écrira, groupe par groupe : l'aperçu en direct les dessine.
+    v["sous_titres_groupes"] = json!(rendu::groupes_sous_titres(&prog, &p.reglages).iter()
+        .map(|g| json!([(g.debut * 1000.0).round() / 1000.0, (g.fin * 1000.0).round() / 1000.0, g.mots]))
+        .collect::<Vec<_>>());
     Ok(Json(v))
 }
 

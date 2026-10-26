@@ -5,8 +5,8 @@
 //    le graphe ffmpeg : halo = silhouette blanche floutée (σ = 0,04 × largeur du logo × (0,6 + halo)), opacité
 //    × (1 + 3 × halo) ; ombre = silhouette noire floutée (σ = 0,025 × logo), décalée de 0,03 × logo, opacité
 //    × 0,9 × ombre ; puis le logo.
-//  - Texte : police Anton, corps du rendu = taille × largeur (0,642 fois ce corps dans le navigateur, même taille
-//    de lettres), contour de 6 % du corps du rendu, ombre d'un pixel du rendu.
+//  - Texte : police Anton, corps du rendu = taille × largeur (0,578 fois ce corps dans le navigateur, ligne de la
+//    hauteur du corps, comme libass), espacement d'un pixel du rendu, contour de 6 % du corps, ombre d'un pixel.
 
 const SVG = 'http://www.w3.org/2000/svg';
 
@@ -89,27 +89,26 @@ export function creerHabillageDirect(video, conteneur) {
           n.style.filter = `url(#hab-direct-${i})`;
         }
       } else if (hab.genre === 'texte' && hab.texte?.trim()) {
-        // Le rendu (libass) donne à un corps donné des lettres 0,642 fois moins grandes que le navigateur pour Anton
-        // (mesuré le 2026-10-26) ; le contour, lui, est en pixels du rendu, sans ce facteur.
+        // libass met la hauteur de la police au corps ASS : le navigateur prend 0,578 de ce corps pour Anton, et une
+        // ligne de la hauteur du corps (textes-direct.js, FACTEUR). Le contour est en pixels du rendu.
         const fs = Math.max(12 * (L / 1920), hab.taille * L);
-        const corps = fs * 0.642;
+        const corps = fs * 0.578;
         const couleur = { noir: '#000', jaune: '#ffe500' }[hab.couleur] || '#fff';
         const contour = hab.couleur === 'noir' ? '#fff' : '#000';
         n = document.createElement('div');
         n.className = 'texte-habillage';
         n.textContent = hab.texte.trim();
-        Object.assign(n.style, { fontSize: `${corps}px`, lineHeight: '1', color: couleur, WebkitTextStroke: `${Math.max(1, fs * 0.12)}px ${contour}`,
+        Object.assign(n.style, { fontSize: `${corps}px`, lineHeight: `${fs}px`, letterSpacing: `${L / 1920}px`, color: couleur, WebkitTextStroke: `${Math.max(1, fs * 0.12)}px ${contour}`,
           textShadow: `${L / 1920}px ${L / 1920}px 0 rgba(0,0,0,.5)` });
       } else return;
       n.style.opacity = hab.opacite || 0.9;
       n.style.position = 'absolute';
-      // Texte : la ligne du rendu place les lettres 0,265 × corps sous son haut et 0,11 × corps au-dessus de son bas
-      // (mesuré contre ffmpeg le 2026-10-26).
-      const fs = hab.genre === 'texte' ? Math.max(12 * (L / 1920), hab.taille * L) : 0;
       if (a.left) n.style.left = `${marge}px`;
       if (a.right) n.style.right = `${marge}px`;
-      if (a.top) n.style.top = `${marge + 0.265 * fs}px`;
-      if (a.bottom) n.style.bottom = `${marge + 0.11 * fs}px`;
+      // Ancré en haut, libass pose les lettres 0,09 × corps plus bas que le navigateur (mesuré le 2026-10-26).
+      if (a.top) n.style.top = `${marge + (hab.genre === 'texte' ? 0.09 * Math.max(12 * (L / 1920), hab.taille * L) : 0)}px`;
+      // Ancré en bas, libass pose le texte 0,11 × corps plus bas que sa boîte (textes-direct.js, placer).
+      if (a.bottom) n.style.bottom = `${marge - (hab.genre === 'texte' ? 0.11 * Math.max(12 * (L / 1920), hab.taille * L) : 0)}px`;
       if (a.centre) { n.style.left = '50%'; n.style.transform = 'translateX(-50%)'; }
       calque.append(n);
     });

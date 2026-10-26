@@ -3,6 +3,7 @@
 import { creerApercuDirect } from './postprod-direct.js';
 import { creerSonDirect } from './son-direct.js';
 import { creerHabillageDirect } from './habillage-direct.js';
+import { creerTextesDirect } from './textes-direct.js';
 
 const $app = document.getElementById('app');
 
@@ -775,6 +776,7 @@ function construireLecteur() {
   // Son en direct (Web Audio) : null si le navigateur n'a pas les processeurs audio.
   n.son = window.AudioWorkletNode ? creerSonDirect(n.video) : null;
   n.habillage = creerHabillageDirect(n.video, n.ecran);
+  n.textes = creerTextesDirect(n.video, n.ecran);
   const pause = () => n.ecran.classList.toggle('en-pause', n.video.paused);
   n.video.addEventListener('play', pause);
   n.video.addEventListener('pause', pause);
@@ -856,6 +858,21 @@ function dessinerLecteur() {
   majApercuDirect();
   majSonDirect();
   majHabillageDirect();
+  majTextesDirect();
+}
+
+/** Sous-titres, titres des parties, textes et images posés, en direct sur l'aperçu (le programme en cours). */
+function majTextesDirect() {
+  const n = E.noeuds;
+  if (!n.textes || !E.vue) return;
+  const p = E.vue.projet;
+  const actif = E.lecteur === 'apercu' && !!p.apercu?.rapport?.textes_direct && !!n.video.dataset.url && !!E.programme;
+  // Le calque d'édition (en pause) garde ses poignées ; l'image qu'on voit est celle du direct.
+  n.calque.classList.toggle('direct', actif);
+  n.textes.regler(actif ? {
+    programme: E.programme, reglages: p.reglages, decalage: decalageGenerique(p.apercu),
+    urlMedia: (id) => { const m = p.medias.find((x) => x.id === id); return m && m.genre !== 'son' ? { url: urlMedia(m), genre: m.genre } : null; },
+  } : null, actif);
 }
 
 /** Habillage en direct sur l'aperçu : celui qu'on règle (`enCours`), sinon celui du projet. Le rendu final l'a dans

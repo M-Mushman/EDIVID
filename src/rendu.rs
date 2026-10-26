@@ -411,6 +411,69 @@ fn sans_ponctuation(m: &str) -> String {
     m.trim_end_matches(['.', ',', '!', '?', ';', ':']).to_string()
 }
 
+/// Un sous-titre à l'écran : de `debut` à `fin` (temps du montage), ses mots (sans ponctuation) et leur emphase.
+pub struct GroupeSt {
+    pub debut: f64,
+    pub fin: f64,
+    pub mots: Vec<(String, bool)>,
+}
+
+/// Les sous-titres du montage, groupe par groupe : le rendu les écrit en ASS, l'aperçu en direct les reçoit tels
+/// quels (programme_json) et ne fait que les dessiner. Vide si les sous-titres sont éteints.
+pub fn groupes_sous_titres(prog: &Programme, r: &crate::reglages::Reglages) -> Vec<GroupeSt> {
+    if !vrai(r, "sous_titres") {
+        return vec![];
+    }
+    let dynamique = texte(r, "style_sous_titres") == "dynamique";
+    let vertical = prog.hauteur > prog.largeur;
+    // Recolle « c » + « 'est ».
+    let mut mots: Vec<decoupe::MotSortie> = Vec::new();
+    for m in &prog.mots {
+        match mots.last_mut() {
+            Some(prec) if m.mot.starts_with(['\'', '-']) && m.t0 - prec.t1 < 0.3 => {
+                prec.mot.push_str(&m.mot);
+                prec.t1 = m.t1;
+                prec.fort |= m.fort;
+            }
+            _ => mots.push(m.clone()),
+        }
+    }
+    let (max_mots, max_car) = if dynamique { (3, 16) } else if vertical { (6, 30) } else { (8, 42) };
+    let mut groupes: Vec<Vec<decoupe::MotSortie>> = Vec::new();
+    let mut courant: Vec<decoupe::MotSortie> = Vec::new();
+    for m in mots {
+        if let Some(dernier) = courant.last() {
+            let longueur: usize = courant.iter().map(|x| x.mot.chars().count() + 1).sum::<usize>() + m.mot.chars().count();
+            if courant.len() >= max_mots || longueur > max_car || m.t0 - dernier.t1 > 0.3
+                || dernier.mot.ends_with(['.', '?', '!', ','])
+            {
+                groupes.push(std::mem::take(&mut courant));
+            }
+        }
+        courant.push(m);
+    }
+    if !courant.is_empty() {
+        groupes.push(courant);
+    }
+    (0..groupes.len())
+        .map(|i| {
+            let g = &groupes[i];
+            let fin_naturelle = g[g.len() - 1].t1 + 0.4;
+            GroupeSt {
+                debut: g[0].t0,
+                fin: groupes.get(i + 1).map(|s| s[0].t0.min(fin_naturelle)).unwrap_or(fin_naturelle),
+                mots: g.iter().map(|m| (sans_ponctuation(&m.mot), m.fort)).collect(),
+            }
+        })
+        .collect()
+}
+
+/// Les sous-titres ASS du rendu final, pour les essais du direct.
+#[cfg(test)]
+pub fn sous_titres_pour_essai(prog: &Programme, p: &Projet) -> String {
+    sous_titres(prog, p, false)
+}
+
 fn sous_titres(prog: &Programme, p: &Projet, apercu: bool) -> String {
     let r = &p.reglages;
     let (wo, ho) = (prog.largeur as f64, prog.hauteur as f64);
@@ -445,65 +508,35 @@ fn sous_titres(prog: &Programme, p: &Projet, apercu: bool) -> String {
         "[Events]".into(),
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text".into(),
     ];
+    // L'aperçu sort sans textes : sous-titres, titres de parties, textes posés et habillage sont dessinés en direct.
+    if apercu {
+        return l.join("\n") + "\n";
+    }
     for (t, titre) in &prog.titres {
         l.push(format!("Dialogue: 1,{},{},Titre,,0,0,0,,{{\\fad(120,200)}}{}", temps_ass(t + 0.1), temps_ass(t + 1.9),
                        titre.to_uppercase()));
     }
     textes(prog, &mut l);
-    // L'aperçu sort sans habillage : le navigateur le dessine en direct par-dessus la vidéo.
-    if !apercu {
-        habillage_textes(p, prog, &mut l);
-    }
+    habillage_textes(p, prog, &mut l);
     if !vrai(r, "sous_titres") {
         return l.join("\n") + "\n";
     }
-    // Recolle « c » + « 'est ».
-    let mut mots: Vec<decoupe::MotSortie> = Vec::new();
-    for m in &prog.mots {
-        match mots.last_mut() {
-            Some(prec) if m.mot.starts_with(['\'', '-']) && m.t0 - prec.t1 < 0.3 => {
-                prec.mot.push_str(&m.mot);
-                prec.t1 = m.t1;
-                prec.fort |= m.fort;
-            }
-            _ => mots.push(m.clone()),
-        }
-    }
-    let (max_mots, max_car) = if dynamique { (3, 16) } else if vertical { (6, 30) } else { (8, 42) };
-    let mut groupes: Vec<Vec<decoupe::MotSortie>> = Vec::new();
-    let mut courant: Vec<decoupe::MotSortie> = Vec::new();
-    for m in mots {
-        if let Some(dernier) = courant.last() {
-            let longueur: usize = courant.iter().map(|x| x.mot.chars().count() + 1).sum::<usize>() + m.mot.chars().count();
-            if courant.len() >= max_mots || longueur > max_car || m.t0 - dernier.t1 > 0.3
-                || dernier.mot.ends_with(['.', '?', '!', ','])
-            {
-                groupes.push(std::mem::take(&mut courant));
-            }
-        }
-        courant.push(m);
-    }
-    if !courant.is_empty() {
-        groupes.push(courant);
-    }
-    for (i, g) in groupes.iter().enumerate() {
-        let fin_naturelle = g[g.len() - 1].t1 + 0.4;
-        let fin = groupes.get(i + 1).map(|s| s[0].t0.min(fin_naturelle)).unwrap_or(fin_naturelle);
+    for g in groupes_sous_titres(prog, r) {
         let texte_groupe = g
+            .mots
             .iter()
-            .map(|m| {
-                let mot = sans_ponctuation(&m.mot);
+            .map(|(mot, fort)| {
                 if dynamique {
                     let mot = mot.to_uppercase();
-                    if m.fort { format!("{{\\c&H0000E5FF&\\fscx115\\fscy115}}{mot}{{\\r}}") } else { mot }
+                    if *fort { format!("{{\\c&H0000E5FF&\\fscx115\\fscy115}}{mot}{{\\r}}") } else { mot }
                 } else {
-                    mot
+                    mot.clone()
                 }
             })
             .collect::<Vec<_>>()
             .join(" ");
         let anim = if dynamique { "{\\fscx85\\fscy85\\t(0,90,\\fscx100\\fscy100)}" } else { "" };
-        l.push(format!("Dialogue: 0,{},{},Mot,,0,0,0,,{anim}{texte_groupe}", temps_ass(g[0].t0), temps_ass(fin)));
+        l.push(format!("Dialogue: 0,{},{},Mot,,0,0,0,,{anim}{texte_groupe}", temps_ass(g.debut), temps_ass(g.fin)));
     }
     l.join("\n") + "\n"
 }
@@ -1105,13 +1138,20 @@ async fn gain_voix(etat: &EtatPartage, p: &Projet, prog: &Programme) -> f64 {
 /// Empreinte de tout ce qui change une vidéo rendue : un aperçu dont l'empreinte diffère de celle du projet
 /// n'est plus à jour (l'interface le dit, même après un rechargement de la page).
 pub fn empreinte(p: &Projet) -> String {
-    // Les réglages joués en direct sur l'aperçu ne le rendent pas périmé.
+    // Ce que l'aperçu dessine ou joue en direct ne le rend pas périmé : son (partie directe), sous-titres (réglages,
+    // mots affichés, emphase), titres des parties (le début des parties, lui, compte : il pose une transition),
+    // textes et images posés (sauf le fond vert et le son d'une vidéo, inscrits dans l'aperçu), habillage.
     let mut reglages = p.reglages.clone();
-    for c in REGLAGES_SON_DIRECT {
+    for c in REGLAGES_SON_DIRECT.iter().chain(&["sous_titres", "style_sous_titres", "position_sous_titres", "titres_chapitres"]) {
         reglages.remove(*c);
     }
-    let v = json!([reglages, p.montage.as_ref().map(|m| json!([m.phrases, m.accroche, m.accroche_choisie, m.chapitres])),
-                   p.incrustations, p.generique, p.corrections, p.fusions,
+    let decisions = p.montage.as_ref().map(|m| m.phrases.iter().map(|d| {
+        json!([d.cle, d.garder, d.regime, d.cadre, d.transition, d.transition_choisie, d.mouvement])
+    }).collect::<Vec<_>>());
+    let parties = p.montage.as_ref().map(|m| m.chapitres.iter().map(|c| c.cle.clone()).collect::<Vec<_>>());
+    let inscrites: Vec<_> = p.incrustations.iter().filter(|i| !i.effet.is_empty() || i.fond_vert || i.son).collect();
+    let v = json!([reglages, decisions, p.montage.as_ref().map(|m| json!([m.accroche, m.accroche_choisie])), parties,
+                   inscrites, p.generique, p.corrections, p.fusions,
                    p.medias.iter().map(|m| [&m.id, &m.fichier]).collect::<Vec<_>>(), p.rushs.iter().map(|r| &r.id).collect::<Vec<_>>()]);
     let mut h = std::collections::hash_map::DefaultHasher::new();
     v.to_string().hash(&mut h);
@@ -1161,6 +1201,13 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     let marge = (0.04 * wo as f64).round() as u32;
     for (k, inc) in prog.incrustations.iter().filter(|i| i.effet.is_empty() && i.texte.trim().is_empty()).enumerate() {
         let Some(m) = p.medias.iter().find(|m| m.id == inc.media) else { continue };
+        // Aperçu : l'image est dessinée en direct par le navigateur ; seuls restent rendus le fond vert (détourage)
+        // et le son d'une vidéo, qui part dans la piste de fond.
+        let direct = apercu && !inc.fond_vert;
+        let avec_son = inc.son && m.a_son && m.genre == "video";
+        if direct && !avec_son {
+            continue;
+        }
         let fichier = etat.dossier_projet(&p.id).join("medias").join(&m.fichier);
         let duree = format!("{:.3}", inc.fin - inc.debut);
         match m.genre.as_str() {
@@ -1192,7 +1239,9 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         } else {
             format!(",fade=t=out:st={:.3}:d=0.15:alpha=1", (d - 0.15).max(0.0))
         };
-        fc.push(format!("[{entree}:v]fps=30,{echelle},format=yuva420p{cle}{fondu},setpts=PTS-STARTPTS+{:.3}/TB[inc{k}]", inc.debut));
+        if !direct {
+            fc.push(format!("[{entree}:v]fps=30,{echelle},format=yuva420p{cle}{fondu},setpts=PTS-STARTPTS+{:.3}/TB[inc{k}]", inc.debut));
+        }
         let (mut x, mut y) = match (inc.x, inc.y) {
             _ if plein => ("0".to_string(), "0".to_string()),
             (Some(cx), Some(cy)) => (format!("{:.1}-w/2", cx.clamp(0.0, 1.0) * wo as f64), format!("{:.1}-h/2", cy.clamp(0.0, 1.0) * ho as f64)),
@@ -1223,10 +1272,12 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         }
         // Entre apostrophes : les formules des arrivées (glissés, secousse) contiennent des virgules, que le graphe
         // prendrait sinon pour des séparateurs de filtres.
-        fc.push(format!("[{base}][inc{k}]overlay=x='{x}':y='{y}':enable='between(t,{:.3},{:.3})':eof_action=pass[vi{k}]",
-                        inc.debut, inc.fin));
-        base = format!("vi{k}");
-        if inc.son && m.a_son && m.genre == "video" {
+        if !direct {
+            fc.push(format!("[{base}][inc{k}]overlay=x='{x}':y='{y}':enable='between(t,{:.3},{:.3})':eof_action=pass[vi{k}]",
+                            inc.debut, inc.fin));
+            base = format!("vi{k}");
+        }
+        if avec_son {
             let ms = (inc.debut * 1000.0).round() as u64;
             fc.push(format!("[{entree}:a]aresample=48000,adelay=delays={ms}:all=1[si{k}]"));
             sons_incrustes.push(format!("si{k}"));
@@ -1513,6 +1564,8 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     // Aperçu sans PostProd : l'interface l'applique en direct (un ancien aperçu l'a déjà dans son image).
     rapport["postprod_direct"] = json!(apercu);
     rapport["habillage_direct"] = json!(apercu);
+    // Sous-titres, titres de parties, textes et images posés : dessinés en direct sur cet aperçu.
+    rapport["textes_direct"] = json!(apercu);
     if apercu {
         // Son en direct : la vidéo porte la voix de base ; le fond et le générique, s'il y en a, sont à côté.
         let (fond, generique) = pistes_apercu(&nom);
