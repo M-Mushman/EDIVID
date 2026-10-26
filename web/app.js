@@ -1971,7 +1971,7 @@ function controleReglage(r, valeur) {
     const unite = r.bornes.unite || '%';
     const sortie = h('b', { class: 'petit', style: { minWidth: '62px', textAlign: 'right' } }, `${valeur > 0 && unite === 'ms' ? '+' : ''}${valeur} ${unite}`);
     return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' } },
-      h('input', { type: 'range', min: r.bornes.min, max: r.bornes.max, step: unite === 'ms' ? '10' : (r.bornes.max - r.bornes.min <= 30 ? '1' : '5'), value: valeur, 'aria-label': r.titre,
+      h('input', { type: 'range', min: r.bornes.min, max: r.bornes.max, step: unite === 'ms' ? '10' : unite === 's' ? '0.1' : (r.bornes.max - r.bornes.min <= 30 ? '1' : '5'), value: valeur, 'aria-label': r.titre,
         oninput: (e) => { sortie.textContent = `${e.target.value > 0 && unite === 'ms' ? '+' : ''}${e.target.value} ${unite}`; }, onchange: (e) => changer(Number(e.target.value)) }), sortie);
   }
   if (r.genre === 'media_son') {
@@ -2800,12 +2800,15 @@ function dessinerBarre() {
     }, icone('relancer'), h('span', { class: 'long' }, 'Mettre à jour l’aperçu'), h('span', { class: 'court' }, 'Aperçu')),
     h('button', {
       class: `btn ${p.montage && !E.aMettreAJour && !p.rendu ? 'primaire' : ''}`, disabled: !p.montage || occupe,
-      title: 'Pleine définition, netteté IA, son prêt pour YouTube',
+      title: `En ${p.reglages.definition === '2160' ? '4K (2160p)' : '1080p'} (Réglages › Image › Définition du rendu final), netteté IA, son prêt pour YouTube`,
       onclick: async () => { try { await api('POST', `/api/projets/${E.projetId}/rendu`); toast('Rendu final lancé. Vous pouvez continuer à travailler.'); } catch (e) { toast(e.message, 'erreur'); } },
     }, icone('film'), h('span', { class: 'long' }, 'Rendu final'), h('span', { class: 'court' }, 'Rendu')),
     p.rendu ? h('a', { class: 'btn doux', href: `/api/projets/${E.projetId}/sorties/${p.rendu.fichier}`, download: `${p.nom}.mp4` }, icone('telecharger'), h('span', { class: 'long' }, 'Télécharger'), h('span', { class: 'court' }, 'Fichier')) : null,
-    p.rendu ? h('button', { class: 'btn doux', title: 'Versions prêtes pour YouTube, pour l’iPhone ou l’archive ; publication sur YouTube', onclick: afficherExport },
-      icone('televerser'), h('span', { class: 'long' }, 'Exporter'), h('span', { class: 'court' }, 'Export')) : null,
+    h('button', { class: 'btn doux', disabled: !p.rendu,
+      title: p.rendu ? 'Versions prêtes pour YouTube, pour l’iPhone ou l’archive ; publication sur YouTube'
+        : 'Faites d’abord le rendu final : les exports partent de lui. Sa définition (1080p ou 4K) se choisit dans Réglages › Image.',
+      onclick: afficherExport },
+      icone('televerser'), h('span', { class: 'long' }, 'Exporter'), h('span', { class: 'court' }, 'Export')),
     p.rendu && E.driveActif ? h('button', {
       class: 'btn doux', title: p.depot_drive ? `Déjà déposée : ${p.depot_drive}` : 'Déposer la vidéo finale dans le dossier de sortie du Drive',
       onclick: async () => { try { await api('POST', `/api/projets/${E.projetId}/drive`); toast('Envoi sur le Google Drive…'); } catch (e) { toast(e.message, 'erreur'); } },

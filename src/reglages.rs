@@ -147,8 +147,8 @@ pub const CATALOGUE: &[Reglage] = &[
         section: "Transitions",
         cle: "duree_fondus",
         titre: "Durée des fondus d'ouverture et de fin",
-        aide: "En secondes.",
-        genre: Genre::Curseur { min: 0.5, max: 4.0, unite: "s" },
+        aide: "En secondes, au dixième : 0,2 à 0,5 s pour un fondu bref, 1 à 3 s pour une ouverture ou une fin lentes.",
+        genre: Genre::Curseur { min: 0.2, max: 3.0, unite: "s" },
         defaut: || json!(1.0),
     },
     Reglage {
@@ -379,10 +379,11 @@ pub fn valider(cle: &str, valeur: &Value) -> Result<Value, String> {
             .as_bool()
             .map(Value::Bool)
             .ok_or_else(|| format!("« {} » attend oui ou non", r.titre)),
-        Genre::Curseur { min, max, .. } => valeur
+        Genre::Curseur { min, max, unite } => valeur
             .as_f64()
-            // Entier : 30 et 30.0 seraient deux valeurs différentes pour la comparaison des réglages.
-            .map(|v| json!(v.clamp(*min, *max).round() as i64))
+            // Entier : 30 et 30.0 seraient deux valeurs différentes pour la comparaison des réglages. Les durées en
+            // secondes se règlent au dixième.
+            .map(|v| if *unite == "s" { json!((v.clamp(*min, *max) * 10.0).round() / 10.0) } else { json!(v.clamp(*min, *max).round() as i64) })
             .ok_or_else(|| format!("« {} » attend un nombre", r.titre)),
         Genre::MediaSon => Ok(json!(valeur.as_str().unwrap_or_default())),
     }

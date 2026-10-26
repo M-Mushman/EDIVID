@@ -1451,7 +1451,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     // inscrit pas : le navigateur les joue en direct (textes-direct.js, son-direct.js).
     let (ouverture, fin) = (texte(r, "fondu_ouverture"), texte(r, "fondu_fin"));
     if ouverture != "aucun" || fin != "aucun" {
-        let d = nombre(r, "duree_fondus").clamp(0.5, 4.0).min(total / 2.0);
+        let d = nombre(r, "duree_fondus").clamp(0.2, 3.0).min(total / 2.0);
         let (mut vf, mut af) = (Vec::new(), Vec::new());
         if ouverture != "aucun" {
             vf.push(format!("fade=t=in:st=0:d={d:.3}:color={}", if ouverture == "blanc" { "white" } else { "black" }));

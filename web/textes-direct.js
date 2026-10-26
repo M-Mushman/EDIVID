@@ -240,7 +240,7 @@ export function creerTextesDirect(video, conteneur) {
 
     // Fondus d'ouverture et de fin, sur toute la vidéo (générique compris), comme le fade du rendu (linéaire).
     const total = video.duration || 0;
-    const dF = Math.min(Math.max(Number(r.duree_fondus) || 1, 0.5), 4, total / 2);
+    const dF = Math.min(Math.max(Number(r.duree_fondus) || 1, 0.2), 3, total / 2);
     const tv = video.currentTime;
     let opaciteVoile = 0;
     let teinte = '#000';

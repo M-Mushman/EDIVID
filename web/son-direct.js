@@ -115,7 +115,7 @@ export function creerSonDirect(video) {
   // Gain des fondus (afade du rendu, linéaire), recalculé à chaque image tant que la vidéo joue.
   const gainFondu = () => {
     const total = video.duration || 0;
-    const d = Math.min(Math.max(Number(fondus.duree) || 1, 0.5), 4, total / 2);
+    const d = Math.min(Math.max(Number(fondus.duree) || 1, 0.2), 3, total / 2);
     const t = video.currentTime;
     let g = 1;
     if (fondus.ouverture !== 'aucun' && t < d) g = Math.min(g, t / d);
