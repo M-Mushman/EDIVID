@@ -1476,6 +1476,15 @@ async function changerPhrase(cle, changement) {
   } catch (e) { toast(e.message, 'erreur'); }
 }
 
+/** Temps d'une phrase, sur la même horloge que le lecteur : dans la vidéo montée (aperçu ou rendu) si elle y est,
+ *  sinon dans le rush, en italique. Le survol donne les deux. */
+function tempsPhrase(ph) {
+  const pl = E.lecteur !== 'origine' ? plansAffiches().find((x) => x.phrase === ph.cle && !x.accroche) : null;
+  const rush = `dans le rush : ${minutes(ph.t0)}`;
+  if (pl) return h('span', { class: 'horloge', title: `Dans la vidéo : ${minutes(pl.t)} — ${rush}` }, minutes(pl.t));
+  return h('span', { class: 'horloge rush', title: E.lecteur === 'origine' ? rush : `Pas dans la vidéo montée — ${rush}` }, minutes(ph.t0));
+}
+
 /** Mots d'une phrase tels qu'ils passent à l'écran : gras = en sous-titre, surligné = en emphase, grisé = pas
  *  affiché (retiré à la main, ou coupé au montage avec une hésitation ou un silence). */
 function motsPhrase(ph, zone) {
@@ -1657,7 +1666,7 @@ function dessinerPhrases() {
     return h('div', { class: `phrase ${classe}${editeur ? ' edition-st' : ''}`, 'data-cle': ph.cle },
       // Lecture et pause : l'icône suit la vidéo (classe « en-lecture » de la liste, posée par le lecteur).
       h('button', { class: 'temps', title: 'Écouter ce passage, ou le mettre en pause', onclick: () => allerALaPhrase(ph.cle) },
-        h('span', { class: 'ic-lecture' }, icone('lecture')), h('span', { class: 'ic-pause' }, icone('pause')), minutes(ph.t0)),
+        h('span', { class: 'ic-lecture' }, icone('lecture')), h('span', { class: 'ic-pause' }, icone('pause')), tempsPhrase(ph)),
       h('div', { style: { minWidth: 0 } },
         zoneTexte, editeur,
         d && d.garder ? h('div', { class: 'etiquettes' },
@@ -1988,6 +1997,9 @@ function blocHabillage(corps) {
         ? curseurElement('Taille', Math.round((x.taille || 0.16) * 100), 5, 45, 1, (v) => `${v} % de la largeur`, (v, fin) => { x.taille = v / 100; enregistrer(fin); })
         : curseurElement('Taille du texte', Math.round((x.taille || 0.035) * 1000) / 10, 2, 8, 0.5, (v) => `${fr(v)} %`, (v, fin) => { x.taille = v / 100; enregistrer(fin); }),
       curseurElement('Opacité', Math.round((x.opacite || 0.9) * 100), 10, 100, 5, (v) => `${v} %`, (v, fin) => { x.opacite = v / 100; enregistrer(fin); }),
+      // Pour détacher le logo d'une image chargée : une ombre portée douce, un halo lumineux autour.
+      x.genre === 'logo' ? curseurElement('Ombre portée', Math.round((x.ombre || 0) * 100), 0, 100, 5, (v) => (v ? `${v} %` : 'aucune'), (v, fin) => { x.ombre = v / 100; enregistrer(fin); }) : null,
+      x.genre === 'logo' ? curseurElement('Halo lumineux', Math.round((x.halo || 0) * 100), 0, 100, 5, (v) => (v ? `${v} %` : 'aucun'), (v, fin) => { x.halo = v / 100; enregistrer(fin); }) : null,
       x.genre === 'texte' ? h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Couleur du texte', style: { marginTop: '8px' } },
         [['blanc', 'Blanc'], ['noir', 'Noir'], ['jaune', 'Jaune']].map(([v, l]) => h('button', { class: (x.couleur || 'blanc') === v ? 'actif' : '',
           onclick: () => { x.couleur = v; enregistrer(); dessiner(); } }, l))) : null);

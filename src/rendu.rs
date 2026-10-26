@@ -608,6 +608,52 @@ fn textes(prog: &Programme, l: &mut Vec<String>) {
 // ---------------------------------------------------------------- habillage et générique
 
 /// Coin ou bord d'un élément d'habillage, en expressions d'overlay (W, H : image ; w, h : élément).
+/// Logo de l'habillage posé sur [base] → [sortie] : son halo lumineux (copie blanche floutée), son ombre portée
+/// (copie noire floutée, décalée vers le bas à droite), puis le logo. Les trois sont agrandis d'une bordure
+/// transparente où le flou s'étale ; la position est corrigée de cette bordure.
+fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, hab: &crate::modele::Habillage, marge: u32) -> Vec<String> {
+    let (x, y) = position_habillage(&hab.position, marge);
+    let l = largeur as f64;
+    let flou_ombre = (0.025 * l).max(1.0);
+    let decalage = (0.03 * l).round().max(1.0);
+    let flou_halo = (0.04 * l * (0.6 + hab.halo)).max(1.0);
+    let bord = (3.0 * flou_ombre.max(flou_halo) + decalage).ceil() as u32 / 2 * 2 + 2;
+    // Une expression écrite pour le logo seul (w, h) vaut pour le logo agrandi de sa bordure (w-2b, h-2b), moins b.
+    let corriger = |e: &str| format!("({})-{bord}", e.replace('w', &format!("(w-{})", 2 * bord)).replace('h', &format!("(h-{})", 2 * bord)));
+    let (x, y) = (corriger(&x), corriger(&y));
+    let mut fc = vec![format!(
+        "[{entree}]fps={IPS},scale={largeur}:-2,format=rgba,colorchannelmixer=aa={:.2},pad=iw+{}:ih+{}:{bord}:{bord}:color=black@0[hl{j}]",
+        hab.opacite, 2 * bord, 2 * bord
+    )];
+    let mut sur = base.to_string();
+    let couches: Vec<(&str, bool)> = vec![("halo", hab.halo > 0.0), ("ombre", hab.ombre > 0.0)];
+    let nb = 1 + couches.iter().filter(|(_, oui)| *oui).count();
+    if nb > 1 {
+        fc.push(format!("[hl{j}]split={nb}[hlo{j}]{}", couches.iter().filter(|(_, o)| *o).map(|(n, _)| format!("[h{n}{j}]")).collect::<String>()));
+    } else {
+        fc.push(format!("[hl{j}]null[hlo{j}]"));
+    }
+    if hab.halo > 0.0 {
+        // Le flou étale et dilue l'opacité : on la relève pour que le halo se voie.
+        fc.push(format!(
+            "[hhalo{j}]lutrgb=r=255:g=255:b=255,gblur=sigma={flou_halo:.1},lutrgb=a='min(255,val*{:.2})'[hhb{j}]",
+            1.0 + 3.0 * hab.halo
+        ));
+        fc.push(format!("[{sur}][hhb{j}]overlay=x='{x}':y='{y}':eof_action=pass[hvh{j}]"));
+        sur = format!("hvh{j}");
+    }
+    if hab.ombre > 0.0 {
+        fc.push(format!(
+            "[hombre{j}]lutrgb=r=0:g=0:b=0,gblur=sigma={flou_ombre:.1},lutrgb=a='val*{:.2}'[hob{j}]",
+            0.9 * hab.ombre
+        ));
+        fc.push(format!("[{sur}][hob{j}]overlay=x='{x}+{decalage}':y='{y}+{decalage}':eof_action=pass[hvo{j}]"));
+        sur = format!("hvo{j}");
+    }
+    fc.push(format!("[{sur}][hlo{j}]overlay=x='{x}':y='{y}':eof_action=pass[{sortie}]"));
+    fc
+}
+
 fn position_habillage(position: &str, marge: u32) -> (String, String) {
     match position {
         "haut_gauche" => (format!("{marge}"), format!("{marge}")),
@@ -1195,9 +1241,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         }
         args.extend(["-t".into(), format!("{total:.3}"), "-i".into(), fichier.to_string_lossy().into()]);
         let largeur = ((wo as f64 * hab.taille) as u32 / 2 * 2).max(16);
-        let (x, y) = position_habillage(&hab.position, marge);
-        fc.push(format!("[{entree}:v]fps={IPS},scale={largeur}:-2,format=yuva420p,colorchannelmixer=aa={:.2}[hab{j}]", hab.opacite));
-        fc.push(format!("[{base}][hab{j}]overlay=x='{x}':y='{y}':eof_action=pass[vh{j}]"));
+        fc.extend(graphe_logo(&format!("{entree}:v"), &base, &format!("vh{j}"), j, largeur, hab, marge));
         base = format!("vh{j}");
         entree += 1;
     }
@@ -1658,5 +1702,20 @@ mod tests {
             std::fs::write(dossier.join(format!("{}.graphe", a["cle"].as_str().unwrap())), fc.join(";")).unwrap();
             std::fs::write(dossier.join(format!("{}.direct", a["cle"].as_str().unwrap())), filtres_direct(&r).join("\n")).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_logo {
+    use super::*;
+
+    /// Écrit le graphe du logo (ombre et halo) : `EDIVID_GRAPHES=<dossier> cargo test logo -- --ignored`.
+    #[test]
+    #[ignore]
+    fn graphe_du_logo() {
+        let dossier = PathBuf::from(std::env::var("EDIVID_GRAPHES").expect("EDIVID_GRAPHES"));
+        let hab = crate::modele::Habillage { genre: "logo".into(), position: "haut_gauche".into(), taille: 0.16, opacite: 0.9,
+                                             ombre: 0.7, halo: 0.6, ..Default::default() };
+        std::fs::write(dossier.join("logo.graphe"), graphe_logo("1:v", "0:v", "v", 0, 154, &hab, 38).join(";")).unwrap();
     }
 }

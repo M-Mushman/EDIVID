@@ -1178,6 +1178,16 @@ mod tests {
             u.dedup();
             println!("{k:7} {} plans, largeurs du cadre dans la source : {u:?}", v.len());
         }
+        if let Ok(t) = std::env::var("EDIVID_SOURCE") {
+            let t: f64 = t.parse().unwrap();
+            for ph in ps.iter().filter(|ph| ph.t0 <= t + 20.0 && ph.t1 >= t - 5.0) {
+                let d = p.montage.as_ref().and_then(|m| m.phrases.iter().find(|d| d.cle == ph.cle));
+                println!("SOURCE {} {:>7.2}–{:>7.2} garder={:?} cadre={:?} « {} »", ph.cle, ph.t0, ph.t1, d.map(|d| d.garder), d.map(|d| d.cadre.clone()), ph.texte.chars().take(50).collect::<String>());
+                for pl in prog.plans.iter().filter(|pl| pl.phrase == ph.cle) {
+                    println!("    plan sortie {:>7.2} source {:>7.2}–{:>7.2} cadre {} largeur {:.0} accroche={}", pl.sortie_t0, pl.t0, pl.t0 + pl.duree, pl.cadre, pl.zone.w, pl.accroche);
+                }
+            }
+        }
         if let Ok(c) = std::env::var("EDIVID_PHRASE") {
             if let Some(ph) = ps.iter().find(|ph| ph.cle == c) {
                 let affiches: Vec<usize> = prog.mots.iter().filter(|m| m.phrase == c).map(|m| m.rang).collect();
@@ -1187,7 +1197,7 @@ mod tests {
             }
         }
         for pl in prog.plans.iter().filter(|pl| std::env::var("EDIVID_PHRASE").map(|c| c == pl.phrase).unwrap_or(false)) {
-            println!("PLAN source {:>7.2}–{:>7.2} accroche={}", pl.t0, pl.t0 + pl.duree, pl.accroche);
+            println!("PLAN sortie {:>7.2} source {:>7.2}–{:>7.2} cadre {} largeur {:.0}", pl.sortie_t0, pl.t0, pl.t0 + pl.duree, pl.cadre, pl.zone.w);
         }
         for pl in prog.plans.iter().take(16) {
             println!("{:>7.2} {:7} {:12} {:>7.1} punch={} pousse={}", pl.sortie_t0, pl.cadre, pl.regime, pl.zone.w, pl.punch, pl.pousse);

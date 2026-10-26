@@ -82,6 +82,9 @@ pub struct Habillage {
     pub opacite: f64,
     /// Texte : blanc, noir ou jaune.
     pub couleur: String,
+    /// Logo : ombre portée et halo lumineux, de 0 (aucun) à 1, pour le détacher de l'image.
+    pub ombre: f64,
+    pub halo: f64,
 }
 
 /// Générique : une séquence avant le montage, une après.
