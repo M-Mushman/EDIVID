@@ -57,7 +57,11 @@ async fn ffmpeg(etat: &EtatPartage, projet: &str, etape: &str, args: &[String], 
     let statut = enfant.wait().await?;
     let erreurs = lecture_erreurs.await.unwrap_or_default();
     if !statut.success() {
-        bail!("ffmpeg en échec ({etape}) : {}", erreurs.lines().rev().take(4).collect::<Vec<_>>().join(" | "));
+        // Le détail complet va au journal ; la personne reçoit un message court (une ligne d'erreur ffmpeg peut
+        // recopier tout le graphe de filtres).
+        tracing::warn!("ffmpeg en échec ({etape}) : {}", erreurs.lines().rev().take(4).collect::<Vec<_>>().join(" | "));
+        let court = |l: &str| if l.chars().count() > 140 { format!("{}…", l.chars().take(140).collect::<String>()) } else { l.to_string() };
+        bail!("ffmpeg en échec ({etape}) : {}", erreurs.lines().rev().take(2).map(court).collect::<Vec<_>>().join(" | "));
     }
     Ok(())
 }
@@ -1168,7 +1172,9 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
             }
             _ => {}
         }
-        fc.push(format!("[{base}][inc{k}]overlay=x={x}:y={y}:enable='between(t,{:.3},{:.3})':eof_action=pass[vi{k}]",
+        // Entre apostrophes : les formules des arrivées (glissés, secousse) contiennent des virgules, que le graphe
+        // prendrait sinon pour des séparateurs de filtres.
+        fc.push(format!("[{base}][inc{k}]overlay=x='{x}':y='{y}':enable='between(t,{:.3},{:.3})':eof_action=pass[vi{k}]",
                         inc.debut, inc.fin));
         base = format!("vi{k}");
         if inc.son && m.a_son && m.genre == "video" {
@@ -1191,7 +1197,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         let largeur = ((wo as f64 * hab.taille) as u32 / 2 * 2).max(16);
         let (x, y) = position_habillage(&hab.position, marge);
         fc.push(format!("[{entree}:v]fps={IPS},scale={largeur}:-2,format=yuva420p,colorchannelmixer=aa={:.2}[hab{j}]", hab.opacite));
-        fc.push(format!("[{base}][hab{j}]overlay=x={x}:y={y}:eof_action=pass[vh{j}]"));
+        fc.push(format!("[{base}][hab{j}]overlay=x='{x}':y='{y}':eof_action=pass[vh{j}]"));
         base = format!("vh{j}");
         entree += 1;
     }
