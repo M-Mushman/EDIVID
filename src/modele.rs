@@ -206,6 +206,12 @@ pub struct Decision {
     /// Mouvement de caméra choisi à la main : « fixe », « pousse » ou « punch » ; absent = selon le rythme.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mouvement: Option<String>,
+    /// Rangs des mots de la phrase retirés des sous-titres (ils restent dits dans la vidéo).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub masques: Vec<usize>,
+    /// Rangs des mots mis en emphase, choisis à la main ; absent = ceux du LLM (mots_forts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emphase: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

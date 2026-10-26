@@ -658,3 +658,17 @@ a.btn { text-decoration: none; }
 .drive-ligne svg { width: 18px; height: 18px; flex: none; color: var(--accent); }
 .drive-ligne input { width: 17px; height: 17px; accent-color: var(--accent); flex: none; }
 .drive-nom { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- texte : ce qui passe à l'écran, éditeur des sous-titres, parties ---------- */
+.texte .mot.affiche { font-weight: 700; }
+.texte .mot.masque { color: var(--texte-3); text-decoration: line-through; text-decoration-color: var(--texte-3); }
+.texte .mot.hors { color: var(--texte-3); }
+.texte .mot.emphase, .editeur-st .emphase { background: color-mix(in srgb, #ffe500 55%, transparent); color: var(--texte); border-radius: 3px; padding: 0 1px; }
+.texte .mot.choisi { outline: 2px solid var(--accent); outline-offset: 1px; background: var(--accent-doux); }
+.phrase.edition-st { background: var(--surface-2); outline: 1px dashed var(--accent); outline-offset: -1px; }
+.phrase.edition-st .texte { user-select: none; line-height: 1.9; }
+.editeur-st { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.editeur-st .btn b, .editeur-st .btn .emphase { font-size: 13px; min-width: 14px; text-align: center; }
+.partie { display: flex; align-items: center; gap: 8px; padding: 10px 8px 4px; border-top: 1px solid var(--bord); margin-top: 6px; }
+.partie .etiquette-accroche { margin: 0; color: var(--accent); white-space: nowrap; }
+.partie .titre-partie { margin: 0; padding: 5px 9px; font-weight: 700; font-size: 13.5px; flex: 1; min-width: 0; }

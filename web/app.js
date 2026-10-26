@@ -278,6 +278,8 @@ const E = {
   voirTlOrigine: lire('edivid_voirTlOrigine') !== '0',
   voirTlMontage: lire('edivid_voirTlMontage') !== '0',
   filtre: 'toutes',
+  editionSt: null,
+  selectionSt: new Set(),
   progression: null,
   televersements: new Map(),
   attenteReponse: false,
@@ -520,6 +522,9 @@ async function rafraichir() {
     ]);
     E.vue = vue;
     E.programme = programme;
+    // Le serveur sait si l'aperçu reflète l'état du projet : l'avertissement survit à un rechargement de la page.
+    if (vue.apercu_a_jour === false) E.aMettreAJour = true;
+    if (vue.apercu_a_jour === true) E.aMettreAJour = false;
   } catch (e) {
     if (e.message === 'projet introuvable') { location.hash = '#/'; }
     return;
@@ -962,6 +967,8 @@ function dessinerStats() {
       h('div', { class: 'chiffre' }, h('b', {}, r.plans), h('span', {}, 'plans')),
       h('div', { class: 'chiffre' }, h('b', {}, `${fr(r.duree_moyenne_plan)} s`), h('span', {}, 'par plan en moyenne')),
       h('div', { class: 'chiffre' }, h('b', {}, r.zooms_animes + r.transitions), h('span', {}, 'zooms animés et transitions'))),
+    r.son ? h('p', { class: 'tres-petit muet', style: { margin: '10px 0 0' } }, icone('onde'), ` Son de cette vidéo — ${r.son}`,
+      E.aMettreAJour ? h('b', { style: { color: 'var(--alerte)' } }, ' · des changements attendent un nouvel aperçu') : null) : null,
     avert.length ? h('div', { class: 'aide', style: { marginTop: '12px', background: 'var(--alerte-doux)' } }, icone('alerte'), h('span', {}, avert.join(' · '))) : null,
     notes.length ? h('details', { class: 'notes' }, h('summary', { style: { cursor: 'pointer' } }, h('b', {}, 'Notes du monteur')),
       h('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } }, notes.map((t) => h('li', {}, t)))) : null);
@@ -1388,6 +1395,99 @@ async function changerPhrase(cle, changement) {
   } catch (e) { toast(e.message, 'erreur'); }
 }
 
+/** Mots d'une phrase tels qu'ils passent à l'écran : gras = en sous-titre, surligné = en emphase, grisé = pas
+ *  affiché (retiré à la main, ou coupé au montage avec une hésitation ou un silence). */
+function motsPhrase(ph, zone) {
+  const st = E.programme?.sous_titres?.[ph.cle];
+  const affiches = new Map(st || []);
+  const masques = new Set(ph.decision?.masques || []);
+  const choisis = E.editionSt === ph.cle ? E.selectionSt : null;
+  const morceaux = [];
+  ph.mots.forEach(([, , m], i) => {
+    if (i && !/^['’-]/.test(m)) morceaux.push(' ');
+    const classes = ['mot'];
+    if (st) classes.push(affiches.has(i) ? 'affiche' : masques.has(i) ? 'masque' : 'hors');
+    if (affiches.get(i)) classes.push('emphase');
+    if (choisis?.has(i)) classes.push('choisi');
+    morceaux.push(h('span', { class: classes.join(' '), 'data-i': i,
+      title: !st ? '' : affiches.has(i) ? '' : masques.has(i) ? 'Retiré des sous-titres' : 'Coupé au montage (hésitation, silence) : jamais affiché' }, m));
+  });
+  zone.dataset.mots = '1';
+  return morceaux;
+}
+
+/** Éditeur des sous-titres d'une phrase : on choisit des mots (clic, ou glisser), puis Gras les affiche ou les
+ *  retire, Surligner leur donne l'emphase ou la leur retire. */
+function editeurSousTitres(ph, zone) {
+  const d = ph.decision || {};
+  const st = new Map(E.programme?.sous_titres?.[ph.cle] || []);
+  const choix = () => [...E.selectionSt].sort((a, b) => a - b);
+  let glisse = null;
+  const selectionner = (i, etendre) => {
+    if (etendre && glisse !== null) {
+      E.selectionSt = new Set();
+      for (let k = Math.min(glisse, i); k <= Math.max(glisse, i); k++) E.selectionSt.add(k);
+    } else if (E.selectionSt.has(i) && !etendre) E.selectionSt.delete(i);
+    else E.selectionSt.add(i);
+    zone.querySelectorAll('.mot').forEach((el) => el.classList.toggle('choisi', E.selectionSt.has(Number(el.dataset.i))));
+  };
+  zone.onmousedown = (e) => { const el = e.target.closest('.mot'); if (!el) return; e.preventDefault(); glisse = Number(el.dataset.i); selectionner(glisse, false); };
+  zone.onmouseover = (e) => { const el = e.target.closest('.mot'); if (el && glisse !== null && e.buttons) selectionner(Number(el.dataset.i), true); };
+  document.addEventListener('mouseup', () => { glisse = null; }, { once: true });
+  zone.onclick = null;
+  zone.ondblclick = null;
+  zone.style.cursor = 'text';
+  const gras = () => {
+    const c = choix();
+    if (!c.length) { toast('Choisissez d’abord des mots : clic, ou glisser sur plusieurs mots.'); return; }
+    const masques = new Set(d.masques || []);
+    const tousAffiches = c.every((i) => !masques.has(i));
+    c.forEach((i) => (tousAffiches ? masques.add(i) : masques.delete(i)));
+    changerPhrase(ph.cle, { masques: [...masques] });
+  };
+  const surligner = () => {
+    const c = choix();
+    if (!c.length) { toast('Choisissez d’abord des mots : clic, ou glisser sur plusieurs mots.'); return; }
+    const emphase = new Set(d.emphase || [...st].filter(([, fort]) => fort).map(([i]) => i));
+    const tous = c.every((i) => emphase.has(i));
+    c.forEach((i) => (tous ? emphase.delete(i) : emphase.add(i)));
+    changerPhrase(ph.cle, { emphase: [...emphase] });
+  };
+  return h('div', { class: 'editeur-st' },
+    h('button', { class: 'btn petit', title: 'Afficher ou retirer des sous-titres les mots choisis', onclick: gras }, h('b', {}, 'G'), 'Affiché'),
+    h('button', { class: 'btn petit', title: 'Donner ou retirer l’emphase (couleur et taille, style dynamique)', onclick: surligner }, h('span', { class: 'emphase' }, 'S'), 'Emphase'),
+    h('button', { class: 'btn petit fantome', title: 'Remettre tous les mots dans les sous-titres', onclick: () => changerPhrase(ph.cle, { masques: [] }) }, 'Tout afficher'),
+    d.emphase ? h('button', { class: 'btn petit fantome', title: 'Revenir aux mots forts choisis par le LLM', onclick: () => changerPhrase(ph.cle, { emphase_auto: true }) }, 'Emphase du LLM') : null,
+    h('span', { class: 'espace' }),
+    h('button', { class: 'btn petit primaire', onclick: () => { E.editionSt = null; dessinerPhrases(); } }, 'Fermer'),
+    h('div', { class: 'tres-petit muet', style: { flexBasis: '100%' } },
+      'Choisissez des mots (clic, ou glisser), puis Affiché ou Emphase. Gras : à l’écran. Surligné : en emphase. Grisé : pas à l’écran.',
+      texte_style_sous_titres()));
+}
+
+function texte_style_sous_titres() {
+  const r = E.vue.projet.reglages;
+  if (!r.sous_titres) return ' Les sous-titres sont éteints dans les réglages.';
+  return r.style_sous_titres === 'dynamique' ? '' : ' L’emphase ne se voit qu’avec le style de sous-titres « dynamique ».';
+}
+
+/** Titre de la partie qui commence à cette phrase : modifiable en place, supprimable. */
+function ligneChapitre(c) {
+  const champ = h('input', { class: 'champ titre-partie', value: c.titre, maxlength: '80', 'aria-label': 'Titre de la partie' });
+  const enregistrer = async (titre) => {
+    try { await api('POST', `/api/projets/${E.projetId}/chapitre`, { cle: c.cle, titre }); E.aMettreAJour = true; dessinerBarre(); }
+    catch (e) { toast(e.message, 'erreur'); }
+  };
+  champ.addEventListener('change', () => enregistrer(champ.value));
+  champ.addEventListener('keydown', (e) => { if (e.key === 'Enter') champ.blur(); });
+  const actif = E.vue.projet.reglages.titres_chapitres;
+  return h('div', { class: 'partie' },
+    h('span', { class: 'etiquette-accroche', title: actif ? 'Titre affiché à l’image au début de la partie' : 'Les titres de parties sont éteints dans les réglages' },
+      actif ? 'Partie' : 'Partie (titre non affiché)'),
+    champ,
+    h('button', { class: 'btn icone fantome', title: 'Supprimer cette partie et son titre', onclick: () => enregistrer('') }, icone('corbeille')));
+}
+
 /** Actions plus rares d'une phrase : accroche, soudure avec une voisine du même rush. */
 function menuPhraseActions(ph, phrases) {
   const i = phrases.indexOf(ph);
@@ -1395,7 +1495,11 @@ function menuPhraseActions(ph, phrases) {
   const suiv = phrases[i + 1];
   const accroche = clesAccroche();
   const dans = accroche.includes(ph.cle);
+  const partie = (E.vue.projet.montage?.chapitres || []).some((c) => c.cle === ph.cle);
   return menuActions('Plus d’actions sur cette phrase', [
+    ['texte', 'Régler les sous-titres de cette phrase', () => { E.editionSt = ph.cle; E.selectionSt = new Set(); dessinerPhrases(); }],
+    partie ? null : ['signet', 'Commencer une partie ici', () => api('POST', `/api/projets/${E.projetId}/chapitre`, { cle: ph.cle, titre: 'Nouvelle partie' })
+      .then(() => { E.aMettreAJour = true; dessinerBarre(); }).catch((e) => toast(e.message, 'erreur'))],
     ['etoile', dans ? 'Retirer de l’accroche' : 'Ajouter à l’accroche', () => changerAccroche(dans ? accroche.filter((c) => c !== ph.cle) : [...accroche, ph.cle])],
     prec && prec.rush === ph.rush ? ['haut', 'Souder à la phrase précédente', () => fusionner(ph.cle, 'precedente')] : null,
     suiv && suiv.rush === ph.rush ? ['bas', 'Souder à la phrase suivante', () => fusionner(ph.cle, 'suivante')] : null,
@@ -1411,17 +1515,25 @@ function dessinerPhrases() {
   const nbCoupees = phrases.filter((ph) => ph.decision && !ph.decision.garder).length;
   const debut = E.noeuds.listePhrases?.scrollTop || 0;
   const accroche = monte && E.filtre !== 'coupees' ? ligneAccroche() : null;
+  const chapitres = new Map((p.montage?.chapitres || []).map((c) => [c.cle, c]));
   E.noeuds.listePhrases = h('div', { class: 'phrases' }, accroche, visibles.map((ph) => {
+    const ligne = lignePhrase(ph);
+    return chapitres.has(ph.cle) ? [ligneChapitre(chapitres.get(ph.cle)), ligne] : ligne;
+  }));
+  function lignePhrase(ph) {
     const d = ph.decision;
     const classe = d ? (d.garder ? d.regime : 'coupee') : '';
     const corrigee = !!p.corrections?.[ph.cle];
     if (E.edition === ph.cle) return ligneEdition(ph, corrigee);
-    return h('div', { class: `phrase ${classe}`, 'data-cle': ph.cle },
+    const zoneTexte = h('div', { class: 'texte', style: { cursor: 'pointer' }, title: 'Clic : écouter ce passage — double-clic : corriger le texte',
+      onclick: () => allerALaPhrase(ph.cle), ondblclick: () => { E.edition = ph.cle; dessinerPhrases(); } });
+    remplir(zoneTexte, monte && d?.garder && E.programme ? motsPhrase(ph, zoneTexte) : ph.texte,
+      corrigee ? h('span', { class: 'marque-corrige', title: 'Texte corrigé à la main' }, 'corrigé') : null);
+    const editeur = E.editionSt === ph.cle && d?.garder ? editeurSousTitres(ph, zoneTexte) : null;
+    return h('div', { class: `phrase ${classe}${editeur ? ' edition-st' : ''}`, 'data-cle': ph.cle },
       h('div', { class: 'temps' }, minutes(ph.t0)),
       h('div', { style: { minWidth: 0 } },
-        h('div', { class: 'texte', style: { cursor: 'pointer' }, title: 'Clic : écouter ce passage — double-clic : corriger le texte',
-          onclick: () => allerALaPhrase(ph.cle), ondblclick: () => { E.edition = ph.cle; dessinerPhrases(); } },
-          ph.texte, corrigee ? h('span', { class: 'marque-corrige', title: 'Texte corrigé à la main' }, 'corrigé') : null),
+        zoneTexte, editeur,
         d && d.garder ? h('div', { class: 'etiquettes' },
           menuPhrase(ph.cle, 'regime', d.regime, NOMS_REGIME, AIDE_REGIME, 'Rythme'),
           menuPhrase(ph.cle, 'cadre', d.cadre, NOMS_CADRE, AIDE_CADRE, 'Cadre'),
@@ -1441,7 +1553,7 @@ function dessinerPhrases() {
           icone(d && !d.garder ? 'relancer' : 'ciseaux')),
         menuPhraseActions(ph, phrases)) : h('div', { class: 'boutons' },
         h('button', { class: 'btn icone fantome', title: 'Corriger le texte', onclick: () => { E.edition = ph.cle; dessinerPhrases(); } }, icone('crayon'))));
-  }));
+  }
   appliquerReplie(E.noeuds.phrases, 'phrases');
   remplir(E.noeuds.phrases,
     enteteRepliable('phrases', '3. Le texte de la vidéo',
@@ -1663,10 +1775,47 @@ function curseurElement(libelle, valeur, min, max, pas, format, changer) {
 }
 
 /** Habillage : logos et textes posés sur toute la durée du montage. */
+const ACCEPTE_MEDIA = { image: 'image/*,.png,.svg,.gif', video: 'video/*', son: 'audio/*' };
+
+/** Envoie un fichier de l'ordinateur dans la médiathèque (ou remplace le fichier d'un média existant). */
+function chargerMedia(accepte, rappel, remplacer = null) {
+  choisirFichiers(accepte, false, async (fichiers) => {
+    const f = fichiers[0];
+    if (!f) return;
+    try {
+      const chemin = remplacer ? `/api/projets/${E.projetId}/medias/${remplacer}` : `/api/projets/${E.projetId}/medias`;
+      const r = await fetch(`${chemin}?nom=${encodeURIComponent(f.name)}`, { method: 'PUT', body: f });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erreur || `erreur ${r.status}`);
+      E.aMettreAJour = true;
+      await rappel?.(j.id);
+      rafraichir();
+    } catch (e) { toast(e.message, 'erreur'); }
+  });
+}
+
+/** Choix d'un média : ceux de la médiathèque, ou un autre fichier (ordinateur, Google Drive). */
+function choixMedia({ genres, valeur, vide, libelle, changer }) {
+  const medias = E.vue.projet.medias.filter((m) => genres.includes(m.genre));
+  const accepte = ACCEPTE_MEDIA[genres[0] === 'gif' ? 'image' : genres[0]];
+  const choix = h('select', { class: 'champ', 'aria-label': libelle },
+    vide !== undefined ? h('option', { value: '', selected: !valeur }, vide) : null,
+    medias.map((m) => h('option', { value: m.id, selected: m.id === valeur }, m.nom)),
+    h('option', { value: '__fichier' }, 'Autre fichier de l’ordinateur…'),
+    E.driveActif ? h('option', { value: '__drive' }, 'Autre fichier sur Google Drive…') : null);
+  choix.addEventListener('change', () => {
+    const v = choix.value;
+    choix.value = valeur || '';
+    if (v === '__fichier') chargerMedia(accepte, (id) => changer(id));
+    else if (v === '__drive') { choisirDepuisDrive('medias'); toast('Une fois importé, le fichier apparaîtra dans cette liste.'); }
+    else changer(v);
+  });
+  return choix;
+}
+
 function blocHabillage(corps) {
   const p = E.vue.projet;
   const liste = (p.habillage || []).map((x) => ({ ...x }));
-  const images = p.medias.filter((m) => m.genre === 'image' || m.genre === 'gif');
   let minuterie;
   const enregistrer = (tout_de_suite = true, message = '') => {
     clearTimeout(minuterie);
@@ -1680,28 +1829,13 @@ function blocHabillage(corps) {
     }, tout_de_suite ? 0 : 500);
   };
   const zone = h('div');
-  const ajouterLogo = () => {
-    if (images.length) {
-      liste.push({ genre: 'logo', media: images[0].id, position: 'haut_droite', taille: 0.16, opacite: 0.9 });
-      enregistrer(true, 'Logo ajouté : choisissez l’image, la place et la taille.');
-      dessiner();
-      return;
-    }
-    // Pas encore d'image : on choisit le fichier du logo, il entre dans la médiathèque puis dans l'habillage.
-    choisirFichiers('image/*,.png,.svg,.gif', false, async (fichiers) => {
-      const f = fichiers[0];
-      if (!f) return;
-      try {
-        const r = await fetch(`/api/projets/${E.projetId}/medias?nom=${encodeURIComponent(f.name)}`, { method: 'PUT', body: f });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.erreur || `erreur ${r.status}`);
-        liste.push({ genre: 'logo', media: j.id, position: 'haut_droite', taille: 0.16, opacite: 0.9 });
-        await api('POST', `/api/projets/${E.projetId}/habillage`, liste);
-        E.aMettreAJour = true;
-        toast('Logo ajouté à la médiathèque et posé sur la vidéo.', 'ok');
-      } catch (e) { toast(e.message, 'erreur'); }
-    });
-  };
+  // Un nouveau logo part toujours d'un fichier choisi ; une image déjà dans la médiathèque se choisit ensuite
+  // dans la liste du logo.
+  const ajouterLogo = () => chargerMedia(ACCEPTE_MEDIA.image, async (id) => {
+    liste.push({ genre: 'logo', media: id, position: 'haut_droite', taille: 0.16, opacite: 0.9 });
+    await api('POST', `/api/projets/${E.projetId}/habillage`, liste);
+    toast('Logo posé sur la vidéo : réglez sa place et sa taille.', 'ok');
+  });
   const element = (x, i) => {
     const retirer = h('button', { class: 'btn icone petit fantome danger', title: 'Retirer cet élément',
       onclick: () => { liste.splice(i, 1); enregistrer(true, 'Élément retiré.'); dessiner(); } }, icone('corbeille'));
@@ -1709,8 +1843,8 @@ function blocHabillage(corps) {
     position.addEventListener('change', () => { x.position = position.value; enregistrer(); });
     let tete;
     if (x.genre === 'logo') {
-      const choix = h('select', { class: 'champ', 'aria-label': 'Image du logo' }, images.map((m) => h('option', { value: m.id, selected: x.media === m.id }, m.nom)));
-      choix.addEventListener('change', () => { x.media = choix.value; enregistrer(); dessiner(); });
+      const choix = choixMedia({ genres: ['image', 'gif'], valeur: x.media, libelle: 'Image du logo',
+        changer: (id) => { x.media = id; enregistrer(); dessiner(); } });
       tete = h('div', { class: 'habillage-tete' },
         h('div', { class: 'habillage-vignette' }, x.media ? h('img', { src: `/api/projets/${E.projetId}/medias/${x.media}`, alt: '' }) : icone('image')),
         h('div', { style: { flex: 1, minWidth: 0 } }, h('b', { class: 'petit' }, 'Logo'), choix), retirer);
@@ -1750,7 +1884,6 @@ function blocGenerique(corps) {
   const p = E.vue.projet;
   const g = { debut: p.generique?.debut ? { ...p.generique.debut } : null, fin: p.generique?.fin ? { ...p.generique.fin } : null };
   const videos = p.medias.filter((m) => m.genre === 'video');
-  const images = p.medias.filter((m) => m.genre === 'image' || m.genre === 'gif');
   let minuterie;
   const enregistrer = (tout_de_suite = true) => {
     clearTimeout(minuterie);
@@ -1766,7 +1899,11 @@ function blocGenerique(corps) {
     const choisir = (v) => {
       if (v === 'aucun') g[cle] = null;
       else if (v === 'video') {
-        if (!videos.length) { toast('Ajoutez d’abord la vidéo dans l’onglet Médias (ou depuis Google Drive).', 'erreur'); return; }
+        // Pas de vidéo dans la médiathèque : on la choisit tout de suite.
+        if (!videos.length) {
+          chargerMedia(ACCEPTE_MEDIA.video, async (id) => { g[cle] = { genre: 'video', media: id, duree: 0 }; await api('POST', `/api/projets/${E.projetId}/generique`, g); });
+          return;
+        }
         g[cle] = { genre: 'video', media: videos[0].id, duree: 0 };
       } else g[cle] = { genre: 'carton', titre: cle === 'debut' ? p.nom : 'Merci d’avoir regardé', sous_titre: '', media: '', duree: 3 };
       enregistrer();
@@ -1775,8 +1912,7 @@ function blocGenerique(corps) {
     const parties = [h('div', { class: 'segments', role: 'radiogroup', 'aria-label': libelle },
       [['aucun', 'Aucun'], ['video', 'Vidéo'], ['carton', 'Titre + image']].map(([v, l]) => h('button', { class: genre === v ? 'actif' : '', onclick: () => choisir(v) }, l)))];
     if (s?.genre === 'video') {
-      const choix = h('select', { class: 'champ', 'aria-label': 'Vidéo' }, videos.map((m) => h('option', { value: m.id, selected: s.media === m.id }, `${m.nom}${m.duree ? ` (${fr(m.duree)} s)` : ''}`)));
-      choix.addEventListener('change', () => { s.media = choix.value; enregistrer(); });
+      const choix = choixMedia({ genres: ['video'], valeur: s.media, libelle: 'Vidéo', changer: (id) => { s.media = id; enregistrer(); dessiner(); } });
       parties.push(h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Vidéo'), choix),
         curseurElement('Durée gardée', s.duree || 0, 0, 30, 1, (v) => (v ? `${v} s au plus` : 'entière'), (v, fin) => { s.duree = v; enregistrer(fin); }));
     } else if (s?.genre === 'carton') {
@@ -1784,9 +1920,8 @@ function blocGenerique(corps) {
       titre.addEventListener('input', () => { s.titre = titre.value; enregistrer(false); });
       const sous = h('input', { class: 'champ', value: s.sous_titre || '', maxlength: '120', placeholder: 'Sous-titre (facultatif)', 'aria-label': 'Sous-titre' });
       sous.addEventListener('input', () => { s.sous_titre = sous.value; enregistrer(false); });
-      const image = h('select', { class: 'champ', 'aria-label': 'Image de fond' }, h('option', { value: '' }, 'Fond sombre uni'),
-        images.map((m) => h('option', { value: m.id, selected: s.media === m.id }, m.nom)));
-      image.addEventListener('change', () => { s.media = image.value; enregistrer(); });
+      const image = choixMedia({ genres: ['image', 'gif'], valeur: s.media, vide: 'Fond sombre uni', libelle: 'Image de fond',
+        changer: (id) => { s.media = id; enregistrer(); dessiner(); } });
       parties.push(h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Titre'), titre, h('div', { style: { height: '6px' } }), sous),
         h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Image de fond'), image),
         curseurElement('Durée', s.duree || 3, 1.5, 10, 0.5, (v) => `${fr(v)} s`, (v, fin) => { s.duree = v; enregistrer(fin); }));
@@ -1963,6 +2098,9 @@ function dessinerMedias(corps) {
             E.aMettreAJour = true;
             toast(`« ${m.nom} » devient la musique de fond.`, 'ok');
           } }, p.reglages.musique === m.id ? 'Musique de fond ✓' : 'Utiliser en musique') : null),
+        h('button', { class: 'btn petit fantome', style: { width: '100%', marginTop: '2px' }, title: 'Remplacer le fichier : partout où ce média sert, le nouveau prend sa place',
+          onclick: () => chargerMedia(ACCEPTE_MEDIA[m.genre === 'gif' ? 'image' : m.genre] || '*/*', () => toast(`« ${m.nom} » remplacé partout où il sert.`, 'ok'), m.id) },
+        icone('relancer'), 'Remplacer le fichier'),
         h('button', { class: 'supprimer', title: 'Retirer ce média', onclick: async () => {
           if (await confirmer('Retirer ce média ?', `« ${m.nom} » et ses incrustations seront retirés.`, 'Retirer')) {
             await api('DELETE', `/api/projets/${E.projetId}/medias/${m.id}`);

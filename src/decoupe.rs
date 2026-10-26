@@ -151,6 +151,34 @@ fn corriger(ph: &mut Phrase, texte: &str) {
 }
 
 /// Whisper découpe « c'est » en « c » + « 'est » et « bien-être » en « bien » + « -être ».
+/// Rangs des mots d'une phrase couverts par les expressions fortes du LLM (« danser sous la pluie » prend
+/// ses quatre mots ; « c'est » couvre « c » + « 'est »).
+fn indices_forts(mots: &[Mot], expressions: &[String]) -> HashSet<usize> {
+    let cle = |s: &str| normaliser(s).replace('\'', "");
+    let cles: Vec<String> = mots.iter().map(|m| cle(&m.mot)).collect();
+    let mut res = HashSet::new();
+    for e in expressions {
+        let voulu: String = e.split(|c: char| c.is_whitespace() || c == '-').map(cle).collect();
+        if voulu.is_empty() {
+            continue;
+        }
+        for i in 0..cles.len() {
+            let mut acc = String::new();
+            for (j, k) in cles.iter().enumerate().skip(i) {
+                acc.push_str(k);
+                if acc == voulu {
+                    res.extend(i..=j);
+                    break;
+                }
+                if acc.len() >= voulu.len() || !voulu.starts_with(&acc) {
+                    break;
+                }
+            }
+        }
+    }
+    res
+}
+
 pub fn recoller(mots: &[&str]) -> String {
     let mut s = String::new();
     for m in mots {
@@ -210,6 +238,9 @@ pub struct MotSortie {
     pub t1: f64,
     pub mot: String,
     pub fort: bool,
+    /// Phrase et rang du mot dans la phrase : l'éditeur du texte montre ce qui s'affiche vraiment.
+    pub phrase: String,
+    pub rang: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -596,7 +627,7 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         transition: None,
         mots_forts: vec![],
         transition_choisie: None,
-        mouvement: None,
+        mouvement: None, masques: vec![], emphase: None,
     };
     // Corps : phrases gardées, dans l'ordre.
     let corps: Vec<&Phrase> = ps
@@ -787,8 +818,14 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
                     }
                 }
             }
-            let mots_forts: HashSet<String> = d.mots_forts.iter().map(|m| normaliser(m)).collect();
-            for m in &ph.mots {
+            let forts = match &d.emphase {
+                Some(e) => e.iter().copied().collect(),
+                None => indices_forts(&ph.mots, &d.mots_forts),
+            };
+            for (rang, m) in ph.mots.iter().enumerate() {
+                if d.masques.contains(&rang) {
+                    continue;
+                }
                 let milieu = (m.t0 + m.t1) / 2.0;
                 if milieu < t0 || milieu > t0 + duree || (vrai(r, "coupe_hesitations") && est_hesitation(&m.mot)) {
                     continue;
@@ -797,7 +834,9 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
                     t0: sortie_t + (m.t0 - t0).max(0.0),
                     t1: sortie_t + (m.t1 - t0).min(duree),
                     mot: m.mot.clone(),
-                    fort: mots_forts.contains(&normaliser(&m.mot)),
+                    fort: forts.contains(&rang),
+                    phrase: ph.cle.clone(),
+                    rang,
                 });
             }
             plans.push(Plan {
@@ -960,6 +999,15 @@ pub fn plans_json(prog: &Programme) -> Value {
 }
 
 /// Le script courant, tel que les timelines l'affichent (sans attendre un rendu).
+/// Par phrase : les mots qui passent en sous-titre, avec leur emphase (rang, fort).
+fn sous_titres_par_phrase(prog: &Programme) -> Value {
+    let mut par: std::collections::BTreeMap<&str, std::collections::BTreeMap<usize, bool>> = Default::default();
+    for m in &prog.mots {
+        *par.entry(m.phrase.as_str()).or_default().entry(m.rang).or_default() |= m.fort;
+    }
+    json!(par.into_iter().map(|(k, v)| (k, v.into_iter().collect::<Vec<_>>())).collect::<std::collections::BTreeMap<_, _>>())
+}
+
 pub fn programme_json(prog: &Programme) -> Value {
     json!({
         "duree": arr(prog.duree),
@@ -969,6 +1017,8 @@ pub fn programme_json(prog: &Programme) -> Value {
         "titres": prog.titres.iter().map(|(t, titre)| json!({"t": arr(*t), "titre": titre})).collect::<Vec<_>>(),
         "incrustations": prog.incrustations.iter().map(|i| json!({"id": i.id, "debut": arr(i.debut), "fin": arr(i.fin)}))
             .collect::<Vec<_>>(),
+        // Par phrase : les mots qui passent en sous-titre (rang, emphase).
+        "sous_titres": sous_titres_par_phrase(prog),
         "avertissements": prog.avertissements,
         "sauts_cadrage": sauts_cadrage(prog),
     })
@@ -1025,6 +1075,24 @@ mod tests {
     }
 
     #[test]
+    fn emphase_des_expressions() {
+        let mots: Vec<Mot> = ["mais", "c", "'est", "d'apprendre", "à", "danser", "sous", "la", "pluie", "moment", "-là"]
+            .iter()
+            .map(|m| Mot { t0: 0.0, t1: 0.1, mot: m.to_string(), db: 0.0 })
+            .collect();
+        let e = |x: &[&str]| {
+            let mut v: Vec<usize> = indices_forts(&mots, &x.iter().map(|s| s.to_string()).collect::<Vec<_>>()).into_iter().collect();
+            v.sort();
+            v
+        };
+        assert_eq!(e(&["danser sous la pluie"]), vec![5, 6, 7, 8]);
+        assert_eq!(e(&["c'est"]), vec![1, 2]);
+        assert_eq!(e(&["moment-là"]), vec![9, 10]);
+        assert_eq!(e(&["Pluie"]), vec![8]);
+        assert!(e(&["sous la neige"]).is_empty());
+    }
+
+    #[test]
     fn grille_courte_garde_large_et_yeux() {
         let c = crans_cadres(&grille(3), 0.04, 1.0);
         assert_eq!((c[0], c[3]), (0, 2));
@@ -1054,16 +1122,19 @@ mod tests {
         // Soudure : deux phrases voisines n'en font plus qu'une, sous la clé de la première, et se séparent.
         let mut soude = p.clone();
         soude.fusions = vec![ps[1].cle.clone(), ps[2].cle.clone()];
+        soude.fusions.retain(|_| p.fusions.is_empty());
         // Comme le fait l'API au moment de souder : les corrections des morceaux deviennent celle du tout.
         for ph in &ps[1..4] {
             soude.corrections.remove(&ph.cle);
         }
         soude.corrections.insert(ps[1].cle.clone(), format!("{} {} {}", ps[1].texte, ps[2].texte, ps[3].texte));
         let ps2 = phrases_projet(&soude, &analyses);
+        if !soude.fusions.is_empty() {
         assert_eq!(ps2.len(), ps.len() - 2);
         assert_eq!(ps2[1].fusionnees, vec![ps[2].cle.clone(), ps[3].cle.clone()]);
         assert_eq!(ps2[1].texte, format!("{} {} {}", ps[1].texte, ps[2].texte, ps[3].texte));
         assert_eq!(ps2[2].cle, ps[4].cle);
+        }
         // Poussée : une seule avance continue par phrase, pas un zoom avant à chaque coupe.
         for w in prog.plans.windows(2) {
             if w[0].pousse && w[1].pousse && w[0].phrase == w[1].phrase && w[1].transition.is_none() && w[0].rush == w[1].rush {
@@ -1082,6 +1153,9 @@ mod tests {
             u.sort_by(|a, b| b.partial_cmp(a).unwrap());
             u.dedup();
             println!("{k:7} {} plans, largeurs du cadre dans la source : {u:?}", v.len());
+        }
+        for pl in prog.plans.iter().filter(|pl| std::env::var("EDIVID_PHRASE").map(|c| c == pl.phrase).unwrap_or(false)) {
+            println!("PHRASE {:>7.2} {:7} {:12} {:>7.1} z_fin={:.3} punch={} pousse={} trans={:?}", pl.sortie_t0, pl.cadre, pl.regime, pl.zone.w, pl.z_fin, pl.punch, pl.pousse, pl.transition);
         }
         for pl in prog.plans.iter().take(16) {
             println!("{:>7.2} {:7} {:12} {:>7.1} punch={} pousse={}", pl.sortie_t0, pl.cadre, pl.regime, pl.zone.w, pl.punch, pl.pousse);

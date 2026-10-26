@@ -1,6 +1,8 @@
 //! ffmpeg : préparation des rushs, rendu des plans, assemblage (filtres, son, incrustations,
 //! sous-titres). Les modèles (Whisper, netteté IA) passent par les capteurs Python.
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Instant;
@@ -752,6 +754,64 @@ async fn bruitage(etat: &EtatPartage) -> Result<PathBuf> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Sonie intégrée d'un rush (LUFS), mesurée une fois sur sa version de travail puis gardée.
+async fn sonie_rush(etat: &EtatPartage, projet: &str, rush: &str) -> Option<f64> {
+    let dossier = etat.dossier_travail(projet, rush);
+    let memo = dossier.join("sonie.txt");
+    if let Some(v) = tokio::fs::read_to_string(&memo).await.ok().and_then(|s| s.trim().parse().ok()) {
+        return Some(v);
+    }
+    let sortie = Command::new("ffmpeg")
+        .args(["-hide_banner", "-nostats", "-i"])
+        .arg(dossier.join("mezz.mkv"))
+        .args(["-vn", "-af", "ebur128=framelog=quiet", "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    let texte = String::from_utf8_lossy(&sortie.stderr);
+    let i: f64 = texte.lines().rev().find_map(|l| l.trim().strip_prefix("I:")?.trim().strip_suffix("LUFS")?.trim().parse().ok())?;
+    let _ = tokio::fs::write(&memo, format!("{i}")).await;
+    Some(i)
+}
+
+/// Gain qui amène la voix du montage à −23 LUFS (moyenne des rushs, pondérée par leur temps dans le montage).
+async fn gain_voix(etat: &EtatPartage, p: &Projet, prog: &Programme) -> f64 {
+    let mut temps: HashMap<&str, f64> = HashMap::new();
+    for pl in &prog.plans {
+        *temps.entry(pl.rush.as_str()).or_default() += pl.duree;
+    }
+    let (mut somme, mut poids) = (0.0, 0.0);
+    for (rush, t) in temps {
+        if let Some(i) = sonie_rush(etat, &p.id, rush).await.filter(|i| i.is_finite() && *i > -70.0) {
+            somme += i * t;
+            poids += t;
+        }
+    }
+    if poids == 0.0 { 0.0 } else { (-23.0 - somme / poids).clamp(-12.0, 30.0) }
+}
+
+/// Empreinte de tout ce qui change une vidéo rendue : un aperçu dont l'empreinte diffère de celle du projet
+/// n'est plus à jour (l'interface le dit, même après un rechargement de la page).
+pub fn empreinte(p: &Projet) -> String {
+    let v = json!([p.reglages, p.montage.as_ref().map(|m| json!([m.phrases, m.accroche, m.accroche_choisie, m.chapitres])),
+                   p.incrustations, p.habillage, p.generique, p.corrections, p.fusions, p.postprod, p.rushs.iter().map(|r| &r.id).collect::<Vec<_>>()]);
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.to_string().hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+/// Le son appliqué, en clair, pour le rapport : on sait avec quoi l'aperçu a été fait.
+pub fn resume_son(r: &crate::reglages::Reglages) -> String {
+    let choix = |cle: &str| crate::reglages::libelle_choix(cle, &texte(r, cle)).unwrap_or_else(|| texte(r, cle));
+    let mut morceaux = vec![format!("bruit : {}", choix("debruitage").to_lowercase()), format!("écho : {}", choix("reverberation").to_lowercase())];
+    morceaux.push(if vrai(r, "voix") { format!("voix : {}", choix("timbre_voix").to_lowercase()) } else { "voix : sans traitement".into() });
+    if vrai(r, "deesseur") {
+        morceaux.push("« s » adoucis".into());
+    }
+    morceaux.join(" · ")
+}
+
 async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Path, ass: &Path, sortie: &Path,
                    apercu: bool, nvenc: bool) -> Result<()> {
     let r = &p.reglages;
@@ -866,11 +926,22 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     // Son.
     // asetpts : le son suit son propre compte d'échantillons, sans hériter des arrondis de la concaténation.
     let mut a: Vec<String> = vec!["aresample=48000".into(), "asetpts=N/SR/TB".into()];
+    // La voix est d'abord ramenée à un niveau connu (−23 LUFS) : les seuils du compresseur et de la porte sont
+    // réglés pour ce niveau. Sans cela, un rush enregistré bas (−43 LUFS) passait sous tous les seuils.
+    let gain = gain_voix(etat, p, prog).await;
+    a.push(format!("volume={gain:.1}dB"));
     // afftdn retarde le son d'exactement 1 200 échantillons (mesuré au témoin flash + bip) : on les retire.
     let compensation = format!(",atrim=start_sample={LATENCE_AFFTDN},asetpts=PTS-STARTPTS,apad=pad_len={LATENCE_AFFTDN}");
     match texte(r, "debruitage").as_str() {
         "leger" => a.push(format!("afftdn=nr=10:nf=-40:tn=1{compensation}")),
         "fort" => a.push(format!("afftdn=nr=22:nf=-35:tn=1{compensation}")),
+        _ => {}
+    }
+    // Écho de la pièce : une porte douce baisse la traîne entre les phrases, après avoir retiré le grave boueux.
+    match texte(r, "reverberation").as_str() {
+        "attenuer" => a.push("highpass=f=90,equalizer=f=300:t=q:w=1:g=-3,agate=threshold=0.015:ratio=3:range=0.2:attack=3:release=120:knee=2".into()),
+        "forte" => a.push("highpass=f=100,equalizer=f=300:t=q:w=1:g=-4,equalizer=f=600:t=q:w=1.2:g=-2,\
+                           agate=threshold=0.02:ratio=5:range=0.1:attack=2:release=90:knee=1.5".into()),
         _ => {}
     }
     if vrai(r, "voix") {
@@ -881,6 +952,17 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
                         equalizer=f=2800:t=q:w=1.4:g=1.5,treble=g=-3:f=7500:w=0.6,deesser=i=0.3,\
                         acompressor=threshold=-22dB:ratio=2.5:attack=20:release=250:knee=4:makeup=2.5",
             "naturel" => "highpass=f=70,acompressor=threshold=-22dB:ratio=2:attack=15:release=200:makeup=1.5",
+            // Voix de studio : présence, air, compression rapide et limiteur, très régulière.
+            "podcast" => "highpass=f=80,equalizer=f=200:t=q:w=1:g=-1.5,equalizer=f=3000:t=q:w=1.5:g=2.5,\
+                          equalizer=f=10000:t=q:w=1:g=1.5,deesser=i=0.3,\
+                          acompressor=threshold=-26dB:ratio=4:attack=5:release=120:knee=3:makeup=3,alimiter=limit=0.9",
+            "graves" => "highpass=f=60,bass=g=6:f=120:w=0.8,acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
+            "aigus_doux" => "highpass=f=70,treble=g=-6:f=6000:w=0.6,deesser=i=0.4,\
+                             acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
+            "radio" => "highpass=f=200,lowpass=f=5000,equalizer=f=1500:t=q:w=1:g=3,\
+                        acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=4",
+            "telephone" => "highpass=f=300,lowpass=f=3400,equalizer=f=1800:t=q:w=1:g=4,\
+                            acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=3",
             _ => "highpass=f=80,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=3,\
                   acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2",
         }
@@ -1045,6 +1127,8 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["hauteur"] = json!(prog.hauteur);
     rapport["duree_rendu_s"] = json!(debut.elapsed().as_secs());
     rapport["encodeur"] = json!(if nvenc { "NVENC" } else { "x264" });
+    rapport["son"] = json!(resume_son(&p.reglages));
+    rapport["empreinte"] = json!(empreinte(&p));
     let (avant, apres) = durees_generique(&p);
     rapport["generique"] = json!({"debut": avant, "fin": apres});
     rapport["plans_detail"] = decoupe::plans_json(&prog);

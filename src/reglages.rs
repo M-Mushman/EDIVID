@@ -236,9 +236,20 @@ pub const CATALOGUE: &[Reglage] = &[
         section: "Son",
         cle: "timbre_voix",
         titre: "Timbre de la voix",
-        aide: "Avec « Voix plus présente ». Clair : voix en avant, aigus soulignés. Chaud : plus de corps et de profondeur, aigus adoucis. Naturel : seulement lissée.",
-        genre: Genre::Choix(&[("clair", "Clair et présent"), ("chaud", "Chaud et profond"), ("naturel", "Naturel")]),
+        aide: "Avec « Voix plus présente ». Clair : voix en avant, aigus soulignés. Chaud : plus de corps, aigus adoucis. Naturel : seulement lissée. \
+               Podcast : voix de studio, très régulière. Graves renforcés, Aigus adoucis : une seule correction. Radio, Téléphone : effets de style.",
+        genre: Genre::Choix(&[("clair", "Clair et présent"), ("chaud", "Chaud et profond"), ("naturel", "Naturel"), ("podcast", "Podcast"),
+                              ("graves", "Graves renforcés"), ("aigus_doux", "Aigus adoucis"), ("radio", "Radio"), ("telephone", "Téléphone")]),
         defaut: || json!("clair"),
+    },
+    Reglage {
+        section: "Son",
+        cle: "reverberation",
+        titre: "Écho de la pièce",
+        aide: "Pièce qui résonne (murs nus, carrelage) : baisse la traîne qui suit chaque phrase. Forte : plus net, mais peut raboter la fin des mots doux. \
+               L'écho mêlé à la voix pendant qu'elle parle reste.",
+        genre: Genre::Choix(&[("non", "Non"), ("attenuer", "Atténuer"), ("forte", "Atténuer fortement")]),
+        defaut: || json!("non"),
     },
     Reglage {
         section: "Son",
@@ -279,6 +290,14 @@ pub const DEMANDENT_REMONTAGE: &[&str] = &["coupe_redites", "accroche"];
 
 pub fn chercher(cle: &str) -> Option<&'static Reglage> {
     CATALOGUE.iter().find(|r| r.cle == cle)
+}
+
+/// Libellé affiché d'une valeur d'un réglage à choix (« leger » → « Légère »).
+pub fn libelle_choix(cle: &str, valeur: &str) -> Option<String> {
+    match chercher(cle)?.genre {
+        Genre::Choix(choix) => choix.iter().find(|(v, _)| *v == valeur).map(|(_, l)| l.to_string()),
+        _ => None,
+    }
 }
 
 /// Valeur acceptée pour ce réglage, ou un message qui dit pourquoi non.

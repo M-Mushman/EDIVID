@@ -77,10 +77,11 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/rushs/ordre", post(ordonner_rushs))
         .route("/api/projets/{id}/rushs/{rid}", delete(supprimer_rush))
         .route("/api/projets/{id}/rushs/{rid}/relancer", post(relancer_rush))
-        .route("/api/projets/{id}/medias/{mid}", get(fichier_media).delete(supprimer_media))
+        .route("/api/projets/{id}/medias/{mid}", get(fichier_media).put(remplacer_media).delete(supprimer_media))
         .route("/api/projets/{id}/reglages", post(changer_reglages))
         .route("/api/projets/{id}/phrase", post(changer_phrase))
         .route("/api/projets/{id}/accroche", post(changer_accroche))
+        .route("/api/projets/{id}/chapitre", post(changer_chapitre))
         .route("/api/projets/{id}/fusion", post(fusionner))
         .route("/api/projets/{id}/incrustations", post(ajouter_incrustation))
         .route("/api/projets/{id}/incrustations/{iid}", delete(retirer_incrustation).post(modifier_incrustation))
@@ -220,6 +221,7 @@ async fn voir_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) ->
                               "mots": ph.mots.iter().map(|m| json!([(m.t0 * 100.0).round() / 100.0, (m.t1 * 100.0).round() / 100.0, m.mot]))
                                   .collect::<Vec<_>>()}))
         .collect();
+    let empreinte = crate::rendu::empreinte(&p);
     let tous_prets = !p.rushs.is_empty() && p.rushs.iter().all(|r| r.etat == EtatRush::Pret);
     let proxys: Vec<&str> = p.rushs.iter().filter(|r| etat.dossier_travail(&id, &r.id).join("proxy.mp4").exists())
         .map(|r| r.id.as_str()).collect();
@@ -229,6 +231,8 @@ async fn voir_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) ->
         "phrases": phrases,
         "pret_a_monter": tous_prets,
         "occupe": etat.file.occupe(&id),
+        // Un aperçu fait avant le dernier changement n'est plus à jour (avant ce champ : null, inconnu).
+        "apercu_a_jour": p.apercu.as_ref().and_then(|s| s.rapport["empreinte"].as_str()).map(|e| e == empreinte),
     })))
 }
 
@@ -338,6 +342,37 @@ async fn televerser_media(State(etat): State<EtatPartage>, Path(id): Path<String
     Ok(Json(json!({"id": mid})))
 }
 
+/// Remplace le fichier d'un média en gardant son identifiant : tout ce qui l'utilise (habillage, générique,
+/// incrustations, musique) prend le nouveau fichier.
+async fn remplacer_media(State(etat): State<EtatPartage>, Path((id, mid)): Path<(String, String)>, Query(q): Query<NomFichier>,
+                         requete: Request) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let ancien = p.medias.iter().find(|m| m.id == mid).ok_or_else(|| anyhow!("média introuvable"))?.clone();
+    let fichier = format!("{mid}-{}.{}", nouvel_id(), extension(&q.nom));
+    let chemin = etat.dossier_projet(&id).join("medias").join(&fichier);
+    ecrire_corps(requete.into_body(), &chemin).await?;
+    let (genre, duree, a_son) = match rendu::sonder_media(&chemin, &q.nom).await {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&chemin).await;
+            return Err(refus(format!("média refusé : {e}")));
+        }
+    };
+    if genre != ancien.genre && !(["image", "gif"].contains(&genre.as_str()) && ["image", "gif"].contains(&ancien.genre.as_str())) {
+        let _ = tokio::fs::remove_file(&chemin).await;
+        return Err(refus(format!("remplacez une {} par un fichier du même genre", ancien.genre)));
+    }
+    let nom: String = q.nom.chars().take(120).collect();
+    etat.modifier(&id, |p| {
+        if let Some(m) = p.medias.iter_mut().find(|m| m.id == mid) {
+            *m = Media { id: mid.clone(), nom, fichier, genre, duree, a_son };
+        }
+    })
+    .await?;
+    let _ = tokio::fs::remove_file(etat.dossier_projet(&id).join("medias").join(&ancien.fichier)).await;
+    Ok(Json(json!({"id": mid})))
+}
+
 async fn fichier_media(State(etat): State<EtatPartage>, Path((id, mid)): Path<(String, String)>, requete: Request)
                        -> Result<Response, Erreur> {
     let p = etat.projet(&id).await?;
@@ -432,13 +467,22 @@ struct ChangementPhrase {
     /// « auto » rend le mouvement au rythme ; sinon « fixe », « pousse » ou « punch ».
     #[serde(default)]
     mouvement: Option<String>,
+    /// Rangs des mots retirés des sous-titres (liste complète).
+    #[serde(default)]
+    masques: Option<Vec<usize>>,
+    /// Rangs des mots en emphase (liste complète, choisie à la main).
+    #[serde(default)]
+    emphase: Option<Vec<usize>>,
+    /// Vrai : l'emphase revient au choix du LLM.
+    #[serde(default)]
+    emphase_auto: Option<bool>,
 }
 
 fn montage_par_defaut(ps: &[crate::modele::Phrase]) -> Montage {
     Montage {
         cree: maintenant(),
         phrases: ps.iter().map(|p| Decision { cle: p.cle.clone(), garder: true, regime: "rafale".into(), cadre: "moyen".into(),
-                                               transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None }).collect(),
+                                               transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None, masques: vec![], emphase: None }).collect(),
         accroche: vec![],
         accroche_choisie: false,
         chapitres: vec![],
@@ -450,7 +494,7 @@ fn changer(p: &mut Projet, ps: &[crate::modele::Phrase], c: &ChangementPhrase) -
     let m = p.montage.get_or_insert_with(|| montage_par_defaut(ps));
     if !m.phrases.iter().any(|d| d.cle == c.cle) {
         m.phrases.push(Decision { cle: c.cle.clone(), garder: true, regime: "rafale".into(), cadre: "moyen".into(),
-                                  transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None });
+                                  transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None, masques: vec![], emphase: None });
     }
     let d = m.phrases.iter_mut().find(|d| d.cle == c.cle)?;
     let mut faits = Vec::new();
@@ -478,6 +522,28 @@ fn changer(p: &mut Projet, ps: &[crate::modele::Phrase], c: &ChangementPhrase) -
         if d.transition_choisie != t {
             faits.push(format!("transition {}", t.as_deref().unwrap_or("automatique")));
             d.transition_choisie = t;
+        }
+    }
+    let nb_mots = ps.iter().find(|ph| ph.cle == c.cle).map(|ph| ph.mots.len()).unwrap_or(0);
+    let propre = |v: &Vec<usize>| {
+        let mut v: Vec<usize> = v.iter().copied().filter(|i| *i < nb_mots).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    if let Some(m) = c.masques.as_ref().map(propre) {
+        if d.masques != m {
+            d.masques = m;
+            faits.push("sous-titres ajustés".into());
+        }
+    }
+    if c.emphase_auto == Some(true) && d.emphase.is_some() {
+        d.emphase = None;
+        faits.push("emphase du LLM rétablie".into());
+    } else if let Some(e) = c.emphase.as_ref().map(propre) {
+        if d.emphase.as_ref() != Some(&e) {
+            d.emphase = Some(e);
+            faits.push("emphase ajustée".into());
         }
     }
     if let Some(m) = c.mouvement.as_ref().filter(|m| ["auto", "fixe", "pousse", "punch"].contains(&m.as_str())) {
@@ -515,6 +581,34 @@ async fn changer_accroche(State(etat): State<EtatPartage>, Path(id): Path<String
         let m = p.montage.get_or_insert_with(|| montage_par_defaut(&ps));
         m.accroche = cles;
         m.accroche_choisie = true;
+    })
+    .await?;
+    Ok(Json(json!({"fait": true})))
+}
+
+#[derive(Deserialize)]
+struct ChangementChapitre {
+    cle: String,
+    /// Titre de la partie qui commence à cette phrase ; vide : plus de partie ici.
+    titre: String,
+}
+
+async fn changer_chapitre(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(c): Json<ChangementChapitre>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let ps = decoupe::phrases_projet(&p, &etat.analyses_du_projet(&p).await?);
+    if !ps.iter().any(|ph| ph.cle == c.cle) {
+        return Err(refus("phrase introuvable"));
+    }
+    let titre = c.titre.trim().chars().take(80).collect::<String>();
+    etat.modifier(&id, |p| {
+        let m = p.montage.get_or_insert_with(|| montage_par_defaut(&ps));
+        m.chapitres.retain(|x| x.cle != c.cle);
+        if !titre.is_empty() {
+            m.chapitres.push(crate::modele::Chapitre { cle: c.cle.clone(), titre: titre.clone() });
+            // Dans l'ordre de la vidéo.
+            let rang: HashMap<&str, usize> = ps.iter().enumerate().map(|(i, ph)| (ph.cle.as_str(), i)).collect();
+            m.chapitres.sort_by_key(|x| rang.get(x.cle.as_str()).copied().unwrap_or(usize::MAX));
+        }
     })
     .await?;
     Ok(Json(json!({"fait": true})))
@@ -782,6 +876,9 @@ fn appliquer_actions(p: &mut Projet, ps: &[crate::modele::Phrase], v: &Value) ->
             cadre: c["cadre"].as_str().map(String::from),
             transition: None,
             mouvement: None,
+            masques: None,
+            emphase: None,
+            emphase_auto: None,
         };
         if let Some(f) = changer(p, ps, &changement) {
             actions.push(format!("Phrase {} : {f}", rang.get(&cle).copied().unwrap_or(0)));
@@ -1535,7 +1632,16 @@ async fn corriger_phrase(State(etat): State<EtatPartage>, Path(id): Path<String>
     let origine = decoupe::phrases(&analyses).into_iter().find(|ph| ph.cle == c.cle).ok_or_else(|| anyhow!("phrase introuvable"))?;
     let texte: String = c.texte.split_whitespace().collect::<Vec<_>>().join(" ");
     let cle = c.cle.clone();
+    let avant = decoupe::phrases_projet(&p, &analyses).into_iter().find(|ph| ph.cle == c.cle).map(|ph| ph.mots.len()).unwrap_or(0);
+    let apres = if texte.is_empty() { 0 } else { texte.split(' ').count() };
     etat.modifier(&id, move |p| {
+        // Le nombre de mots change : les mots retirés des sous-titres et l'emphase, notés par rang, ne valent plus.
+        if apres != avant {
+            if let Some(d) = p.montage.as_mut().and_then(|m| m.phrases.iter_mut().find(|d| d.cle == cle)) {
+                d.masques.clear();
+                d.emphase = None;
+            }
+        }
         if texte.is_empty() || texte == origine.texte {
             p.corrections.remove(&cle);
         } else {
