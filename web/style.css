@@ -748,3 +748,7 @@ button.temps .horloge.rush { font-style: italic; opacity: .75; }
 /* En direct, le calque d'édition ne montre que ses poignées : on voit le rendu du direct en dessous. */
 .calque.direct .element-calque > :not(.supprimer-calque) { opacity: 0; }
 .calque.direct .element-calque { outline: 1px dashed rgba(255, 255, 255, .8); outline-offset: 2px; }
+
+/* ---------- plein écran du lecteur (vidéo et calques du direct) ---------- */
+.lecteur:fullscreen { width: 100vw; height: 100vh; max-height: none; aspect-ratio: auto; border-radius: 0; background: #000; }
+.lecteur:fullscreen.vertical { height: 100vh; }

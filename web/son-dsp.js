@@ -2,7 +2,7 @@
 // af_agate.c, af_sidechaincompress.c, af_deesser.c), pour jouer en direct dans le navigateur la même chaîne
 // de la voix que le rendu final. Le serveur envoie la liste des filtres (rendu::filtres_direct) ; ce module ne
 // dépend d'aucune API du navigateur : node le vérifie contre ffmpeg (capteurs/../essais).
-// Filtres connus : highpass, lowpass, equalizer, bass, treble, agate, acompressor, deesser.
+// Filtres connus : highpass, lowpass, equalizer, bass, treble, agate, acompressor, deesser, aexciter.
 
 const enNombre = (v) => {
   if (typeof v !== 'string') return v;
@@ -263,6 +263,79 @@ class Sifflantes {
   }
 }
 
+// ------------------------------------------------------------------ af_aexciter.c
+
+const vrai0 = (x) => (Math.abs(x) > 1e-8 ? x : 0);
+const racine = (x) => { x = Math.abs(x); return x > 1e-8 ? Math.sqrt(x) : 0; };
+
+/** Excitateur d'harmoniques : fabrique des harmoniques à partir du contenu au-dessus de `freq` et les ajoute. */
+class Excitateur {
+  constructor(o, sr, canaux) {
+    this.amount = option(o, ['amount'], 1);
+    this.levelIn = option(o, ['level_in'], 1);
+    this.levelOut = option(o, ['level_out'], 1);
+    this.ceil = option(o, ['ceil'], 9999);
+    const drive = option(o, ['drive'], 8.5);
+    const blend = option(o, ['blend'], 0);
+    const freq = option(o, ['freq'], 7500);
+    const p = {};
+    p.rdrive = 12 / drive;
+    p.rbdr = p.rdrive / (10.5 - blend) * 780 / 33;
+    p.kpa = racine(2 * p.rdrive * p.rdrive - 1) + 1;
+    p.kpb = (2 - p.kpa) / 2;
+    p.ap = (p.rdrive * p.rdrive - p.kpa + 1) / 2;
+    p.kc = p.kpa / racine(2 * racine(2 * p.rdrive * p.rdrive - 1) - 2 * p.rdrive * p.rdrive);
+    p.srct = (0.1 * sr) / (0.1 * sr + 1);
+    p.sq = p.kc * p.kc + 1;
+    p.knb = -1 * p.rbdr / racine(p.sq);
+    p.kna = 2 * p.kc * p.rbdr / racine(p.sq);
+    p.an = p.rbdr * p.rbdr / p.sq;
+    p.imr = 2 * p.knb + racine(2 * p.kna + 4 * p.an - 1);
+    p.pwrq = 2 / (p.imr + 1);
+    const coeffs = (f, haut) => {
+      const w0 = (2 * Math.PI * f) / sr;
+      const alpha = Math.sin(w0) / (2 * 0.707);
+      const a0 = 1 + alpha; const a1 = -2 * Math.cos(w0); const a2 = 1 - alpha;
+      const b0 = haut ? (1 + Math.cos(w0)) / 2 : (1 - Math.cos(w0)) / 2;
+      const b1 = haut ? -(1 + Math.cos(w0)) : 1 - Math.cos(w0);
+      return [-a1 / a0, -a2 / a0, b0 / a0, b1 / a0, b0 / a0];
+    };
+    this.hp = coeffs(freq, true);
+    this.lp = coeffs(this.ceil, false);
+    this.p = p;
+    this.etat = Array.from({ length: canaux }, () => ({ prevMed: 0, prevOut: 0, hw: [[0, 0], [0, 0], [0, 0], [0, 0]], lw: [[0, 0], [0, 0]] }));
+  }
+
+  static b(entree, c, w) {
+    const sortie = c[2] * entree + w[0];
+    w[0] = c[3] * entree + w[1] + c[0] * sortie;
+    w[1] = c[4] * entree + c[1] * sortie;
+    return sortie;
+  }
+
+  distorsion(e, x) {
+    const p = this.p;
+    let proc = Excitateur.b(Excitateur.b(x, this.hp, e.hw[0]), this.hp, e.hw[1]);
+    const med = proc >= 0 ? (racine(p.ap + proc * (p.kpa - proc)) + p.kpb) * p.pwrq : (racine(p.an - proc * (p.kna + proc)) + p.knb) * p.pwrq * -1;
+    proc = p.srct * (med - e.prevMed + e.prevOut);
+    e.prevMed = vrai0(med);
+    e.prevOut = vrai0(proc);
+    proc = Excitateur.b(Excitateur.b(proc, this.hp, e.hw[2]), this.hp, e.hw[3]);
+    if (this.ceil >= 10000) proc = Excitateur.b(Excitateur.b(proc, this.lp, e.lw[0]), this.lp, e.lw[1]);
+    return proc;
+  }
+
+  traiter(ch, n) {
+    for (let i = 0; i < n; i++) {
+      for (let c = 0; c < ch.length; c++) {
+        const src = ch[c][i];
+        const v = this.distorsion(this.etat[c], src * this.levelIn);
+        ch[c][i] = (v * this.amount + src) * this.levelOut;
+      }
+    }
+  }
+}
+
 /** Chaîne de filtres, à `sr` Hz sur `canaux` canaux. Un filtre inconnu est signalé et laissé de côté. */
 export function creerChaine(filtres, sr, canaux = 2) {
   const etapes = [];
@@ -273,6 +346,7 @@ export function creerChaine(filtres, sr, canaux = 2) {
     else if (nom === 'agate') etapes.push(new Porte(o, sr));
     else if (nom === 'acompressor') etapes.push(new Compresseur(o, sr));
     else if (nom === 'deesser') etapes.push(new Sifflantes(o, sr, canaux));
+    else if (nom === 'aexciter') etapes.push(new Excitateur(o, sr, canaux));
     else inconnus.push(nom);
   }
   return {

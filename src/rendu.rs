@@ -901,11 +901,11 @@ fn filtres_base(r: &crate::reglages::Reglages, gain: f64) -> Vec<String> {
 }
 
 /// Réglages du son joués en direct par le navigateur sur l'aperçu (ils ne changent pas l'aperçu rendu).
-pub const REGLAGES_SON_DIRECT: &[&str] = &["reverberation", "voix", "timbre_voix", "deesseur", "espace"];
+pub const REGLAGES_SON_DIRECT: &[&str] = &["reverberation", "voix", "timbre_voix", "harmoniques", "deesseur", "espace"];
 
 /// Partie de la chaîne de la voix jouée en direct sur l'aperçu : porte de traîne, timbre, sifflantes. Le navigateur
 /// (web/son-dsp.js) exécute ces mêmes filtres ffmpeg ; il n'en connaît que ceux-ci : highpass, lowpass,
-/// equalizer, bass, treble, agate, acompressor, deesser.
+/// equalizer, bass, treble, agate, acompressor, deesser, aexciter.
 pub fn filtres_direct(r: &crate::reglages::Reglages) -> Vec<String> {
     let mut a = Vec::new();
     // Écho de la pièce : une porte douce baisse la traîne entre les phrases, après avoir retiré le grave boueux.
@@ -945,6 +945,17 @@ pub fn filtres_direct(r: &crate::reglages::Reglages) -> Vec<String> {
                   acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2",
         }
         .to_string());
+    }
+    // Harmoniques (excitateur) : présence et air ; mesuré sur la voix débruitée d'épisode 0 : +0,5 / +1,6 / +3,8 dB
+    // entre 3 et 6 kHz, +2 / +5 / +9 dB au-dessus de 12 kHz, médium inchangé.
+    let dose = match texte(r, "harmoniques").as_str() {
+        "leger" => 0.5,
+        "moyen" => 1.0,
+        "fort" => 2.0,
+        _ => 0.0,
+    };
+    if dose > 0.0 {
+        a.push(format!("aexciter=amount={dose}:drive=6:freq=3500:blend=3"));
     }
     if vrai(r, "deesseur") {
         a.push("deesser=i=0.4".into());
@@ -1045,7 +1056,7 @@ async fn voix_sans_echo(etat: &EtatPartage, projet: &str, rush: &str, force: &st
 /// Écoute d'essai : `duree` secondes d'un rush à partir de `debut`, traitées avec les réglages de son donnés, en
 /// MP3. Tout se fait sur le processeur ; le résultat est gardé (même extrait, mêmes réglages : même fichier).
 pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64, duree: f64, r: &crate::reglages::Reglages) -> Result<Vec<u8>> {
-    let cles = ["debruitage", "dereverberation", "reverberation", "voix", "timbre_voix", "deesseur", "espace"];
+    let cles = ["debruitage", "dereverberation", "reverberation", "voix", "timbre_voix", "harmoniques", "deesseur", "espace"];
     let empreinte = {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         format!("{debut:.2}-{duree:.2}-{}", cles.iter().map(|c| r.get(*c).map(|v| v.to_string()).unwrap_or_default()).collect::<Vec<_>>().join("|"))

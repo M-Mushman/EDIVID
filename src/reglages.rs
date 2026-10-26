@@ -273,6 +273,15 @@ pub const CATALOGUE: &[Reglage] = &[
     },
     Reglage {
         section: "Son",
+        cle: "harmoniques",
+        titre: "Harmoniques",
+        aide: "Ajoute à la voix des harmoniques dans les aigus (excitateur) : plus de présence et d'air, une voix qui « brille ». \
+               À doser : fortes, elles rendent la voix agressive.",
+        genre: Genre::Choix(&[("non", "Aucune"), ("leger", "Légères"), ("moyen", "Moyennes"), ("fort", "Fortes")]),
+        defaut: || json!("non"),
+    },
+    Reglage {
+        section: "Son",
         cle: "deesseur",
         titre: "Adoucir les « s »",
         aide: "Atténue les sifflantes trop aiguës.",

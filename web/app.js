@@ -756,7 +756,9 @@ function dessinerRushs() {
 
 function construireLecteur() {
   const n = E.noeuds;
-  n.video = h('video', { controls: true, playsinline: true, preload: 'metadata' });
+  // Le plein écran du lecteur met tout son cadre en plein écran (vidéo et calques du direct : PostProd, habillage,
+  // sous-titres, textes) ; celui de la vidéo seule les perdrait, d'où son bouton masqué.
+  n.video = h('video', { controls: true, playsinline: true, preload: 'metadata', controlslist: 'nofullscreen' });
   n.video.addEventListener('timeupdate', suivreLecture);
   // Pendant la lecture, le suivi passe à ~12 fois par seconde : le mot surligné suit la voix.
   n.video.addEventListener('play', () => { clearInterval(E.suiviFin); E.suiviFin = setInterval(suivreLecture, 80); });
@@ -771,6 +773,12 @@ function construireLecteur() {
   n.calque = h('div', { class: 'calque' });
   n.indicateurDepot = h('div', { class: 'indicateur-depot cache' }, 'Déposez ici : la position et l’instant de la vidéo seront retenus');
   n.ecran = h('div', { class: 'lecteur' }, n.video, n.calque, n.indicateurDepot);
+  n.ecran.addEventListener('dblclick', (e) => { if (e.target === n.video) basculerPleinEcran(); });
+  // Un double-clic sur la vidéo (Firefox) peut encore la mettre seule en plein écran : on y met le cadre à la place.
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement === n.video) document.exitFullscreen().then(() => n.ecran.requestFullscreen?.()).catch(() => {});
+    dessinerOutilsLecteur();
+  });
   // PostProd en direct (WebGL) : null si le navigateur ne le permet pas, l'aperçu reste alors sans PostProd.
   n.direct = creerApercuDirect(n.video, n.ecran);
   // Son en direct (Web Audio) : null si le navigateur n'a pas les processeurs audio.
@@ -889,7 +897,7 @@ function majHabillageDirect(enCours = null) {
   n.habillage.regler(liste, actif);
 }
 
-const CLES_SON_DIRECT = ['reverberation', 'voix', 'timbre_voix', 'deesseur', 'espace'];
+const CLES_SON_DIRECT = ['reverberation', 'voix', 'timbre_voix', 'harmoniques', 'deesseur', 'espace'];
 let sonDirectCle = '';
 let sonNiveau = { cle: '', gain: 9 };
 
@@ -940,6 +948,12 @@ function majApercuDirect() {
   n.direct.activer(actif);
 }
 
+function basculerPleinEcran() {
+  const n = E.noeuds;
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else n.ecran.requestFullscreen?.().catch((e) => toast(`Plein écran impossible : ${e.message}`, 'erreur'));
+}
+
 function changerLecteur(mode, rush) {
   E.lecteur = mode;
   if (rush) E.rushLecteur = rush;
@@ -964,7 +978,9 @@ function dessinerOutilsLecteur() {
   const bascule = (cle, libelle, valeur) => h('label', { class: 'bascule', title: `Afficher ou masquer la ${libelle.toLowerCase()}` },
     h('input', { type: 'checkbox', checked: valeur, onchange: (e) => { E[cle] = e.target.checked; stocker(`edivid_${cle}`, e.target.checked ? '1' : '0'); dessinerTimelines(); } }),
     h('span', {}, libelle));
-  remplir(n.outilsLecteur, commenter, choixRush, h('span', { class: 'espace' }),
+  const pleinEcran = n.ecran.requestFullscreen ? h('button', { class: 'btn petit', title: 'Plein écran, avec sous-titres, habillage et PostProd (double-clic sur la vidéo)',
+    onclick: basculerPleinEcran }, icone('film'), document.fullscreenElement === n.ecran ? 'Quitter le plein écran' : 'Plein écran') : null;
+  remplir(n.outilsLecteur, commenter, pleinEcran, choixRush, h('span', { class: 'espace' }),
     bascule('voirTlOrigine', 'Timeline d’origine', E.voirTlOrigine),
     bascule('voirTlMontage', 'Timeline du montage', E.voirTlMontage),
     E.lecteur !== 'rendu' && n.direct ? h('label', { class: 'bascule', title: 'Voir la PostProd (couleur, teint, grain…) en direct sur la vidéo ; décochez pour comparer avec l’image brute' },
@@ -2346,6 +2362,7 @@ function blocsSon(corps) {
   cartesAmbiances(),
   h('h4', { class: 'titre-famille', style: { marginTop: '18px' } }, active ? `Ajuster « ${active.nom} »` : 'Ajuster'),
   ligneSon('Timbre', 'La couleur de la voix : égaliseur et compression qui lisse les écarts de volume.', choixTimbre, 'direct'),
+  ligne('harmoniques', 'direct'),
   ligne('deesseur', 'direct'),
   ligneSon('Retirer l’écho de la pièce',
     'Léger : la traîne qui suit chaque phrase baisse. Moyen et Fort : une IA retire aussi l’écho et le bruit pendant que la voix parle, sans changer les mots (quelques secondes par rush sur la carte graphique, au prochain aperçu). Très fort : en plus, la traîne est coupée net, au risque de raboter la fin des mots doux.',
