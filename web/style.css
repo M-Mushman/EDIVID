@@ -734,3 +734,9 @@ button.temps:hover { color: var(--accent); }
 .titre-pp svg { width: 16px; height: 16px; color: var(--accent); }
 .reglage .marque.marque-attente { color: var(--texte-2); background: var(--surface-2); }
 button.temps .horloge.rush { font-style: italic; opacity: .75; }
+
+/* ---------- habillage en direct ---------- */
+.lecteur .habillage-direct { position: absolute; pointer-events: none; overflow: hidden; }
+.habillage-direct.cache { display: none; }
+.habillage-direct img { display: block; height: auto; }
+.habillage-direct .texte-habillage { font-family: 'Anton', sans-serif; line-height: 1.15; white-space: nowrap; paint-order: stroke fill; }

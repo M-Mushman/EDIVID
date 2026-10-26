@@ -2,6 +2,7 @@
 
 import { creerApercuDirect } from './postprod-direct.js';
 import { creerSonDirect } from './son-direct.js';
+import { creerHabillageDirect } from './habillage-direct.js';
 
 const $app = document.getElementById('app');
 
@@ -327,8 +328,11 @@ function messageGoogle() {
     session_requise: 'Ouvrez d’abord EDIVID avec le code d’accès pour relier un compte Google.',
     non_configure: 'La connexion avec Google n’est pas encore configurée (Paramètres).',
     erreur: `Connexion avec Google impossible : ${q.get('detail') || 'erreur inconnue'}`,
+    partiel: `Connecté, mais Google n’a pas accordé l’accès à ${(q.get('manque') || '').split(',').map((m) => ({ drive: 'Google Drive', youtube: 'YouTube' }[m] || m)).join(' ni à ')}. `
+      + 'Reconnectez-vous et, sur l’écran de Google, cochez les cases correspondantes (elles peuvent être décochées par défaut).',
   };
   setTimeout(() => toast(messages[g] || 'Connexion avec Google : réponse inattendue.', g === 'annule' ? '' : 'erreur'), 300);
+  if (g === 'partiel') setTimeout(() => toast(messages.partiel, 'erreur'), 6000);
   history.replaceState(null, '', location.pathname + location.hash);
 }
 
@@ -770,6 +774,7 @@ function construireLecteur() {
   n.direct = creerApercuDirect(n.video, n.ecran);
   // Son en direct (Web Audio) : null si le navigateur n'a pas les processeurs audio.
   n.son = window.AudioWorkletNode ? creerSonDirect(n.video) : null;
+  n.habillage = creerHabillageDirect(n.video, n.ecran);
   const pause = () => n.ecran.classList.toggle('en-pause', n.video.paused);
   n.video.addEventListener('play', pause);
   n.video.addEventListener('pause', pause);
@@ -850,6 +855,21 @@ function dessinerLecteur() {
   dessinerCalque();
   majApercuDirect();
   majSonDirect();
+  majHabillageDirect();
+}
+
+/** Habillage en direct sur l'aperçu : celui qu'on règle (`enCours`), sinon celui du projet. Le rendu final l'a dans
+ *  son image ; un aperçu d'avant le direct aussi. */
+function majHabillageDirect(enCours = null) {
+  const n = E.noeuds;
+  if (!n.habillage || !E.vue) return;
+  const p = E.vue.projet;
+  const actif = E.lecteur === 'apercu' && !!p.apercu?.rapport?.habillage_direct && !!n.video.dataset.url;
+  const liste = (enCours || p.habillage || []).map((x) => {
+    const m = p.medias.find((y) => y.id === x.media);
+    return { ...x, url: m ? urlMedia(m) : '' };
+  });
+  n.habillage.regler(liste, actif);
 }
 
 const CLES_SON_DIRECT = ['reverberation', 'voix', 'timbre_voix', 'deesseur', 'espace'];
@@ -1955,12 +1975,15 @@ function blocHabillage(corps) {
   const liste = (p.habillage || []).map((x) => ({ ...x }));
   let minuterie;
   const enregistrer = (tout_de_suite = true, message = '') => {
+    // La vidéo montre l'habillage tout de suite, avant l'enregistrement.
+    majHabillageDirect(liste);
     clearTimeout(minuterie);
     minuterie = setTimeout(async () => {
       try {
         const r = await api('POST', `/api/projets/${E.projetId}/habillage`, liste);
         r.habillage.forEach((x, i) => { if (liste[i]) liste[i].id = x.id; });
-        E.aMettreAJour = true;
+        // L'habillage se voit en direct sur l'aperçu : il ne demande plus de nouvel aperçu.
+        if (!E.vue.projet.apercu?.rapport?.habillage_direct) E.aMettreAJour = true;
         if (message) toast(message, 'ok');
       } catch (e) { toast(e.message, 'erreur'); }
     }, tout_de_suite ? 0 : 500);

@@ -411,7 +411,7 @@ fn sans_ponctuation(m: &str) -> String {
     m.trim_end_matches(['.', ',', '!', '?', ';', ':']).to_string()
 }
 
-fn sous_titres(prog: &Programme, p: &Projet) -> String {
+fn sous_titres(prog: &Programme, p: &Projet, apercu: bool) -> String {
     let r = &p.reglages;
     let (wo, ho) = (prog.largeur as f64, prog.hauteur as f64);
     let vertical = ho > wo;
@@ -450,7 +450,10 @@ fn sous_titres(prog: &Programme, p: &Projet) -> String {
                        titre.to_uppercase()));
     }
     textes(prog, &mut l);
-    habillage_textes(p, prog, &mut l);
+    // L'aperçu sort sans habillage : le navigateur le dessine en direct par-dessus la vidéo.
+    if !apercu {
+        habillage_textes(p, prog, &mut l);
+    }
     if !vrai(r, "sous_titres") {
         return l.join("\n") + "\n";
     }
@@ -1108,7 +1111,7 @@ pub fn empreinte(p: &Projet) -> String {
         reglages.remove(*c);
     }
     let v = json!([reglages, p.montage.as_ref().map(|m| json!([m.phrases, m.accroche, m.accroche_choisie, m.chapitres])),
-                   p.incrustations, p.habillage, p.generique, p.corrections, p.fusions,
+                   p.incrustations, p.generique, p.corrections, p.fusions,
                    p.medias.iter().map(|m| [&m.id, &m.fichier]).collect::<Vec<_>>(), p.rushs.iter().map(|r| &r.id).collect::<Vec<_>>()]);
     let mut h = std::collections::hash_map::DefaultHasher::new();
     v.to_string().hash(&mut h);
@@ -1231,7 +1234,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         entree += 1;
     }
     // Habillage : les logos, sur toute la durée du montage (les textes passent par les sous-titres).
-    for (j, hab) in p.habillage.iter().filter(|x| x.genre == "logo").enumerate() {
+    for (j, hab) in p.habillage.iter().filter(|x| x.genre == "logo" && !apercu).enumerate() {
         let Some(m) = p.medias.iter().find(|m| m.id == hab.media) else { continue };
         let fichier = etat.dossier_projet(&p.id).join("medias").join(&m.fichier);
         if m.genre == "gif" {
@@ -1509,6 +1512,7 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["son"] = json!(resume_son(&p.reglages));
     // Aperçu sans PostProd : l'interface l'applique en direct (un ancien aperçu l'a déjà dans son image).
     rapport["postprod_direct"] = json!(apercu);
+    rapport["habillage_direct"] = json!(apercu);
     if apercu {
         // Son en direct : la vidéo porte la voix de base ; le fond et le générique, s'il y en a, sont à côté.
         let (fond, generique) = pistes_apercu(&nom);
@@ -1582,7 +1586,7 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
     let liste = tmp.join("liste.txt");
     tokio::fs::write(&liste, fichiers.iter().map(|f| format!("file '{}'\n", f.to_string_lossy())).collect::<String>()).await?;
     let ass = tmp.join("sous_titres.ass");
-    tokio::fs::write(&ass, sous_titres(&prog, &p)).await?;
+    tokio::fs::write(&ass, sous_titres(&prog, &p, apercu)).await?;
     let sorties = dossier.join("sorties");
     tokio::fs::create_dir_all(&sorties).await?;
     let nom = format!("{}-{}.mp4", if apercu { "apercu" } else { "rendu" }, chrono::Utc::now().format("%Y%m%d-%H%M%S"));

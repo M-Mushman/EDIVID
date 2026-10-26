@@ -100,6 +100,9 @@ pub async fn revenir(State(etat): State<EtatPartage>, Query(r): Query<Retour>) -
     match traiter(&etat, &demande.mode, &r.code).await {
         Ok((email, cible)) => {
             let temoin = acces::temoin_google(&etat, &email);
+            let portees = crate::youtube::portees(&etat, &email);
+            let manque = acces_manquants(&portees);
+            let cible = if manque.is_empty() { cible } else { format!("/?google=partiel&manque={}#/parametres", manque.join(",")) };
             ([(header::SET_COOKIE, temoin)], Redirect::to(&cible)).into_response()
         }
         Err(e) => {
@@ -108,6 +111,19 @@ pub async fn revenir(State(etat): State<EtatPartage>, Query(r): Query<Retour>) -
             Redirect::to(&format!("/?google=erreur&detail={message}")).into_response()
         }
     }
+}
+
+/// Accès accordés qui manquent : Google présente le Drive et YouTube en cases à cocher (décochées par défaut pour une
+/// application non validée) ; sans elles, la connexion réussit mais le Drive refuse tout (« insufficientPermissions »).
+fn acces_manquants(portees: &str) -> Vec<&'static str> {
+    let mut manque = Vec::new();
+    if !portees.contains("auth/drive") {
+        manque.push("drive");
+    }
+    if !portees.contains("youtube") {
+        manque.push("youtube");
+    }
+    manque
 }
 
 async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, String)> {
@@ -138,6 +154,7 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
     // Le Drive : rclone reçoit le jeton (il le renouvellera seul grâce au jeton de rafraîchissement).
     let distant = format!("edivid_{}", email.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect::<String>());
     let mut drive_relie = false;
+    let drive_accorde = !acces_manquants(jetons["scope"].as_str().unwrap_or("")).contains(&"drive");
     if let Some(rafraichir) = jetons["refresh_token"].as_str() {
         // Gardé aussi pour YouTube, que rclone ne sait pas servir.
         crate::youtube::garder(etat, &email, crate::youtube::Jetons {
@@ -148,8 +165,11 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
         let jeton_rclone = json!({"access_token": acces_jeton, "token_type": "Bearer", "refresh_token": rafraichir,
                                   "expiry": expire.to_rfc3339()})
             .to_string();
-        relier_rclone(&distant, &p.google.client_id, &p.google.client_secret, &jeton_rclone).await?;
-        drive_relie = true;
+        // Sans l'accès au Drive, pas de liaison : la veille échouerait toutes les deux minutes.
+        if drive_accorde {
+            relier_rclone(&distant, &p.google.client_id, &p.google.client_secret, &jeton_rclone).await?;
+            drive_relie = true;
+        }
     }
     // La chaîne YouTube, si l'accès a été accordé : la personne voit où partiront ses vidéos.
     let chaine = if jetons["scope"].as_str().unwrap_or("").contains("youtube") {

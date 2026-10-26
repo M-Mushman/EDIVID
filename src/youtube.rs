@@ -42,6 +42,11 @@ pub fn garder(etat: &EtatPartage, email: &str, jetons: Jetons) -> Result<()> {
     Ok(())
 }
 
+/// Accès accordés par Google pour ce compte (vide s'il n'est pas relié).
+pub fn portees(etat: &EtatPartage, email: &str) -> String {
+    charger(etat).get(&email.to_lowercase()).map(|j| j.portees.clone()).unwrap_or_default()
+}
+
 pub fn oublier(etat: &EtatPartage, email: &str) {
     let mut tous = charger(etat);
     if tous.remove(&email.to_lowercase()).is_some() {
