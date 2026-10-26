@@ -3015,9 +3015,11 @@ function sectionGoogle(P) {
   const pastilles = (c) => h('div', { class: 'tres-petit', style: { marginTop: '4px', display: 'flex', gap: '6px', flexWrap: 'wrap' } },
     c.distant ? h('span', { class: 'pastille ok' }, 'Drive relié') : h('span', { class: 'pastille alerte' }, 'Drive non relié'),
     c.chaine ? h('span', { class: 'pastille ok' }, `YouTube : ${c.chaine}`) : null);
+  const reautoriser = (c) => `/api/google/connexion?mode=liaison&compte=${encodeURIComponent(c.email)}`;
   const ligneCompte = (c) => h('div', { class: 'incrustation' },
     h('div', { style: { minWidth: 0 } }, h('b', { class: 'petit' }, c.nom || c.email), h('div', { class: 'tres-petit muet' }, c.email), pastilles(c)),
     h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+      h('a', { class: 'btn petit doux', href: reautoriser(c), title: 'Refaire l’autorisation de ce compte chez Google (Drive et YouTube)' }, icone('relancer'), 'Reconnecter'),
       c.distant ? h('label', { class: 'bascule', title: 'Surveiller le dossier d’entrée de ce Drive' },
         h('input', { type: 'checkbox', checked: c.veille, onchange: async (e) => {
           try { await api('POST', '/api/comptes', { email: c.email, veille: e.target.checked }); toast(e.target.checked ? 'Veille de ce Drive activée.' : 'Veille de ce Drive arrêtée.', 'ok'); }
@@ -3043,6 +3045,13 @@ function sectionGoogle(P) {
       carte.append(h('div', { class: 'compte-connecte' },
         h('span', { class: 'avatar grand' }, (moi.nom || moi.email).trim()[0]?.toUpperCase() || '?'),
         h('div', { style: { minWidth: 0 } }, h('b', {}, moi.nom || moi.email), h('div', { class: 'tres-petit muet' }, moi.email), pastilles(moi))));
+      // Drive ou YouTube pas accordé : on le dit, avec le bouton qui refait l'autorisation de ce compte.
+      if (!moi.distant || !moi.chaine) {
+        carte.append(h('div', { class: 'aide', style: { background: 'var(--alerte-doux)', marginTop: '12px' } }, icone('alerte'),
+          h('span', {}, `Google n’a pas encore accordé ${!moi.distant && !moi.chaine ? 'le Drive ni YouTube' : !moi.distant ? 'le Drive' : 'YouTube'} à EDIVID. `
+            + 'Cliquez ci-dessous ; sur l’écran de Google, cochez les cases « Google Drive » et « YouTube » (elles peuvent être décochées), puis Continuer.')),
+        h('a', { class: 'btn primaire', href: reautoriser(moi), style: { marginTop: '10px' } }, icone('google'), 'Autoriser le Drive et YouTube'));
+      }
     } else {
       carte.append(avantages);
     }

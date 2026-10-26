@@ -50,6 +50,9 @@ fn encoder(s: &str) -> String {
 pub struct Mode {
     #[serde(default)]
     mode: String,
+    /// Adresse du compte à réautoriser : Google la propose d'office.
+    #[serde(default)]
+    compte: String,
 }
 
 /// Envoie le navigateur chez Google.
@@ -70,10 +73,11 @@ pub async fn aller(State(etat): State<EtatPartage>, entetes: HeaderMap, Query(m)
     }
     let url = format!(
         "{AUTORISATION}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent\
-         &include_granted_scopes=true&state={jeton}",
+         &include_granted_scopes=true&state={jeton}{}",
         encoder(&p.google.client_id),
         encoder(&retour(&p.url_publique)),
-        encoder(PORTEES)
+        encoder(PORTEES),
+        if m.compte.is_empty() { String::new() } else { format!("&login_hint={}", encoder(&m.compte)) }
     );
     Redirect::to(&url).into_response()
 }
