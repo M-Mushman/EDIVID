@@ -350,8 +350,10 @@ fn filtre_plan(p: &Plan, largeur_entree: u32, sortie: (u32, u32), nette: bool) -
             z_trans - 1.0
         ));
     }
-    if !nette && p.agrandissement > 1.8 {
-        f.push("unsharp=5:5:0.5:5:5:0".into());
+    // Zoom sans IA : un peu de netteté adaptative (CAS, luminance) compense la douceur de l'agrandissement, sans
+    // halo autour des contours.
+    if !nette && p.agrandissement > 1.2 {
+        f.push(format!("cas=strength={:.2}:planes=1", (0.15 * (p.agrandissement - 1.0)).min(0.35)));
     }
     let echelle = wo as f64 / 1080.0;
     let flou = |taille: f64| ((taille * echelle).round() as u32).max(2);

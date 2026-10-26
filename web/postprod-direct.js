@@ -1,7 +1,7 @@
 // PostProd en direct : l'image du lecteur est redessinée par WebGL avec les réglages en cours, à chaque image
 // de la vidéo. Même chaîne que le rendu final (src/postprod.rs), dans le même ordre :
 //   couleur (table calculée par ffmpeg : couleurs exactes) → lissage du teint (flou bilatéral) → diffusion
-//   (halo en mode « écran ») → netteté (masque flou, luminance) → grain → vignette (cos⁴) → bandes cinéma.
+//   (halo en mode « écran ») → netteté (CAS, luminance) → grain → vignette (cos⁴) → bandes cinéma.
 // Les traitements spatiaux sont des approximations fidèles des filtres ffmpeg, pas leur copie bit à bit.
 
 const SOMMETS = `#version 300 es
@@ -104,9 +104,22 @@ void main() {
     c = versRgb(mix(a, 1.0 - (1.0 - a) * (1.0 - g), diffusion));
   }
   if (nettete > 0.0) {
-    float flou = 0.0;
-    for (int i = -2; i <= 2; i++) for (int j = -2; j <= 2; j++) flou += luma(texture(image, uv + vec2(float(i), float(j)) * pixel).rgb);
-    c += nettete * (luma(c) - flou / 25.0);
+    // CAS de ffmpeg (vf_cas, plan de luminance) : voisinage 3 × 3, poids négatif réglé par le contraste local.
+    float a = luma(texture(image, uv + vec2(-1.0, -1.0) * pixel).rgb), b = luma(texture(image, uv + vec2(0.0, -1.0) * pixel).rgb);
+    float cc = luma(texture(image, uv + vec2(1.0, -1.0) * pixel).rgb), d = luma(texture(image, uv + vec2(-1.0, 0.0) * pixel).rgb);
+    float e = luma(texture(image, uv).rgb), f = luma(texture(image, uv + vec2(1.0, 0.0) * pixel).rgb);
+    float g = luma(texture(image, uv + vec2(-1.0, 1.0) * pixel).rgb), hh = luma(texture(image, uv + vec2(0.0, 1.0) * pixel).rgb);
+    float i9 = luma(texture(image, uv + vec2(1.0, 1.0) * pixel).rgb);
+    float mn = min(min(min(d, e), min(f, b)), hh);
+    float mn2 = min(min(min(mn, a), min(g, cc)), i9);
+    mn += mn2;
+    float mx = max(max(max(d, e), max(f, b)), hh);
+    float mx2 = max(max(max(mx, a), max(g, cc)), i9);
+    mx += mx2;
+    float amp = sqrt(clamp(min(mn, 2.0 - mx) / max(mx, 1e-5), 0.0, 1.0));
+    float poids = amp / -mix(16.0, 4.01, nettete);
+    float y = ((b + d + f + hh) * poids + e) / (1.0 + 4.0 * poids);
+    c += y - e;
   }
   // Grain sur la luminance seule, comme « noise=c0s » (en YUV, un pas de Y vaut 1,164 pas en RGB).
   if (grain > 0.0) c += (hasard(floor(uv * taille)) * 2.0 - 1.0) * grain * 1.164;
@@ -282,7 +295,7 @@ export function creerApercuDirect(video, conteneur) {
       gl.bindTexture(gl.TEXTURE_2D, halo || courant.t);
       gl.uniform1i(u.halo, 1);
       gl.uniform1f(u.diffusion, halo ? 0.35 * pp.diffusion / 100 : 0);
-      gl.uniform1f(u.nettete, pp.nettete / 100 * 1.2);
+      gl.uniform1f(u.nettete, pp.nettete / 100);
       gl.uniform1f(u.grain, (pp.grain / 100 * 22) / 255);
       gl.uniform1f(u.graine, video.paused ? 0 : (performance.now() % 1000));
       gl.uniform1f(u.vignette, pp.vignette > 0 ? 0.25 + 0.55 * pp.vignette / 100 : 0);

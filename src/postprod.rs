@@ -140,8 +140,10 @@ impl PostProd {
             ));
         }
         let mut fin: Vec<String> = Vec::new();
+        // Netteté adaptative au contraste (CAS), sur la luminance : elle relève les détails fins sans halo autour
+        // des contours, là où un masque flou (unsharp) les redessinait.
         if self.nettete > 0.0 {
-            fin.push(format!("unsharp=5:5:{:.2}:5:5:0", self.nettete / 100.0 * 1.2));
+            fin.push(format!("cas=strength={:.3}:planes=1", self.nettete / 100.0));
         }
         if self.grain > 0.0 {
             fin.push(format!("noise=c0s={:.0}:c0f=t", self.grain / 100.0 * 22.0));

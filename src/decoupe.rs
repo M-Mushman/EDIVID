@@ -21,6 +21,9 @@ const DUREE_MIN_PLAN: f64 = 0.3;
 /// reconstruction IA invente les traits : yeux redessinés, visage changé (mesuré le 2026-10-18 sur une
 /// source de 576 px : propre jusqu'à ×3, yeux abîmés dès ×3,8).
 pub const AGRANDISSEMENT_MAX: f64 = 3.0;
+/// En sortie 4K, un rush 4K n'a pas de pixels en réserve : tout zoom agrandit l'image, et au-delà de ×1,5 elle
+/// perd sa précision (constat sur épisode 0, 2026-10-26).
+pub const AGRANDISSEMENT_MAX_4K: f64 = 1.5;
 /// Écart minimal entre deux cadrages pour qu'un changement se lise comme voulu : en dessous, l'œil le prend
 /// pour un sursaut de caméra.
 pub const PAS_MIN: f64 = 1.2;
@@ -415,7 +418,8 @@ impl Grille {
         let base = if utile.0 / utile.1 > aspect { (utile.1 * aspect, utile.1) } else { (utile.0, utile.0 / aspect) };
         // Seule borne : l'agrandissement que la source supporte (une source 4K se resserre deux fois plus
         // qu'une source 1080p).
-        let plafond = (AGRANDISSEMENT_MAX * base.0 / sortie.0 as f64).max(1.0);
+        let max = if sortie.0.min(sortie.1) >= 2160 { AGRANDISSEMENT_MAX_4K } else { AGRANDISSEMENT_MAX };
+        let plafond = (max * base.0 / sortie.0 as f64).max(1.0);
         // De l'image entière au plafond, en pas égaux : le nombre de pas qui approche le mieux le pas voulu,
         // sans jamais descendre sous PAS_MIN (exemple : plafond ×1,47, pas voulu 30 % → deux pas de 21 %).
         let etendue = plafond.ln();

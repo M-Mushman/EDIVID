@@ -1,24 +1,24 @@
 {
   "looks": [
     {"cle": "beaute_naturelle", "nom": "Beauté naturelle", "description": "Peau lumineuse et lissée en douceur, couleurs fidèles. Le choix sûr pour un visage face caméra.",
-     "reglages": {"couleur": "beaute", "lissage": 45, "diffusion": 15, "nettete": 15, "grain": 0, "vignette": 10, "exposition": 4, "contraste": 0, "saturation": 0, "temperature": 5, "bandes": false}},
+     "reglages": {"couleur": "beaute", "lissage": 25, "diffusion": 15, "nettete": 0, "grain": 0, "vignette": 10, "exposition": 4, "contraste": 0, "saturation": 0, "temperature": 5, "bandes": false}},
     {"cle": "lumiere_cinema", "nom": "Lumière cinéma", "description": "Image lumineuse et douce, peau chaude, halo léger dans les hautes lumières, grain fin : le rendu des films de mode et de beauté.",
-     "reglages": {"couleur": "lumiere", "lissage": 35, "diffusion": 30, "nettete": 12, "grain": 8, "vignette": 8, "exposition": 3, "contraste": 0, "saturation": 0, "temperature": 6, "bandes": false}},
+     "reglages": {"couleur": "lumiere", "lissage": 0, "diffusion": 30, "nettete": 0, "grain": 8, "vignette": 8, "exposition": 3, "contraste": 0, "saturation": 0, "temperature": 6, "bandes": false}},
     {"cle": "glow_peau", "nom": "Glow peau", "description": "Teint très adouci et halo lumineux : l'effet « peau parfaite » des vidéos beauté.",
-     "reglages": {"couleur": "beaute", "lissage": 65, "diffusion": 40, "nettete": 10, "grain": 4, "vignette": 15, "exposition": 6, "contraste": -5, "saturation": 0, "temperature": 8, "bandes": false}},
+     "reglages": {"couleur": "beaute", "lissage": 40, "diffusion": 40, "nettete": 0, "grain": 4, "vignette": 15, "exposition": 6, "contraste": -5, "saturation": 0, "temperature": 8, "bandes": false}},
     {"cle": "editorial_mode", "nom": "Éditorial mode", "description": "Couleurs retenues, noirs mats, contraste net : l'allure d'un magazine de mode.",
-     "reglages": {"couleur": "editorial", "lissage": 35, "diffusion": 10, "nettete": 30, "grain": 12, "vignette": 25, "exposition": 0, "contraste": 10, "saturation": -10, "temperature": 0, "bandes": false}},
+     "reglages": {"couleur": "editorial", "lissage": 0, "diffusion": 10, "nettete": 15, "grain": 12, "vignette": 25, "exposition": 0, "contraste": 10, "saturation": -10, "temperature": 0, "bandes": false}},
     {"cle": "pastel_doux", "nom": "Pastel doux", "description": "Tons clairs et poudrés, lumière diffuse : doux, féminin, aérien.",
-     "reglages": {"couleur": "pastel", "lissage": 45, "diffusion": 30, "nettete": 5, "grain": 6, "vignette": 5, "exposition": 6, "contraste": -10, "saturation": -5, "temperature": 3, "bandes": false}},
+     "reglages": {"couleur": "pastel", "lissage": 0, "diffusion": 30, "nettete": 0, "grain": 6, "vignette": 5, "exposition": 6, "contraste": -10, "saturation": -5, "temperature": 3, "bandes": false}},
     {"cle": "cinema_chaud", "nom": "Cinéma chaud", "description": "Teintes chaudes et ombres sarcelle, grain léger : une image de film.",
-     "reglages": {"couleur": "cinema", "lissage": 25, "diffusion": 15, "nettete": 20, "grain": 15, "vignette": 30, "exposition": 0, "contraste": 8, "saturation": 0, "temperature": 12, "bandes": true}},
+     "reglages": {"couleur": "cinema", "lissage": 0, "diffusion": 15, "nettete": 0, "grain": 15, "vignette": 30, "exposition": 0, "contraste": 8, "saturation": 0, "temperature": 12, "bandes": true}},
     {"cle": "couture_nb", "nom": "Couture noir et blanc", "description": "Noir et blanc profond et contrasté, peau sculptée : l'image de luxe.",
-     "reglages": {"couleur": "couture_nb", "lissage": 30, "diffusion": 20, "nettete": 25, "grain": 25, "vignette": 35, "exposition": 0, "contraste": 10, "saturation": 0, "temperature": 0, "bandes": false}},
+     "reglages": {"couleur": "couture_nb", "lissage": 0, "diffusion": 20, "nettete": 15, "grain": 25, "vignette": 35, "exposition": 0, "contraste": 10, "saturation": 0, "temperature": 0, "bandes": false}},
     {"cle": "film_35mm", "nom": "Film 35 mm", "description": "Couleurs argentiques, noirs relevés et grain visible : la nostalgie de la pellicule.",
-     "reglages": {"couleur": "film", "lissage": 20, "diffusion": 20, "nettete": 10, "grain": 40, "vignette": 25, "exposition": 0, "contraste": 0, "saturation": -5, "temperature": 6, "bandes": false}},
-    {"cle": "clean_youtube", "nom": "Clean YouTube", "description": "Image nette et vive, sans effet visible : idéal pour une vidéo pédagogique.",
-     "reglages": {"couleur": "eclatant", "lissage": 20, "diffusion": 0, "nettete": 35, "grain": 0, "vignette": 0, "exposition": 3, "contraste": 5, "saturation": 5, "temperature": 0, "bandes": false}},
+     "reglages": {"couleur": "film", "lissage": 0, "diffusion": 20, "nettete": 0, "grain": 40, "vignette": 25, "exposition": 0, "contraste": 0, "saturation": -5, "temperature": 6, "bandes": false}},
+    {"cle": "clean_youtube", "nom": "Clean YouTube", "description": "Image fidèle à la captation, à peine relevée, sans lissage : idéal pour une vidéo pédagogique.",
+     "reglages": {"couleur": "naturel", "lissage": 0, "diffusion": 0, "nettete": 10, "grain": 0, "vignette": 0, "exposition": 0, "contraste": 3, "saturation": 3, "temperature": 0, "bandes": false}},
     {"cle": "nuit_bleue", "nom": "Nuit bleue", "description": "Ambiance froide et feutrée, pour un ton intime ou mystérieux.",
-     "reglages": {"couleur": "nuit", "lissage": 30, "diffusion": 25, "nettete": 15, "grain": 15, "vignette": 40, "exposition": -3, "contraste": 5, "saturation": -10, "temperature": -20, "bandes": false}}
+     "reglages": {"couleur": "nuit", "lissage": 0, "diffusion": 25, "nettete": 0, "grain": 15, "vignette": 40, "exposition": -3, "contraste": 5, "saturation": -10, "temperature": -20, "bandes": false}}
   ]
 }
