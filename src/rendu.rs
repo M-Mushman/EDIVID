@@ -317,8 +317,10 @@ fn filtre_plan(p: &Plan, largeur_entree: u32, sortie: (u32, u32), nette: bool) -
         let progres = if zm > 1.0 + 1e-6 { format!("min(1,max(0,(zoom-1)/{:.5}))", zm - 1.0) } else { "0".into() };
         let (cx, cy) = p.centre_serre;
         let nt = 0.25 * IPS;
+        // Une poussée répartie sur plusieurs plans avance régulièrement ; seule, elle ralentit en fin de plan.
+        let avance = if p.lineaire { format!("min(on/{n},1)") } else { format!("(1-pow(1-min(on/{n},1),2))") };
         f.push(format!(
-            "zoompan=z='(1+{:.5}*(1-pow(1-min(on/{n},1),2)))*(1+{:.3}*pow(max(0,1-on/{nt}),2))':\
+            "zoompan=z='(1+{:.5}*{avance})*(1+{:.3}*pow(max(0,1-on/{nt}),2))':\
              x='max(0,min(iw-iw/zoom,(0.5+({cx:.5}-0.5)*{progres})*iw-iw/zoom/2))':\
              y='max(0,min(ih-ih/zoom,(0.5+({cy:.5}-0.5)*{progres})*ih-ih/zoom/2))':d=1:s={wo}x{ho}:fps={IPS}",
             p.z_fin - 1.0,

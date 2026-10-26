@@ -159,7 +159,7 @@ h3 { font-size: 14px; font-weight: 650; }
   max-width: 1880px; margin: 0 auto; padding: 14px 16px calc(var(--dock, 90px) + 16px);
   display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 14px; align-items: start;
 }
-.mise-en-page.tiroir-replie { grid-template-columns: minmax(0, 1fr) 58px; }
+.mise-en-page.tiroir-replie { grid-template-columns: minmax(0, 1fr) 36px; }
 .colonne { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 /* Panneaux 2 (aperçu) et 3 (texte) côte à côte ; le texte reste visible pendant qu'on fait défiler la page. */
 .atelier { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(340px, 1fr); gap: 14px; align-items: start; }
@@ -167,7 +167,20 @@ h3 { font-size: 14px; font-weight: 650; }
 .atelier > .carte:last-child:not(.replie) { position: sticky; top: 64px; display: flex; flex-direction: column; max-height: var(--haut-utile); }
 .atelier > .carte:last-child:not(.replie) > .carte-corps { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .atelier .phrases { max-height: none; flex: 1; min-height: 160px; }
-.panneau-droit { position: sticky; top: 64px; display: flex; flex-direction: column; max-height: var(--haut-utile); }
+.panneau-droit { position: sticky; top: 64px; display: flex; flex-direction: row; height: var(--haut-utile); overflow: hidden; }
+.contenu-tiroir { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.panneau-droit.rentre .contenu-tiroir { display: none; }
+/* Poignée : bande verticale toujours visible sur le bord du tiroir. */
+.poignee {
+  flex: 0 0 34px; border: 0; border-right: 1px solid var(--bord); cursor: pointer;
+  background: var(--accent-doux); color: var(--accent); font: inherit; font-weight: 700; font-size: 12.5px; letter-spacing: .03em;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px; padding: 12px 0;
+}
+.poignee span { writing-mode: vertical-rl; white-space: nowrap; }
+.poignee svg { width: 18px; height: 18px; transform: rotate(-90deg); transition: transform .15s; flex: none; }
+.panneau-droit.rentre .poignee { border-right: 0; }
+.panneau-droit.rentre .poignee svg { transform: rotate(90deg); }
+.poignee:hover { background: var(--accent); color: var(--accent-texte); }
 
 /* rushs */
 .depot {
@@ -381,8 +394,13 @@ select.champ { padding: 8px 10px; margin-top: 8px; }
   .atelier { grid-template-columns: minmax(0, 1fr); }
   .atelier > .carte:last-child:not(.replie) { position: static; max-height: none; }
   .atelier .phrases { max-height: 560px; }
-  .panneau-droit { position: static; max-height: none; }
-  .panneau-droit.replie .onglets { flex-direction: row; }
+  /* Sur un écran étroit, le tiroir passe par-dessus le contenu, toujours accroché au bord droit. */
+  .mise-en-page { padding-right: 52px; }
+  .panneau-droit {
+    position: fixed; right: 0; top: 56px; bottom: calc(var(--dock, 90px) + 8px); height: auto; z-index: 25;
+    width: min(420px, calc(100vw - 28px)); border-radius: var(--rayon) 0 0 var(--rayon); box-shadow: var(--ombre-forte);
+  }
+  .panneau-droit.rentre { width: 36px; }
 }
 @media (max-width: 720px) {
   .etapes-accueil { grid-template-columns: 1fr 1fr; }
@@ -412,15 +430,21 @@ h1 svg, h2 svg, h3 svg { width: 20px; height: 20px; flex: none; }
 .carte.replie .carte-tete { padding-bottom: 14px; }
 .carte.replie > :not(.carte-tete) { display: none; }
 .carte.replie .carte-tete .chevron svg { transform: rotate(-90deg); }
-.chevron-panneau { flex: 0 0 34px !important; }
-.chevron-panneau svg { transition: transform .15s; transform: rotate(-90deg); }
-/* Tiroir rentré : une colonne d'icônes, un clic rouvre l'onglet voulu. */
-.panneau-droit.replie .chevron-panneau svg { transform: rotate(90deg); }
-.panneau-droit.replie > :not(.onglets) { display: none; }
-.panneau-droit.replie .onglets { border-bottom: 0; flex-direction: column; padding: 4px; }
-.panneau-droit.replie .onglets button { flex: none; padding: 9px 0; }
-.panneau-droit.replie .onglets .libelle { display: none; }
-.panneau-droit.replie .chevron-panneau { height: 34px; }
+/* Menu ⋯ d'une phrase. */
+.menu-ancre { position: relative; }
+.menu-actions {
+  position: absolute; right: 0; top: 100%; z-index: 15; min-width: 230px; padding: 4px; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--bord); border-radius: 10px; box-shadow: var(--ombre-forte);
+}
+.menu-actions[hidden] { display: none; }
+.menu-actions button { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 8px 10px; border-radius: 7px; cursor: pointer; font: inherit; font-size: 13.5px; text-align: left; color: var(--texte); }
+.menu-actions button:hover { background: var(--surface-2); }
+.menu-actions svg { width: 15px; height: 15px; color: var(--texte-2); }
+.phrase:has(.menu-actions:not([hidden])) .boutons { opacity: 1; }
+select.puce.auto { color: var(--texte-3); }
+.puces-accroche { display: flex; flex-wrap: wrap; gap: 6px; }
+.puce-accroche { display: inline-flex; align-items: flex-start; gap: 4px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--impact) 35%, transparent); border-radius: 9px; padding: 3px 4px 3px 8px; }
+.puce-accroche .texte { cursor: pointer; }
 
 /* ---------- lecteur : outils, calque, dépôt ---------- */
 .outils-lecteur { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }

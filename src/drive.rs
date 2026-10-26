@@ -321,6 +321,7 @@ async fn prendre(etat: &EtatPartage, d: &Drive, compte: &str, groupe: &str, fich
         compte: compte.to_string(),
         postprod: jeu.as_ref().map(|j| j.postprod.clone()).or_else(|| modele.as_ref().map(|m| m.postprod.clone())).unwrap_or_default(),
         corrections: Default::default(),
+        fusions: vec![],
         exports: vec![],
         habillage: jeu.as_ref().map(|j| j.habillage.clone()).or_else(|| modele.as_ref().map(|m| m.habillage.clone())).unwrap_or_default(),
         generique: jeu.as_ref().map(|j| j.generique.clone()).or_else(|| modele.as_ref().map(|m| m.generique.clone())).unwrap_or_default(),

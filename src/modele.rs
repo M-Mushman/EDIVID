@@ -50,6 +50,9 @@ pub struct Projet {
     /// Textes de phrases corrigés à la main (orthographe, erreurs de transcription), par clé de phrase.
     #[serde(default)]
     pub corrections: std::collections::BTreeMap<String, String>,
+    /// Phrases soudées à la suivante (clé de la première) : la transcription coupait une phrase en deux.
+    #[serde(default)]
+    pub fusions: Vec<String>,
     /// Versions exportées du rendu final.
     #[serde(default)]
     pub exports: Vec<Export>,
@@ -177,6 +180,9 @@ pub struct Montage {
     pub phrases: Vec<Decision>,
     #[serde(default)]
     pub accroche: Vec<String>,
+    /// L'accroche a été choisie à la main : on la prend telle quelle (vide = pas d'accroche), sans repli.
+    #[serde(default)]
+    pub accroche_choisie: bool,
     #[serde(default)]
     pub chapitres: Vec<Chapitre>,
     #[serde(default)]
@@ -194,6 +200,12 @@ pub struct Decision {
     pub transition: Option<String>,
     #[serde(default)]
     pub mots_forts: Vec<String>,
+    /// Transition choisie à la main au début de la phrase (« coupe » = aucune) ; prime sur le LLM et le réglage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_choisie: Option<String>,
+    /// Mouvement de caméra choisi à la main : « fixe », « pousse » ou « punch » ; absent = selon le rythme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouvement: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -300,6 +312,9 @@ pub struct Phrase {
     pub texte: String,
     #[serde(skip)]
     pub mots: Vec<Mot>,
+    /// Clés des phrases d'origine soudées à celle-ci (vide sinon).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fusionnees: Vec<String>,
 }
 
 pub fn maintenant() -> String {

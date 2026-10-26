@@ -1300,30 +1300,85 @@ const NOMS_REGIME = { rafale: 'Rafale', impact: 'Impact', respiration: 'Respirat
 const NOMS_CADRE = { large: 'Plan large', moyen: 'Plan moyen', visage: 'Gros plan', yeux: 'Yeux' };
 const AIDE_REGIME = 'Rythme de la phrase, sans toucher au cadre — Rafale : coupes serrées, un plan sur deux resserré d’un cran. '
   + 'Impact : coupe sèche, l’image pousse vers le visage pendant le plan. Respiration : les silences sont gardés, le plan est tenu.';
+const NOMS_MOUVEMENT = { auto: 'Mouvement selon le rythme', fixe: 'Fixe', pousse: 'Zoom avant continu', punch: 'Punch à chaque coupe' };
+const AIDE_MOUVEMENT = 'Mouvement de l’image pendant la phrase — Selon le rythme : zoom avant continu pour un Impact, punch pour une Rafale (si les réglages Zoom qui avance et Recadrer à chaque coupe sont allumés). '
+  + 'Fixe : aucun zoom. Zoom avant continu : un seul mouvement vers le visage sur toute la phrase. Punch : un plan sur deux resserré d’un cran.';
+const NOMS_TRANSITION = { auto: 'Auto', coupe: 'Aucune (coupe franche)', flash: 'Flash blanc', fondu: 'Fondu au noir', zoom: 'Zoom', glisse: 'Glissé flou', glitch: 'Glitch' };
+const AIDE_TRANSITION = 'Transition au début de la phrase. Auto : celle du LLM ou du réglage général, au début de chaque partie. Aucune : coupe franche, sans effet.';
 const AIDE_CADRE = 'Cadre de la phrase — Plan large : l’image entière. Plan moyen : buste. Gros plan : visage. Yeux : le plus serré que la vidéo permet, centré sur le regard.';
 /** Ligne de l'accroche (phrases reprises en ouverture) dans le texte : elle se surligne pendant qu'elle joue. */
 const CLE_ACCROCHE = '__accroche';
 
-function menuPhrase(cle, champ, valeur, noms, aide) {
-  return h('select', { class: `puce ${champ === 'regime' ? valeur : ''}`, title: aide, 'aria-label': champ === 'regime' ? 'Rythme' : 'Cadre',
+function menuPhrase(cle, champ, valeur, noms, aide, libelle) {
+  return h('select', { class: `puce ${champ === 'regime' ? valeur : ''} ${valeur === 'auto' ? 'auto' : ''}`, title: aide, 'aria-label': libelle,
     onchange: (e) => changerPhrase(cle, { [champ]: e.target.value }) },
   Object.entries(noms).map(([v, l]) => h('option', { value: v, selected: v === valeur }, l)));
 }
 
-/** Les phrases jouées en accroche dans l'aperçu, dans leur ordre. */
+/** Transition réellement jouée au début d'une phrase dans le montage en cours (null : coupe franche). */
+function transitionJouee(cle) {
+  return (E.programme?.plans || []).find((x) => x.phrase === cle && !x.accroche)?.transition || null;
+}
+
+/** Phrases de l'accroche dans le montage en cours, dans leur ordre. */
+function clesAccroche() {
+  return [...new Set((E.programme?.plans || []).filter((x) => x.accroche).map((x) => x.phrase))];
+}
+
+async function changerAccroche(cles) {
+  try {
+    await api('POST', `/api/projets/${E.projetId}/accroche`, { cles });
+    E.aMettreAJour = true;
+    dessinerBarre();
+  } catch (e) { toast(e.message, 'erreur'); }
+}
+
+async function fusionner(cle, sens) {
+  try {
+    await api('POST', `/api/projets/${E.projetId}/fusion`, { cle, sens });
+    E.aMettreAJour = true;
+    dessinerBarre();
+  } catch (e) { toast(e.message, 'erreur'); }
+}
+
+/** Petit menu d'actions (⋯) ; il se ferme au clic suivant, où qu'il soit. */
+function menuActions(titre, actions) {
+  const liste = h('div', { class: 'menu-actions', role: 'menu', hidden: true },
+    actions.filter(Boolean).map(([ic, libelle, faire]) => h('button', { role: 'menuitem', onclick: () => { liste.hidden = true; faire(); } }, icone(ic), libelle)));
+  const bouton = h('button', { class: 'btn icone fantome', title: titre, 'aria-haspopup': 'menu',
+    onclick: (e) => {
+      e.stopPropagation();
+      const ouvrir = liste.hidden;
+      document.querySelectorAll('.menu-actions').forEach((m) => { m.hidden = true; });
+      liste.hidden = !ouvrir;
+      if (ouvrir) setTimeout(() => document.addEventListener('click', () => { liste.hidden = true; }, { once: true }));
+    } }, '⋯');
+  return h('div', { class: 'menu-ancre' }, bouton, liste);
+}
+
+/** Ligne de l'accroche en tête du texte : chaque phrase reprise se retire, l'accroche entière se supprime. */
 function ligneAccroche() {
-  const plans = plansAffiches().filter((x) => x.accroche);
-  if (!plans.length) return null;
-  const cles = [...new Set(plans.map((x) => x.phrase))];
-  const textes = cles.map((c) => E.vue.phrases.find((ph) => ph.cle === c)?.texte).filter(Boolean);
+  const cles = clesAccroche();
+  if (!cles.length) return null;
+  const affiches = plansAffiches().filter((x) => x.accroche);
+  const debut = affiches[0]?.t ?? 0;
   return h('div', { class: 'phrase impact accroche-ligne', 'data-cle': CLE_ACCROCHE },
-    h('div', { class: 'temps' }, minutes(plans[0].t)),
+    h('div', { class: 'temps' }, minutes(debut)),
     h('div', { style: { minWidth: 0 } },
       h('div', { class: 'etiquette-accroche' }, 'Accroche — reprise en ouverture de la vidéo'),
-      h('div', { class: 'texte', style: { cursor: 'pointer' }, title: 'Clic : écouter l’accroche',
-        onclick: () => { if (E.lecteur === 'origine') changerLecteur('apercu'); setTimeout(() => { E.noeuds.video.currentTime = plans[0].t + 0.01; E.noeuds.video.play(); }, 50); } },
-      textes.map((t) => `« ${t} »`).join(' … '))),
-    h('div', { class: 'boutons' }));
+      h('div', { class: 'puces-accroche' }, cles.map((c) => {
+        const ph = E.vue.phrases.find((x) => x.cle === c);
+        return h('span', { class: 'puce-accroche' },
+          h('span', { class: 'texte', title: 'Clic : écouter l’accroche — double-clic : corriger le texte de cette phrase',
+            onclick: () => { if (!affiches.length) { toast('Mettez l’aperçu à jour pour écouter cette accroche.'); return; }
+              if (E.lecteur === 'origine') changerLecteur('apercu'); setTimeout(() => { E.noeuds.video.currentTime = debut + 0.01; E.noeuds.video.play(); }, 50); },
+            ondblclick: () => { E.edition = c; dessinerPhrases(); E.noeuds.listePhrases.querySelector(`[data-cle="${CSS.escape(c)}"]`)?.scrollIntoView({ block: 'center' }); } },
+          `« ${ph?.texte || '…'} »`),
+          h('button', { class: 'puce-retirer', title: 'Retirer cette phrase de l’accroche', 'aria-label': 'Retirer de l’accroche',
+            onclick: () => changerAccroche(cles.filter((x) => x !== c)) }, icone('fermer')));
+      }))),
+    h('div', { class: 'boutons' },
+      h('button', { class: 'btn icone fantome', title: 'Supprimer l’accroche : la vidéo commence directement par le début', onclick: () => changerAccroche([]) }, icone('corbeille'))));
 }
 
 async function changerPhrase(cle, changement) {
@@ -1333,6 +1388,21 @@ async function changerPhrase(cle, changement) {
   } catch (e) { toast(e.message, 'erreur'); }
 }
 
+/** Actions plus rares d'une phrase : accroche, soudure avec une voisine du même rush. */
+function menuPhraseActions(ph, phrases) {
+  const i = phrases.indexOf(ph);
+  const prec = phrases[i - 1];
+  const suiv = phrases[i + 1];
+  const accroche = clesAccroche();
+  const dans = accroche.includes(ph.cle);
+  return menuActions('Plus d’actions sur cette phrase', [
+    ['etoile', dans ? 'Retirer de l’accroche' : 'Ajouter à l’accroche', () => changerAccroche(dans ? accroche.filter((c) => c !== ph.cle) : [...accroche, ph.cle])],
+    prec && prec.rush === ph.rush ? ['haut', 'Souder à la phrase précédente', () => fusionner(ph.cle, 'precedente')] : null,
+    suiv && suiv.rush === ph.rush ? ['bas', 'Souder à la phrase suivante', () => fusionner(ph.cle, 'suivante')] : null,
+    ph.fusionnees?.length ? ['ciseaux', 'Séparer la phrase soudée', () => fusionner(ph.cle, 'separer')] : null,
+  ]);
+}
+
 function dessinerPhrases() {
   const { phrases, projet: p } = E.vue;
   const monte = !!p.montage;
@@ -1340,7 +1410,7 @@ function dessinerPhrases() {
     || (E.filtre === 'gardees' ? ph.decision.garder : !ph.decision.garder));
   const nbCoupees = phrases.filter((ph) => ph.decision && !ph.decision.garder).length;
   const debut = E.noeuds.listePhrases?.scrollTop || 0;
-  const accroche = monte && E.lecteur !== 'origine' && E.filtre !== 'coupees' ? ligneAccroche() : null;
+  const accroche = monte && E.filtre !== 'coupees' ? ligneAccroche() : null;
   E.noeuds.listePhrases = h('div', { class: 'phrases' }, accroche, visibles.map((ph) => {
     const d = ph.decision;
     const classe = d ? (d.garder ? d.regime : 'coupee') : '';
@@ -1353,8 +1423,13 @@ function dessinerPhrases() {
           onclick: () => allerALaPhrase(ph.cle), ondblclick: () => { E.edition = ph.cle; dessinerPhrases(); } },
           ph.texte, corrigee ? h('span', { class: 'marque-corrige', title: 'Texte corrigé à la main' }, 'corrigé') : null),
         d && d.garder ? h('div', { class: 'etiquettes' },
-          menuPhrase(ph.cle, 'regime', d.regime, NOMS_REGIME, AIDE_REGIME),
-          menuPhrase(ph.cle, 'cadre', d.cadre, NOMS_CADRE, AIDE_CADRE),
+          menuPhrase(ph.cle, 'regime', d.regime, NOMS_REGIME, AIDE_REGIME, 'Rythme'),
+          menuPhrase(ph.cle, 'cadre', d.cadre, NOMS_CADRE, AIDE_CADRE, 'Cadre'),
+          menuPhrase(ph.cle, 'mouvement', d.mouvement || 'auto', NOMS_MOUVEMENT, AIDE_MOUVEMENT, 'Mouvement'),
+          menuPhrase(ph.cle, 'transition', d.transition_choisie || 'auto',
+            { ...NOMS_TRANSITION, auto: `Entrée auto : ${transitionJouee(ph.cle) ? NOMS_TRANSITION[transitionJouee(ph.cle)] || transitionJouee(ph.cle) : 'coupe franche'}` },
+            AIDE_TRANSITION, 'Transition d’entrée'),
+          ph.fusionnees?.length ? h('span', { class: 'puce', title: 'Phrase soudée à la main' }, '⛓ soudée') : null,
           p.incrustations.filter((i) => i.phrase === ph.cle).map((inc) => h('span', { class: 'puce puce-incrustation', title: `${nomIncrustation(inc)} — ${fr(inc.duree)} s` },
             `✦ ${nomIncrustation(inc).slice(0, 26)}`,
             h('button', { class: 'puce-retirer', title: 'Retirer cette incrustation', 'aria-label': `Retirer ${nomIncrustation(inc)}`,
@@ -1363,7 +1438,8 @@ function dessinerPhrases() {
         h('button', { class: 'btn icone fantome', title: 'Corriger le texte (orthographe, mot mal transcrit)', onclick: () => { E.edition = ph.cle; dessinerPhrases(); } }, icone('crayon')),
         h('button', { class: 'btn icone fantome', title: 'Ajouter une incrustation (image, GIF, vidéo, effet)', onclick: () => dialogueIncrustation(ph) }, icone('baguette')),
         h('button', { class: 'btn icone fantome', title: d && !d.garder ? 'Rétablir cette phrase' : 'Couper cette phrase', onclick: () => changerPhrase(ph.cle, { garder: !(d ? d.garder : true) }) },
-          icone(d && !d.garder ? 'relancer' : 'ciseaux'))) : h('div', { class: 'boutons' },
+          icone(d && !d.garder ? 'relancer' : 'ciseaux')),
+        menuPhraseActions(ph, phrases)) : h('div', { class: 'boutons' },
         h('button', { class: 'btn icone fantome', title: 'Corriger le texte', onclick: () => { E.edition = ph.cle; dessinerPhrases(); } }, icone('crayon'))));
   }));
   appliquerReplie(E.noeuds.phrases, 'phrases');
@@ -1375,7 +1451,7 @@ function dessinerPhrases() {
     h('div', { class: 'carte-corps' },
       phrases.length === 0 ? h('p', { class: 'muet petit', style: { margin: 0 } }, 'La transcription apparaîtra ici après l’analyse.')
         : !monte ? h('div', { class: 'aide', style: { marginBottom: '10px' } }, icone('info'), h('span', {}, 'Voici ce qui est dit dans vos rushs. Proposez un montage : le LLM décidera, phrase par phrase, ce qu’il garde, le rythme et le cadre.'))
-          : h('p', { class: 'tres-petit muet', style: { margin: '0 0 8px' } }, 'Cliquez une phrase pour l’écouter, double-cliquez pour corriger son texte ; ses deux menus changent le rythme ou le cadre (l’un ne touche jamais l’autre) ; les ciseaux la coupent ; la baguette pose une incrustation.'),
+          : h('p', { class: 'tres-petit muet', style: { margin: '0 0 8px' } }, 'Cliquez une phrase pour l’écouter, double-cliquez pour corriger son texte. Ses menus règlent le rythme, le cadre, le mouvement et la transition d’entrée, chacun sans toucher aux autres. Les ciseaux la coupent, la baguette pose une incrustation, ⋯ la met en accroche ou la soude à sa voisine.'),
       phrases.length ? zoneRemplacer() : null,
       E.noeuds.listePhrases));
   E.noeuds.listePhrases.scrollTop = debut;
@@ -1389,7 +1465,9 @@ function construirePanneau() {
   const n = E.noeuds;
   n.onglets = h('div', { class: 'onglets', role: 'tablist' });
   n.corpsPanneau = h('div', { style: { display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 } });
-  remplir(n.panneau, n.onglets, n.corpsPanneau);
+  // Poignée toujours visible sur le bord du tiroir : un clic le rentre ou le sort.
+  n.poignee = h('button', { class: 'poignee', onclick: () => { stocker('edivid_replie_panneau', estReplie('panneau') ? '0' : '1'); dessinerPanneau(); } });
+  remplir(n.panneau, n.poignee, h('div', { class: 'contenu-tiroir' }, n.onglets, n.corpsPanneau));
   n.messages = h('div', { class: 'messages' });
   n.saisie = h('textarea', { rows: '1', placeholder: 'Demandez un changement…', 'aria-label': 'Message pour EDIVID' });
   n.saisie.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); envoyer(); } });
@@ -1433,14 +1511,15 @@ function dessinerPanneau() {
     ['postprod', 'etincelles', 'PostProd', 0],
   ];
   const replie = estReplie('panneau');
-  appliquerReplie(n.panneau, 'panneau');
+  n.panneau.classList.toggle('rentre', replie);
   n.main.classList.toggle('tiroir-replie', replie);
+  n.poignee.title = replie ? 'Sortir le panneau des réglages' : 'Rentrer le panneau sur le côté';
+  n.poignee.setAttribute('aria-expanded', replie ? 'false' : 'true');
+  remplir(n.poignee, icone('chevron'), h('span', {}, replie ? 'Réglages · Médias · Textes · PostProd' : 'Rentrer'));
   remplir(n.onglets,
-    h('button', { class: 'chevron-panneau', title: replie ? 'Ouvrir le panneau des réglages' : 'Rentrer le panneau sur le côté', 'aria-expanded': replie ? 'false' : 'true',
-      onclick: () => { stocker('edivid_replie_panneau', replie ? '0' : '1'); dessinerPanneau(); } }, icone('chevron')),
     ...onglets.map(([id, ic, l, compte]) =>
       h('button', { role: 'tab', class: E.onglet === id ? 'actif' : '', 'aria-selected': E.onglet === id ? 'true' : 'false', title: l,
-        onclick: () => { E.onglet = id; if (replie) stocker('edivid_replie_panneau', '0'); dessinerPanneau(); } },
+        onclick: () => { E.onglet = id; dessinerPanneau(); } },
       icone(ic), h('span', { class: 'libelle' }, l), compte ? h('span', { class: 'compte' }, compte) : null)));
   if (replie) return;
   const corps = h('div', { class: 'onglet-corps' });

@@ -80,6 +80,8 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/medias/{mid}", get(fichier_media).delete(supprimer_media))
         .route("/api/projets/{id}/reglages", post(changer_reglages))
         .route("/api/projets/{id}/phrase", post(changer_phrase))
+        .route("/api/projets/{id}/accroche", post(changer_accroche))
+        .route("/api/projets/{id}/fusion", post(fusionner))
         .route("/api/projets/{id}/incrustations", post(ajouter_incrustation))
         .route("/api/projets/{id}/incrustations/{iid}", delete(retirer_incrustation).post(modifier_incrustation))
         .route("/api/projets/{id}/commentaire", post(commenter))
@@ -174,6 +176,7 @@ async fn creer_projet(State(etat): State<EtatPartage>, Json(n): Json<Nom>) -> Re
         compte: String::new(),
         postprod: Default::default(),
         corrections: Default::default(),
+        fusions: vec![],
         exports: vec![],
         habillage: vec![],
         generique: Default::default(),
@@ -212,7 +215,7 @@ async fn voir_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) ->
         .iter()
         .enumerate()
         .map(|(i, ph)| json!({"n": i, "cle": ph.cle, "rush": ph.rush, "t0": ph.t0, "t1": ph.t1, "texte": ph.texte,
-                              "decision": decisions.get(ph.cle.as_str()),
+                              "decision": decisions.get(ph.cle.as_str()), "fusionnees": ph.fusionnees,
                               // Minutage des mots (début, fin, mot) : le texte suit la lecture mot à mot.
                               "mots": ph.mots.iter().map(|m| json!([(m.t0 * 100.0).round() / 100.0, (m.t1 * 100.0).round() / 100.0, m.mot]))
                                   .collect::<Vec<_>>()}))
@@ -423,14 +426,21 @@ struct ChangementPhrase {
     garder: Option<bool>,
     regime: Option<String>,
     cadre: Option<String>,
+    /// « auto » rend la transition au LLM et au réglage général ; « coupe » = aucune.
+    #[serde(default)]
+    transition: Option<String>,
+    /// « auto » rend le mouvement au rythme ; sinon « fixe », « pousse » ou « punch ».
+    #[serde(default)]
+    mouvement: Option<String>,
 }
 
 fn montage_par_defaut(ps: &[crate::modele::Phrase]) -> Montage {
     Montage {
         cree: maintenant(),
         phrases: ps.iter().map(|p| Decision { cle: p.cle.clone(), garder: true, regime: "rafale".into(), cadre: "moyen".into(),
-                                               transition: None, mots_forts: vec![] }).collect(),
+                                               transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None }).collect(),
         accroche: vec![],
+        accroche_choisie: false,
         chapitres: vec![],
         notes: vec![],
     }
@@ -440,7 +450,7 @@ fn changer(p: &mut Projet, ps: &[crate::modele::Phrase], c: &ChangementPhrase) -
     let m = p.montage.get_or_insert_with(|| montage_par_defaut(ps));
     if !m.phrases.iter().any(|d| d.cle == c.cle) {
         m.phrases.push(Decision { cle: c.cle.clone(), garder: true, regime: "rafale".into(), cadre: "moyen".into(),
-                                  transition: None, mots_forts: vec![] });
+                                  transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None });
     }
     let d = m.phrases.iter_mut().find(|d| d.cle == c.cle)?;
     let mut faits = Vec::new();
@@ -463,7 +473,129 @@ fn changer(p: &mut Projet, ps: &[crate::modele::Phrase], c: &ChangementPhrase) -
         }
     }
     // Le régime ne touche jamais au cadre : changer l'un ne doit pas déplacer l'autre.
+    if let Some(t) = c.transition.as_ref().filter(|t| ["auto", "coupe", "flash", "fondu", "zoom", "glisse", "glitch"].contains(&t.as_str())) {
+        let t = (t != "auto").then(|| t.clone());
+        if d.transition_choisie != t {
+            faits.push(format!("transition {}", t.as_deref().unwrap_or("automatique")));
+            d.transition_choisie = t;
+        }
+    }
+    if let Some(m) = c.mouvement.as_ref().filter(|m| ["auto", "fixe", "pousse", "punch"].contains(&m.as_str())) {
+        let m = (m != "auto").then(|| m.clone());
+        if d.mouvement != m {
+            faits.push(format!("mouvement {}", m.as_deref().unwrap_or("selon le rythme")));
+            d.mouvement = m;
+        }
+    }
     (!faits.is_empty()).then(|| faits.join(", "))
+}
+
+#[derive(Deserialize)]
+struct ChangementAccroche {
+    cles: Vec<String>,
+}
+
+/// L'accroche choisie à la main, dans l'ordre (vide : pas d'accroche).
+async fn changer_accroche(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(c): Json<ChangementAccroche>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let ps = decoupe::phrases_projet(&p, &etat.analyses_du_projet(&p).await?);
+    let mut cles: Vec<String> = Vec::new();
+    for cle in c.cles {
+        if !ps.iter().any(|ph| ph.cle == cle) {
+            return Err(refus("phrase introuvable"));
+        }
+        if !cles.contains(&cle) {
+            cles.push(cle);
+        }
+    }
+    etat.modifier(&id, |p| {
+        if !cles.is_empty() {
+            p.reglages.insert("accroche".into(), json!(true));
+        }
+        let m = p.montage.get_or_insert_with(|| montage_par_defaut(&ps));
+        m.accroche = cles;
+        m.accroche_choisie = true;
+    })
+    .await?;
+    Ok(Json(json!({"fait": true})))
+}
+
+#[derive(Deserialize)]
+struct Fusion {
+    cle: String,
+    /// « suivante », « precedente » ou « separer ».
+    sens: String,
+}
+
+/// Soude une phrase à sa voisine (la transcription l'avait coupée en deux), ou sépare une phrase soudée.
+async fn fusionner(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(f): Json<Fusion>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let ps = decoupe::phrases_projet(&p, &etat.analyses_du_projet(&p).await?);
+    let i = ps.iter().position(|ph| ph.cle == f.cle).ok_or_else(|| refus("phrase introuvable"))?;
+    if f.sens == "separer" {
+        let ph = ps[i].clone();
+        if ph.fusionnees.is_empty() {
+            return Err(refus("cette phrase n'est pas soudée"));
+        }
+        let mut chaine = vec![ph.cle.clone()];
+        chaine.extend(ph.fusionnees[..ph.fusionnees.len() - 1].iter().cloned());
+        etat.modifier(&id, |p| {
+            p.fusions.retain(|c| !chaine.contains(c));
+            // Le texte corrigé couvrait toute la phrase soudée : il ne vaut plus pour ses morceaux.
+            p.corrections.remove(&ph.cle);
+            if let Some(m) = p.montage.as_mut() {
+                if let Some(d) = m.phrases.iter().find(|d| d.cle == ph.cle).cloned() {
+                    for c in &ph.fusionnees {
+                        m.phrases.retain(|x| &x.cle != c);
+                        m.phrases.push(Decision { cle: c.clone(), ..d.clone() });
+                    }
+                }
+            }
+        })
+        .await?;
+        return Ok(Json(json!({"fait": true})));
+    }
+    let (a, b) = match f.sens.as_str() {
+        "suivante" if i + 1 < ps.len() => (ps[i].clone(), ps[i + 1].clone()),
+        "precedente" if i > 0 => (ps[i - 1].clone(), ps[i].clone()),
+        _ => return Err(refus("pas de phrase voisine de ce côté")),
+    };
+    if a.rush != b.rush {
+        return Err(refus("les deux phrases viennent de rushs différents"));
+    }
+    etat.modifier(&id, |p| {
+        p.fusions.push(a.fusionnees.last().unwrap_or(&a.cle).clone());
+        if p.corrections.contains_key(&a.cle) || p.corrections.contains_key(&b.cle) {
+            p.corrections.insert(a.cle.clone(), format!("{} {}", a.texte, b.texte));
+            p.corrections.remove(&b.cle);
+        }
+        for inc in p.incrustations.iter_mut().filter(|inc| inc.phrase == b.cle) {
+            inc.phrase = a.cle.clone();
+            inc.decalage += b.t0 - a.t0;
+        }
+        if let Some(m) = p.montage.as_mut() {
+            // La phrase soudée est gardée si l'une des deux l'était, avec les choix de celle-là.
+            let da = m.phrases.iter().find(|d| d.cle == a.cle).cloned();
+            let db = m.phrases.iter().find(|d| d.cle == b.cle).cloned();
+            if let (Some(da), Some(db)) = (da, db) {
+                if !da.garder && db.garder {
+                    m.phrases.retain(|x| x.cle != a.cle);
+                    m.phrases.push(Decision { cle: a.cle.clone(), ..db });
+                }
+            }
+            for c in m.accroche.iter_mut().filter(|c| **c == b.cle) {
+                *c = a.cle.clone();
+            }
+            m.accroche.dedup();
+            let a_chapitre = m.chapitres.iter().any(|c| c.cle == a.cle);
+            m.chapitres.retain(|c| c.cle != b.cle || !a_chapitre);
+            for c in m.chapitres.iter_mut().filter(|c| c.cle == b.cle) {
+                c.cle = a.cle.clone();
+            }
+        }
+    })
+    .await?;
+    Ok(Json(json!({"fait": true})))
 }
 
 async fn changer_phrase(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(c): Json<ChangementPhrase>) -> Reponse {
@@ -648,6 +780,8 @@ fn appliquer_actions(p: &mut Projet, ps: &[crate::modele::Phrase], v: &Value) ->
             garder: c["garder"].as_bool(),
             regime: c["regime"].as_str().map(String::from),
             cadre: c["cadre"].as_str().map(String::from),
+            transition: None,
+            mouvement: None,
         };
         if let Some(f) = changer(p, ps, &changement) {
             actions.push(format!("Phrase {} : {f}", rang.get(&cle).copied().unwrap_or(0)));

@@ -184,6 +184,8 @@ fn vers_montage(v: &Value, ps: &[Phrase]) -> Montage {
             cadre: choisir("cadre", CADRES, "moyen"),
             transition: d["transition"].as_str().filter(|s| TRANSITIONS.contains(s)).map(String::from),
             mots_forts: d["mots_forts"].as_array().into_iter().flatten().filter_map(|m| m.as_str().map(String::from)).collect(),
+            transition_choisie: None,
+            mouvement: None,
         });
     }
     // Une phrase oubliée par le LLM est gardée plutôt que perdue.
@@ -196,12 +198,15 @@ fn vers_montage(v: &Value, ps: &[Phrase]) -> Montage {
             cadre: "moyen".into(),
             transition: None,
             mots_forts: vec![],
+            transition_choisie: None,
+            mouvement: None,
         }))
         .collect();
     Montage {
         cree: maintenant(),
         phrases,
         accroche: v["accroche"].as_array().into_iter().flatten().filter_map(cle).collect(),
+        accroche_choisie: false,
         chapitres: v["chapitres"]
             .as_array()
             .into_iter()

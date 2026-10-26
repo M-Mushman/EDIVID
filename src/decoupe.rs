@@ -86,6 +86,7 @@ pub fn phrases(analyses: &[(String, Arc<Analyse>)]) -> Vec<Phrase> {
                 db: g.iter().map(|m| m.db).fold(f64::MIN, f64::max),
                 texte: recoller(&g.iter().map(|m| m.mot.as_str()).collect::<Vec<_>>()),
                 mots: g,
+                fusionnees: vec![],
             });
             fin_prec = t1;
         }
@@ -93,9 +94,25 @@ pub fn phrases(analyses: &[(String, Arc<Analyse>)]) -> Vec<Phrase> {
     res
 }
 
-/// Phrases du projet, avec les corrections faites à la main.
+/// Phrases du projet : les phrases soudées à la main sont réunies (sous la clé de la première), puis les
+/// corrections de texte sont appliquées.
 pub fn phrases_projet(p: &Projet, analyses: &[(String, Arc<Analyse>)]) -> Vec<Phrase> {
-    let mut ps = phrases(analyses);
+    let mut ps: Vec<Phrase> = Vec::new();
+    let mut souder = false;
+    for ph in phrases(analyses) {
+        match ps.last_mut() {
+            Some(prec) if souder && prec.rush == ph.rush => {
+                prec.t1 = ph.t1;
+                prec.db = prec.db.max(ph.db);
+                prec.texte = format!("{} {}", prec.texte, ph.texte);
+                prec.mots.extend(ph.mots);
+                prec.fusionnees.push(ph.cle);
+            }
+            _ => ps.push(ph),
+        }
+        let derniere = ps.last().map(|x| x.fusionnees.last().unwrap_or(&x.cle).clone()).unwrap_or_default();
+        souder = p.fusions.contains(&derniere);
+    }
     for ph in ps.iter_mut() {
         if let Some(texte) = p.corrections.get(&ph.cle) {
             corriger(ph, texte);
@@ -183,6 +200,8 @@ pub struct Plan {
     pub punch: bool,
     /// Phrase forte : le cadre avance d'un cran pendant le plan.
     pub pousse: bool,
+    /// Morceau d'une poussée répartie sur plusieurs plans : avance régulière, sans ralenti à la fin du plan.
+    pub lineaire: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -457,7 +476,28 @@ fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, r: &Regl
     let mut grilles: HashMap<String, Grille> = HashMap::new();
     // Cadrage en cours : rush, phrase, cran atteint à la fin du plan précédent, ancrage, durée déjà tenue.
     let mut courant: Option<(String, String, usize, (f64, f64), f64)> = None;
-    for pl in plans.iter_mut() {
+    // Une poussée couvre toute sa phrase, d'une coupe à l'autre : chaque plan en joue sa part (début et fin,
+    // en fraction de la durée de la phrase), au lieu de rejouer un zoom avant à chaque coupe.
+    let mut parts: Vec<Option<(f64, f64)>> = vec![None; plans.len()];
+    let mut i = 0;
+    while i < plans.len() {
+        let meme = |a: &Plan, b: &Plan| b.pousse && b.phrase == a.phrase && b.accroche == a.accroche && b.rush == a.rush && b.transition.is_none();
+        let mut j = i + 1;
+        if plans[i].pousse {
+            while j < plans.len() && meme(&plans[i], &plans[j]) {
+                j += 1;
+            }
+            let total: f64 = plans[i..j].iter().map(|p| p.duree).sum();
+            let mut ecoule = 0.0;
+            for k in i..j {
+                parts[k] = Some((ecoule / total, (ecoule + plans[k].duree) / total));
+                ecoule += plans[k].duree;
+            }
+        }
+        i = j;
+    }
+    let mut poussee: Option<(usize, (f64, f64))> = None;
+    for (i, pl) in plans.iter_mut().enumerate() {
         let Some(a) = analyses.get(pl.rush.as_str()) else { continue };
         let g = grilles.entry(pl.rush.clone()).or_insert_with(|| Grille::nouvelle(a, finale, rognage, pas));
         let serre_max = g.plus_serre();
@@ -492,19 +532,29 @@ fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, r: &Regl
             }
             None => (voulu, (fx, fy)),
         };
+        // La suite d'une poussée garde le cran et l'ancrage de son début : le mouvement continue.
+        let (f0, f1) = parts[i].unwrap_or((0.0, 1.0));
+        let (cran, ancre) = match poussee {
+            Some(p) if parts[i].is_some() && f0 > 0.0 => p,
+            _ => (cran, ancre),
+        };
+        poussee = parts[i].map(|_| (cran, ancre));
         let fin = if pl.pousse && cran < serre_max { cran + 1 } else { cran };
+        let pente = g.niveaux[fin] / g.niveaux[cran];
+        let (za, zb) = (g.niveaux[cran] * pente.powf(f0), g.niveaux[cran] * pente.powf(f1));
         let z_trans = if pl.transition.as_deref() == Some("zoom") { ZOOM_TRANSITION } else { 1.0 };
-        let zone = g.cadre(g.niveaux[cran], ancre);
-        let serre = g.cadre((g.niveaux[fin] * z_trans).min(g.plafond.max(g.niveaux[fin])), ancre);
+        let zone = g.cadre(za, ancre);
+        let serre = g.cadre((zb * z_trans).min(g.plafond.max(zb)), ancre);
         pl.zone = zone;
-        pl.z_fin = g.niveaux[fin] / g.niveaux[cran];
+        pl.z_fin = zb / za;
+        pl.lineaire = parts[i].is_some() && (f0 > 0.0 || f1 < 1.0);
         pl.centre_serre = (
             ((serre.x + serre.w / 2.0 - zone.x) / zone.w).clamp(0.0, 1.0),
             ((serre.y + serre.h / 2.0 - zone.y) / zone.h).clamp(0.0, 1.0),
         );
         pl.agrandissement = sortie.0 as f64 / serre.w;
-        pl.visage_debut = g.niveaux[cran] * part;
-        pl.visage_fin = g.niveaux[fin] * part;
+        pl.visage_debut = za * part;
+        pl.visage_fin = zb * part;
         let tenu = match suite {
             Some((_, _, prec, _, t)) if *prec == cran => t + pl.duree,
             _ => pl.duree,
@@ -545,6 +595,8 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         cadre: "moyen".into(),
         transition: None,
         mots_forts: vec![],
+        transition_choisie: None,
+        mouvement: None,
     };
     // Corps : phrases gardées, dans l'ordre.
     let corps: Vec<&Phrase> = ps
@@ -553,15 +605,16 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         .collect();
     let debut_corps: HashSet<&str> = corps.iter().take(3).map(|ph| ph.cle.as_str()).collect();
     let mut entrees: Vec<Entree> = Vec::new();
+    let choisie = montage.map(|m| m.accroche_choisie).unwrap_or(false);
     if vrai(r, "accroche") {
         let mut duree = 0.0;
         for cle in montage.map(|m| m.accroche.clone()).unwrap_or_default() {
-            // Garde : l'accroche ne redit pas l'introduction.
-            if debut_corps.contains(cle.as_str()) {
+            // Garde : l'accroche du LLM ne redit pas l'introduction (celle choisie à la main est prise telle quelle).
+            if debut_corps.contains(cle.as_str()) && !choisie {
                 continue;
             }
             if let Some(ph) = par_cle.get(cle.as_str()) {
-                if duree + (ph.t1 - ph.t0) > 10.0 {
+                if duree + (ph.t1 - ph.t0) > 10.0 && !choisie {
                     break;
                 }
                 duree += ph.t1 - ph.t0;
@@ -575,7 +628,7 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         }
         // Repli : si le choix du LLM redisait l'introduction, on prend ses phrases « impact » les plus
         // engagées, situées après la première minute, courtes, jusqu'à huit secondes au total.
-        if entrees.is_empty() {
+        if entrees.is_empty() && !choisie {
             let mut candidates: Vec<&&Phrase> = corps
                 .iter()
                 .filter(|ph| ph.t0 > 60.0 && ph.t1 - ph.t0 <= 6.0 && !debut_corps.contains(ph.cle.as_str()))
@@ -649,9 +702,16 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         let partie = (!e.accroche).then(|| debut_partie.get(&ph.cle)).flatten();
         let veut = !e.accroche
             && !plans.is_empty()
-            && (premier_du_corps || partie.is_some() || d.transition.is_some());
-        if veut && style != "coupe" {
-            transition = Some(if style == "auto" { d.transition.clone().unwrap_or_else(|| "flash".into()) } else { style.clone() });
+            && (premier_du_corps || partie.is_some() || d.transition.is_some() || d.transition_choisie.is_some());
+        if veut {
+            // Le choix fait à la main prime ; « coupe » = aucune transition.
+            transition = match d.transition_choisie.as_deref() {
+                Some("coupe") => None,
+                Some(t) => Some(t.to_string()),
+                None if style == "coupe" => None,
+                None if style == "auto" => Some(d.transition.clone().unwrap_or_else(|| "flash".into())),
+                None => Some(style.clone()),
+            };
         }
         if !e.accroche {
             premier_du_corps = false;
@@ -703,8 +763,14 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         for (k, (s0, s1)) in segments.iter().enumerate() {
             let t0 = arrondi_image(*s0);
             let duree = arrondi_image(s1 - s0).max(1.0 / IPS);
-            let punch = d.regime == "rafale" && k % 2 == 1 && vrai(r, "punch_jumpcut") && zooms != "aucun";
-            let pousse = d.regime == "impact" && vrai(r, "zoom_anime") && zooms != "aucun";
+            // Mouvement choisi à la main, sinon celui du rythme (si le réglage général le permet).
+            let (punch, pousse) = match d.mouvement.as_deref() {
+                _ if zooms == "aucun" => (false, false),
+                Some("punch") => (k % 2 == 1, false),
+                Some("pousse") => (false, true),
+                Some(_) => (false, false),
+                None => (d.regime == "rafale" && k % 2 == 1 && vrai(r, "punch_jumpcut"), d.regime == "impact" && vrai(r, "zoom_anime")),
+            };
             let trans = if k == 0 { transition.clone() } else { None };
             if k == 0 {
                 if let Some(t) = &trans {
@@ -755,6 +821,7 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
                 visage_fin: 0.0,
                 punch,
                 pousse,
+                lineaire: false,
             });
             sortie_t += duree;
         }
@@ -884,6 +951,7 @@ pub fn plans_json(prog: &Programme) -> Value {
         .iter()
         .map(|pl| json!({"t": arr(pl.sortie_t0), "d": arr(pl.duree), "src": arr(pl.t0), "rush": pl.rush,
                          "phrase": pl.phrase, "regime": pl.regime, "cadre": pl.cadre, "accroche": pl.accroche,
+                         "punch": pl.punch, "pousse": pl.pousse,
                          "transition": pl.transition, "visage": [arr3(pl.visage_debut), arr3(pl.visage_fin)],
                          "agrandissement": arr(pl.agrandissement),
                          "cadre_source": [arr(pl.zone.x), arr(pl.zone.y), arr(pl.zone.w), arr(pl.zone.h)],
@@ -983,9 +1051,31 @@ mod tests {
             .collect();
         let ps = phrases_projet(&p, &analyses);
         let prog = programme(&p, &analyses, &ps, false);
+        // Soudure : deux phrases voisines n'en font plus qu'une, sous la clé de la première, et se séparent.
+        let mut soude = p.clone();
+        soude.fusions = vec![ps[1].cle.clone(), ps[2].cle.clone()];
+        // Comme le fait l'API au moment de souder : les corrections des morceaux deviennent celle du tout.
+        for ph in &ps[1..4] {
+            soude.corrections.remove(&ph.cle);
+        }
+        soude.corrections.insert(ps[1].cle.clone(), format!("{} {} {}", ps[1].texte, ps[2].texte, ps[3].texte));
+        let ps2 = phrases_projet(&soude, &analyses);
+        assert_eq!(ps2.len(), ps.len() - 2);
+        assert_eq!(ps2[1].fusionnees, vec![ps[2].cle.clone(), ps[3].cle.clone()]);
+        assert_eq!(ps2[1].texte, format!("{} {} {}", ps[1].texte, ps[2].texte, ps[3].texte));
+        assert_eq!(ps2[2].cle, ps[4].cle);
+        // Poussée : une seule avance continue par phrase, pas un zoom avant à chaque coupe.
+        for w in prog.plans.windows(2) {
+            if w[0].pousse && w[1].pousse && w[0].phrase == w[1].phrase && w[1].transition.is_none() && w[0].rush == w[1].rush {
+                let fin = w[0].zone.w / w[0].z_fin;
+                assert!((fin - w[1].zone.w).abs() < 1.0, "la poussée repart de zéro : {} puis {}", fin, w[1].zone.w);
+            }
+        }
         let mut par_cadre: HashMap<&str, Vec<f64>> = HashMap::new();
         for pl in &prog.plans {
-            par_cadre.entry(pl.cadre.as_str()).or_default().push((pl.zone.w * 10.0).round() / 10.0);
+            if !pl.pousse {
+                par_cadre.entry(pl.cadre.as_str()).or_default().push((pl.zone.w * 10.0).round() / 10.0);
+            }
         }
         for (k, v) in &par_cadre {
             let mut u = v.clone();
