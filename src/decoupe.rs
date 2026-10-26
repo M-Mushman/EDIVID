@@ -1191,6 +1191,14 @@ mod tests {
                 .map(|g| json!([g.debut, g.fin, g.mots])).collect::<Vec<_>>());
             std::fs::write(d.join("programme.json"), v.to_string()).unwrap();
             std::fs::write(d.join("reglages.json"), serde_json::to_string(&p.reglages).unwrap()).unwrap();
+            // Banc d'essai de l'interface : la vue du projet et le catalogue des réglages, tels que l'API les sert.
+            let proxys: Vec<String> = p.rushs.iter().map(|r| r.id.clone()).collect();
+            std::fs::write(d.join("vue.json"), crate::api::vue_projet(&p, &analyses, &proxys, false).to_string()).unwrap();
+            std::fs::write(d.join("catalogue.json"), crate::reglages::catalogue_json().to_string()).unwrap();
+            let mut prog_json = programme_json(&prog_a);
+            prog_json["rushs"] = json!(analyses.iter().map(|(rid, a)| json!({"id": rid, "duree": a.duree})).collect::<Vec<_>>());
+            prog_json["sous_titres_groupes"] = v["sous_titres_groupes"].clone();
+            std::fs::write(d.join("programme.json"), prog_json.to_string()).unwrap();
         }
         if let Ok(t) = std::env::var("EDIVID_SOURCE") {
             let t: f64 = t.parse().unwrap();

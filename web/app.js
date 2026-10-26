@@ -1096,7 +1096,7 @@ function dessinerStats() {
       h('div', { class: 'chiffre' }, h('b', {}, r.plans), h('span', {}, 'plans')),
       h('div', { class: 'chiffre' }, h('b', {}, `${fr(r.duree_moyenne_plan)} s`), h('span', {}, 'par plan en moyenne')),
       h('div', { class: 'chiffre' }, h('b', {}, r.zooms_animes + r.transitions), h('span', {}, 'zooms animés et transitions'))),
-    r.son ? h('p', { class: 'tres-petit muet', style: { margin: '10px 0 0' } }, icone('onde'), ` Son de cette vidéo — ${r.son}`,
+    r.son ? h('p', { class: 'tres-petit muet ligne-son' }, icone('onde'), ` Son de cette vidéo — ${r.son}`,
       E.aMettreAJour ? h('b', { style: { color: 'var(--alerte)' } }, ' · des changements attendent un nouvel aperçu') : null) : null,
     avert.length ? h('div', { class: 'aide', style: { marginTop: '12px', background: 'var(--alerte-doux)' } }, icone('alerte'), h('span', {}, avert.join(' · '))) : null,
     notes.length ? h('details', { class: 'notes' }, h('summary', { style: { cursor: 'pointer' } }, h('b', {}, 'Notes du monteur')),

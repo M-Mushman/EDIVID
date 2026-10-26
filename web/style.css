@@ -162,12 +162,17 @@ h3 { font-size: 14px; font-weight: 650; }
 .mise-en-page.tiroir-replie { grid-template-columns: minmax(0, 1fr) 36px; }
 .colonne { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 /* Panneaux 2 (aperçu) et 3 (texte) côte à côte ; le texte reste visible pendant qu'on fait défiler la page. */
-.atelier { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(340px, 1fr); gap: 14px; align-items: start; }
+/* Les trois colonnes ont la même hauteur : celle de la colonne vidéo. Le texte (panneau 3) et le tiroir n'imposent
+   pas la leur (contain: size) : ils prennent la hauteur de la rangée et font défiler leur contenu. */
+.mise-en-page { align-items: stretch; }
+.atelier { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(340px, 1fr); gap: 14px; align-items: stretch; }
 .atelier > .carte { min-width: 0; }
-.atelier > .carte:last-child:not(.replie) { position: sticky; top: 64px; display: flex; flex-direction: column; max-height: var(--haut-utile); }
+.atelier > .carte:last-child:not(.replie) { contain: size; min-height: 60vh; display: flex; flex-direction: column; }
 .atelier > .carte:last-child:not(.replie) > .carte-corps { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .atelier .phrases { max-height: none; flex: 1; min-height: 160px; }
-.panneau-droit { position: sticky; top: 64px; display: flex; flex-direction: row; height: var(--haut-utile); overflow: hidden; }
+.panneau-droit { contain: size; min-height: 60vh; display: flex; flex-direction: row; overflow: hidden; }
+.ligne-son { margin: 10px 0 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ligne-son > svg { width: 14px; height: 14px; flex: none; }
 .contenu-tiroir { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .panneau-droit.rentre .contenu-tiroir { display: none; }
 /* Poignée : bande verticale toujours visible sur le bord du tiroir. */
@@ -352,7 +357,7 @@ select.champ { padding: 8px 10px; margin-top: 8px; }
 .dock-tete > svg { width: 17px; height: 17px; color: var(--accent); flex: none; }
 .dock-tete .apercu-discussion { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .dock-tete .chevron svg { transition: transform .15s; transform: rotate(180deg); }
-.dock-discussion .messages { height: min(26vh, 260px); min-height: 0; flex: none; padding: 4px 16px 10px; }
+.dock-discussion .messages { max-height: min(26vh, 260px); min-height: 0; flex: none; padding: 4px 16px 10px; }
 .dock-discussion .suggestions { padding: 0 16px 8px; }
 .dock-discussion .saisie { border-top: 0; padding: 0 16px 10px; }
 .dock-discussion:not(.replie) .apercu-discussion { visibility: hidden; }
@@ -392,7 +397,7 @@ select.champ { padding: 8px 10px; margin-top: 8px; }
 @media (max-width: 1100px) {
   .mise-en-page, .mise-en-page.tiroir-replie { grid-template-columns: minmax(0, 1fr); }
   .atelier { grid-template-columns: minmax(0, 1fr); }
-  .atelier > .carte:last-child:not(.replie) { position: static; max-height: none; }
+  .atelier > .carte:last-child:not(.replie) { position: static; max-height: none; contain: none; min-height: 0; }
   .atelier .phrases { max-height: 560px; }
   /* Sur un écran étroit, le tiroir passe par-dessus le contenu, toujours accroché au bord droit. */
   .mise-en-page { padding-right: 52px; }

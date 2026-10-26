@@ -215,7 +215,14 @@ async fn supprimer_projet(State(etat): State<EtatPartage>, Path(id): Path<String
 async fn voir_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
     let p = etat.projet(&id).await?;
     let analyses = etat.analyses_du_projet(&p).await.unwrap_or_default();
-    let ps = decoupe::phrases_projet(&p, &analyses);
+    let proxys: Vec<String> = p.rushs.iter().filter(|r| etat.dossier_travail(&id, &r.id).join("proxy.mp4").exists())
+        .map(|r| r.id.clone()).collect();
+    Ok(Json(vue_projet(&p, &analyses, &proxys, etat.file.occupe(&id))))
+}
+
+/// Ce que l'interface reçoit d'un projet : le projet, ses phrases (décision, mots minutés), l'état de l'aperçu.
+pub fn vue_projet(p: &Projet, analyses: &[(String, std::sync::Arc<crate::modele::Analyse>)], proxys: &[String], occupe: bool) -> Value {
+    let ps = decoupe::phrases_projet(p, analyses);
     let decisions: HashMap<&str, &Decision> =
         p.montage.as_ref().map(|m| m.phrases.iter().map(|d| (d.cle.as_str(), d)).collect()).unwrap_or_default();
     let phrases: Vec<Value> = ps
@@ -227,19 +234,17 @@ async fn voir_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) ->
                               "mots": ph.mots.iter().map(|m| json!([(m.t0 * 100.0).round() / 100.0, (m.t1 * 100.0).round() / 100.0, m.mot]))
                                   .collect::<Vec<_>>()}))
         .collect();
-    let empreinte = crate::rendu::empreinte(&p);
+    let empreinte = crate::rendu::empreinte(p);
     let tous_prets = !p.rushs.is_empty() && p.rushs.iter().all(|r| r.etat == EtatRush::Pret);
-    let proxys: Vec<&str> = p.rushs.iter().filter(|r| etat.dossier_travail(&id, &r.id).join("proxy.mp4").exists())
-        .map(|r| r.id.as_str()).collect();
-    Ok(Json(json!({
+    json!({
         "proxys": proxys,
         "projet": p,
         "phrases": phrases,
         "pret_a_monter": tous_prets,
-        "occupe": etat.file.occupe(&id),
+        "occupe": occupe,
         // Un aperçu fait avant le dernier changement n'est plus à jour (avant ce champ : null, inconnu).
         "apercu_a_jour": p.apercu.as_ref().and_then(|s| s.rapport["empreinte"].as_str()).map(|e| e == empreinte),
-    })))
+    })
 }
 
 #[derive(Deserialize)]
