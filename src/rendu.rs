@@ -241,7 +241,8 @@ pub async fn sonder_media(fichier: &Path, nom: &str) -> Result<(String, Option<f
 
 /// Lance un capteur Python ; ses lignes {"etape","pct"} deviennent la progression.
 pub async fn capteur(etat: &EtatPartage, projet: &str, script: &str, args: &[String]) -> Result<()> {
-    let mut enfant = Command::new(&etat.cfg.python)
+    let python = if script == "rehausse.py" { &etat.cfg.python_rehaussement } else { &etat.cfg.python };
+    let mut enfant = Command::new(python)
         .arg(etat.cfg.racine.join("capteurs").join(script))
         .args(args)
         .env("HF_HUB_OFFLINE", "1")
@@ -265,7 +266,7 @@ pub async fn capteur(etat: &EtatPartage, projet: &str, script: &str, args: &[Str
             "transcription" => "Transcription de la parole",
             "visage" => "Repérage du visage",
             "nettete" => "Netteté IA",
-            "echo" => "Retrait de l'écho de la voix",
+            "rehaussement" => "Retrait de l'écho et du bruit (IA)",
             _ => continue,
         };
         if dernier.elapsed().as_millis() > 400 {
@@ -1008,19 +1009,34 @@ pub async fn lieu_direct(etat: &EtatPartage, nom: &str) -> Result<Option<(PathBu
     reponse_espace(etat, nom).await
 }
 
-/// Son du rush sans l'écho de la pièce (WPE, capteurs/echo.py), calculé une fois par rush et par dosage.
-async fn voix_sans_echo(etat: &EtatPartage, projet: &str, rush: &str, force: &str) -> Result<Option<PathBuf>> {
-    let part = match force {
-        "douce" => 0.6,
-        "forte" => 1.0,
-        _ => return Ok(None),
-    };
+/// Part de la voix débruitée par l'IA selon le réglage « Retirer l'écho de la voix » (None : pas de traitement).
+fn part_ia(force: &str) -> Option<f64> {
+    match force {
+        "douce" => Some(0.6),
+        "forte" => Some(1.0),
+        _ => None,
+    }
+}
+
+/// Débruiteur IA (capteurs/rehausse.py) sur un fichier, sous bail de la carte graphique.
+async fn debruiter(etat: &EtatPartage, projet: &str, entree: &Path, sortie: &Path, part: f64, duree_s: f64) -> Result<()> {
+    let bail = etat
+        .carte
+        .prendre(etat, projet, "other:rehaussement", carte::VRAM_REHAUSSEMENT_MO, (duree_s / 30.0 + 60.0) as u64)
+        .await?;
+    let res = capteur(etat, projet, "rehausse.py", &[entree.to_string_lossy().into(), sortie.to_string_lossy().into(), format!("{part}")]).await;
+    etat.carte.rendre(bail).await;
+    res
+}
+
+/// Son du rush sans l'écho ni le bruit de la pièce (débruiteur IA), calculé une fois par rush et par dosage.
+async fn voix_sans_echo(etat: &EtatPartage, projet: &str, rush: &str, force: &str, duree_s: f64) -> Result<Option<PathBuf>> {
+    let Some(part) = part_ia(force) else { return Ok(None) };
     let dossier = etat.dossier_travail(projet, rush);
-    let f = dossier.join(format!("voix_sans_echo_{force}.wav"));
+    let f = dossier.join(format!("voix_ia_{force}.wav"));
     if !f.exists() {
-        let provisoire = dossier.join(format!("voix_sans_echo_{force}.en-cours.wav"));
-        capteur(etat, projet, "echo.py", &[dossier.join("mezz.mkv").to_string_lossy().into(),
-                                           provisoire.to_string_lossy().into(), format!("{part}")]).await?;
+        let provisoire = dossier.join(format!("voix_ia_{force}.en-cours.wav"));
+        debruiter(etat, projet, &dossier.join("mezz.mkv"), &provisoire, part, duree_s).await?;
         tokio::fs::rename(&provisoire, &f).await?;
     }
     Ok(Some(f))
@@ -1048,10 +1064,9 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
                        "-vn".into(), "-ar".into(), "48000".into(), "-c:a".into(), "pcm_s16le".into(), extrait.to_string_lossy().into()])
         .await?;
     let mut source = extrait.clone();
-    let part = match texte(r, "dereverberation").as_str() { "douce" => Some(0.6), "forte" => Some(1.0), _ => None };
-    if let Some(part) = part {
+    if let Some(part) = part_ia(&texte(r, "dereverberation")) {
         let sans = dossier.join(format!("{empreinte}-sans-echo.wav"));
-        capteur(etat, projet, "echo.py", &[extrait.to_string_lossy().into(), sans.to_string_lossy().into(), format!("{part}")]).await?;
+        debruiter(etat, projet, &extrait, &sans, part, duree).await?;
         source = sans;
     }
     let gain = sonie_rush(etat, projet, rush).await.map(|i| (-23.0 - i).clamp(-12.0, 30.0)).unwrap_or(0.0);
@@ -1161,7 +1176,8 @@ pub fn empreinte(p: &Projet) -> String {
 /// Le son appliqué, en clair, pour le rapport : on sait avec quoi l'aperçu a été fait.
 pub fn resume_son(r: &crate::reglages::Reglages) -> String {
     let choix = |cle: &str| crate::reglages::libelle_choix(cle, &texte(r, cle)).unwrap_or_else(|| texte(r, cle));
-    let mut morceaux = vec![format!("bruit : {}", choix("debruitage").to_lowercase()), format!("écho : {}", choix("reverberation").to_lowercase())];
+    let mut morceaux = vec![format!("bruit : {}", choix("debruitage").to_lowercase()), format!("écho : {}", choix("reverberation").to_lowercase()),
+                            format!("écho et bruit retirés par l'IA : {}", choix("dereverberation").to_lowercase())];
     morceaux.push(if vrai(r, "voix") { format!("voix : {}", choix("timbre_voix").to_lowercase()) } else { "voix : sans traitement".into() });
     if vrai(r, "deesseur") {
         morceaux.push("« s » adoucis".into());
@@ -1561,6 +1577,9 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["duree_rendu_s"] = json!(debut.elapsed().as_secs());
     rapport["encodeur"] = json!(if nvenc { "NVENC" } else { "x264" });
     rapport["son"] = json!(resume_son(&p.reglages));
+    // Ce que l'aperçu a dans son son (le reste se joue en direct) : l'interface prévient s'il ne suit plus les réglages.
+    rapport["son_inscrit"] = json!({"debruitage": texte(&p.reglages, "debruitage"), "dereverberation": texte(&p.reglages, "dereverberation"),
+                                    "calage_son": nombre(&p.reglages, "calage_son")});
     // Aperçu sans PostProd : l'interface l'applique en direct (un ancien aperçu l'a déjà dans son image).
     rapport["postprod_direct"] = json!(apercu);
     rapport["habillage_direct"] = json!(apercu);
@@ -1604,8 +1623,8 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
         analyses.iter().map(|(id, a)| (id.clone(), (a.largeur, a.hauteur))).collect();
     let mezz = |rush: &str| etat.dossier_travail(projet, rush).join("mezz.mkv");
     let mut voix: std::collections::HashMap<String, PathBuf> = Default::default();
-    for (rush, _) in analyses {
-        if let Some(f) = voix_sans_echo(etat, projet, rush, &texte(&p.reglages, "dereverberation")).await? {
+    for (rush, a) in analyses {
+        if let Some(f) = voix_sans_echo(etat, projet, rush, &texte(&p.reglages, "dereverberation"), a.duree).await? {
             voix.insert(rush.clone(), f);
         }
     }

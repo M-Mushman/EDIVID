@@ -256,8 +256,9 @@ pub const CATALOGUE: &[Reglage] = &[
         section: "Son",
         cle: "dereverberation",
         titre: "Retirer l'écho de la voix",
-        aide: "Retranche l'écho mêlé à la voix pendant qu'elle parle (méthode WPE, sur le processeur ; environ une minute par \
-               dizaine de minutes de rush, la première fois). Douce : en partie, le son garde de l'air.",
+        aide: "Retire par IA l'écho de la pièce et le bruit, pendant que la voix parle comme entre les phrases, sans changer les mots \
+               (débruiteur de Resemble Enhance, sur la carte graphique ; quelques secondes par rush, la première fois). Douce : en \
+               partie, le son garde de l'air.",
         genre: Genre::Choix(&[("non", "Non"), ("douce", "Douce"), ("forte", "Forte")]),
         defaut: || json!("non"),
     },

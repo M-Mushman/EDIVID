@@ -6,7 +6,8 @@ transitions, sous-titres — puis on l'ajuste en discutant avec lui, dans une in
 
 - `src/` : serveur Rust (axum) — file de travaux, découpe et cadrage, rendu ffmpeg, LLM, API.
 - `capteurs/` : adaptateurs de modèles en Python — `analyse.py` (Whisper large-v3, enveloppe
-  sonore, visage YuNet), `nettete.py` (Real-ESRGAN, GFPGAN), `echo.py` (retrait de l'écho, WPE, processeur).
+  sonore, visage YuNet), `nettete.py` (Real-ESRGAN, GFPGAN), `rehausse.py` (écho et bruit retirés par IA : débruiteur de Resemble Enhance,
+  environnement à part `.venv-rehaussement`, poids dans `modeles/resemble-enhance`).
 - `web/` : interface (HTML, CSS, JavaScript sans dépendance).
 - `deploy/` : service utilisateur systemd et script d'installation.
 - `docs/plan-v0.1.md` : plan technique ; `p0/` : la preuve de concept d'origine.
@@ -16,8 +17,17 @@ transitions, sous-titres — puis on l'ajuste en discutant avec lui, dans une in
 ```
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python faster-whisper opencv-python-headless numpy soundfile \
-    nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*" torch spandrel nara_wpe
+    nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*" torch spandrel
 # modèles dans modeles/ : yunet.onnx, realesr-general-x4v3.pth, GFPGANv1.4.pth
+# débruiteur IA de la voix, dans son propre environnement (le paquet fige d'anciennes versions) :
+uv venv --python 3.12 .venv-rehaussement
+uv pip install --python .venv-rehaussement/bin/python --index-url https://download.pytorch.org/whl/cu130 \
+    --extra-index-url https://pypi.org/simple torch==2.14.0 torchaudio
+uv pip install --python .venv-rehaussement/bin/python --no-deps resemble-enhance==0.0.1
+uv pip install --python .venv-rehaussement/bin/python omegaconf librosa resampy rich tabulate soundfile tqdm \
+    "numpy<2" "pandas<2.3" "scipy<1.15" "matplotlib<3.10"
+# poids (licence MIT) dans modeles/resemble-enhance/enhancer_stage2 : hparams.yaml, ds/G/latest,
+# ds/G/default/mp_rank_00_model_states.pt (huggingface.co/ResembleAI/resemble-enhance)
 ./deploy/installer.sh
 ```
 
@@ -62,8 +72,8 @@ code d'accès tiré au premier lancement dans `donnees/acces.json`.
 - Onglet PostProd (couleur, lissage du teint, diffusion, netteté, grain, vignette, bandes cinéma) et
   bibliothèque de looks mode et beauté (`bibliotheque/looks.json`) ; avant/après sur l'image affichée.
 - Ambiances sonores (`bibliotheque/ambiances.json`) : studio feutré, chambre, podcast, voix off, extérieur,
-  salles, cathédrale, radio, téléphone ; écoute d'essai de vingt secondes avant d'appliquer. Retrait de l'écho
-  (WPE), porte de traîne, acoustique de lieu par convolution, voix ramenée à −23 LUFS avant traitement.
+  salles, cathédrale, radio, téléphone ; écoute d'essai de vingt secondes avant d'appliquer. Écho et bruit
+  retirés par IA, porte de traîne, acoustique de lieu par convolution, voix ramenée à −23 LUFS avant traitement.
 - Encodage NVENC si le paquet `libnvidia-encode-<branche>` du pilote est installé, sinon x264.
 
 Avant tout travail sur la carte graphique, EDIVID prend un bail auprès du contrôleur d'admission

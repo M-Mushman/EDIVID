@@ -20,6 +20,8 @@ pub struct Config {
     /// azothd, pour les baux de carte graphique.
     pub azothd: String,
     pub python: PathBuf,
+    /// Python du débruiteur IA (environnement à part : le paquet fige d'anciennes versions).
+    pub python_rehaussement: PathBuf,
     pub code_acces: String,
     /// Valeur du témoin de session, dérivée du code.
     pub jeton: String,
@@ -69,6 +71,7 @@ impl Config {
         let jeton = format!("{:x}", Sha256::digest(format!("{}:{}", acces.sel, acces.code)));
         Ok(Self {
             python: racine.join(".venv/bin/python"),
+            python_rehaussement: racine.join(".venv-rehaussement/bin/python"),
             racine,
             donnees,
             ecoute,
