@@ -268,7 +268,7 @@ const E = {
   projetId: null,
   vue: null,
   etat: null,
-  onglet: 'assistant',
+  onglet: 'reglages',
   lecteur: 'apercu',
   rushLecteur: null,
   programme: null,
@@ -461,7 +461,6 @@ async function ouvrirProjet(id) {
     E.vue = null;
     E.progression = null;
     E.aMettreAJour = false;
-    E.onglet = 'assistant';
     construireProjet();
     if (!document.hidden) ouvrirFlux(id);
   }
@@ -545,8 +544,9 @@ function construireProjet() {
   n.rushs = h('div', { class: 'carte' });
   n.lecteur = h('div', { class: 'carte' });
   n.phrases = h('div', { class: 'carte' });
-  n.panneau = h('div', { class: 'carte panneau-droit' });
+  n.panneau = h('aside', { class: 'carte panneau-droit', 'aria-label': 'Réglages, médias, textes et post-production' });
   n.barre = h('div', { class: 'barre-actions-int' });
+  n.dockDiscussion = h('section', { class: 'dock-discussion', 'aria-label': 'Discussion avec EDIVID' });
   remplir($app, 
     h('header', { class: 'barre-haut' }, h('div', { class: 'barre-haut-int' },
       h('button', { class: 'btn icone fantome', title: 'Retour aux projets', onclick: () => { location.hash = '#/'; } }, icone('retour')),
@@ -559,10 +559,14 @@ function construireProjet() {
       boutonTheme(),
       h('button', { class: 'btn icone fantome danger', title: 'Supprimer le projet', onclick: supprimerProjet }, icone('corbeille')))),
     n.parcours,
-    h('main', { class: 'mise-en-page' },
-      h('div', { class: 'colonne' }, n.rushs, n.lecteur, n.phrases),
+    n.main = h('main', { class: 'mise-en-page' },
+      h('div', { class: 'colonne' }, n.rushs,
+        // Panneaux 2 et 3 côte à côte : on lit la vidéo en suivant son texte.
+        h('div', { class: 'atelier' }, n.lecteur, n.phrases)),
       n.panneau),
-    h('div', { class: 'barre-actions' }, n.barre));
+    n.dock = h('div', { class: 'dock' }, n.dockDiscussion, h('div', { class: 'barre-actions' }, n.barre)));
+  // La page réserve en bas la hauteur du bloc fixe (discussion et actions), qui change quand on le replie.
+  new ResizeObserver(() => document.documentElement.style.setProperty('--dock', `${n.dock.offsetHeight}px`)).observe(n.dock);
   construireLecteur();
   remplir(n.lecteur, enteteRepliable('lecteur', '2. Aperçu du montage', n.ongletsLecteur), n.corpsLecteur);
   appliquerReplie(n.lecteur, 'lecteur');
@@ -587,6 +591,7 @@ function dessinerTout() {
   dessinerLecteur();
   dessinerPhrases();
   dessinerPanneau();
+  dessinerDiscussion();
   dessinerBarre();
 }
 
@@ -827,6 +832,7 @@ function changerLecteur(mode, rush) {
   E.lecteur = mode;
   if (rush) E.rushLecteur = rush;
   dessinerLecteur();
+  dessinerPhrases();
 }
 
 function dessinerOutilsLecteur() {
@@ -1136,7 +1142,7 @@ function suivreLecture() {
     cle = E.vue.phrases.find((ph) => ph.rush === srcRush && t >= ph.t0 && t <= ph.t1)?.cle || null;
   } else {
     const pl = plansAffiches().find((x) => t >= x.t && t < x.t + x.d);
-    cle = pl && !pl.accroche ? pl.phrase : null;
+    cle = pl ? (pl.accroche ? CLE_ACCROCHE : pl.phrase) : null;
   }
   if (cle !== E.phraseJouee) {
     E.phraseJouee = cle;
@@ -1290,10 +1296,35 @@ function dessinerCommentaire(etape = 'saisie') {
 
 // ------------------------------------------------------------------ transcription
 
-const REGIMES = ['rafale', 'impact', 'respiration'];
-const CADRES = ['large', 'moyen', 'visage', 'yeux'];
-const NOMS_REGIME = { respiration: 'Respiration', rafale: 'Rafale', impact: 'Impact' };
+const NOMS_REGIME = { rafale: 'Rafale', impact: 'Impact', respiration: 'Respiration' };
 const NOMS_CADRE = { large: 'Plan large', moyen: 'Plan moyen', visage: 'Gros plan', yeux: 'Yeux' };
+const AIDE_REGIME = 'Rythme de la phrase, sans toucher au cadre — Rafale : coupes serrées, un plan sur deux resserré d’un cran. '
+  + 'Impact : coupe sèche, l’image pousse vers le visage pendant le plan. Respiration : les silences sont gardés, le plan est tenu.';
+const AIDE_CADRE = 'Cadre de la phrase — Plan large : l’image entière. Plan moyen : buste. Gros plan : visage. Yeux : le plus serré que la vidéo permet, centré sur le regard.';
+/** Ligne de l'accroche (phrases reprises en ouverture) dans le texte : elle se surligne pendant qu'elle joue. */
+const CLE_ACCROCHE = '__accroche';
+
+function menuPhrase(cle, champ, valeur, noms, aide) {
+  return h('select', { class: `puce ${champ === 'regime' ? valeur : ''}`, title: aide, 'aria-label': champ === 'regime' ? 'Rythme' : 'Cadre',
+    onchange: (e) => changerPhrase(cle, { [champ]: e.target.value }) },
+  Object.entries(noms).map(([v, l]) => h('option', { value: v, selected: v === valeur }, l)));
+}
+
+/** Les phrases jouées en accroche dans l'aperçu, dans leur ordre. */
+function ligneAccroche() {
+  const plans = plansAffiches().filter((x) => x.accroche);
+  if (!plans.length) return null;
+  const cles = [...new Set(plans.map((x) => x.phrase))];
+  const textes = cles.map((c) => E.vue.phrases.find((ph) => ph.cle === c)?.texte).filter(Boolean);
+  return h('div', { class: 'phrase impact accroche-ligne', 'data-cle': CLE_ACCROCHE },
+    h('div', { class: 'temps' }, minutes(plans[0].t)),
+    h('div', { style: { minWidth: 0 } },
+      h('div', { class: 'etiquette-accroche' }, 'Accroche — reprise en ouverture de la vidéo'),
+      h('div', { class: 'texte', style: { cursor: 'pointer' }, title: 'Clic : écouter l’accroche',
+        onclick: () => { if (E.lecteur === 'origine') changerLecteur('apercu'); setTimeout(() => { E.noeuds.video.currentTime = plans[0].t + 0.01; E.noeuds.video.play(); }, 50); } },
+      textes.map((t) => `« ${t} »`).join(' … '))),
+    h('div', { class: 'boutons' }));
+}
 
 async function changerPhrase(cle, changement) {
   try {
@@ -1309,7 +1340,8 @@ function dessinerPhrases() {
     || (E.filtre === 'gardees' ? ph.decision.garder : !ph.decision.garder));
   const nbCoupees = phrases.filter((ph) => ph.decision && !ph.decision.garder).length;
   const debut = E.noeuds.listePhrases?.scrollTop || 0;
-  E.noeuds.listePhrases = h('div', { class: 'phrases' }, visibles.map((ph) => {
+  const accroche = monte && E.lecteur !== 'origine' && E.filtre !== 'coupees' ? ligneAccroche() : null;
+  E.noeuds.listePhrases = h('div', { class: 'phrases' }, accroche, visibles.map((ph) => {
     const d = ph.decision;
     const classe = d ? (d.garder ? d.regime : 'coupee') : '';
     const corrigee = !!p.corrections?.[ph.cle];
@@ -1321,8 +1353,8 @@ function dessinerPhrases() {
           onclick: () => allerALaPhrase(ph.cle), ondblclick: () => { E.edition = ph.cle; dessinerPhrases(); } },
           ph.texte, corrigee ? h('span', { class: 'marque-corrige', title: 'Texte corrigé à la main' }, 'corrigé') : null),
         d && d.garder ? h('div', { class: 'etiquettes' },
-          h('button', { class: `puce ${d.regime}`, title: 'Régime de la phrase — cliquez pour changer', onclick: () => changerPhrase(ph.cle, { regime: REGIMES[(REGIMES.indexOf(d.regime) + 1) % 3] }) }, NOMS_REGIME[d.regime]),
-          h('button', { class: 'puce', title: 'Cadre — cliquez pour changer', onclick: () => changerPhrase(ph.cle, { cadre: CADRES[(CADRES.indexOf(d.cadre) + 1) % 4] }) }, NOMS_CADRE[d.cadre]),
+          menuPhrase(ph.cle, 'regime', d.regime, NOMS_REGIME, AIDE_REGIME),
+          menuPhrase(ph.cle, 'cadre', d.cadre, NOMS_CADRE, AIDE_CADRE),
           p.incrustations.filter((i) => i.phrase === ph.cle).map((inc) => h('span', { class: 'puce puce-incrustation', title: `${nomIncrustation(inc)} — ${fr(inc.duree)} s` },
             `✦ ${nomIncrustation(inc).slice(0, 26)}`,
             h('button', { class: 'puce-retirer', title: 'Retirer cette incrustation', 'aria-label': `Retirer ${nomIncrustation(inc)}`,
@@ -1343,7 +1375,7 @@ function dessinerPhrases() {
     h('div', { class: 'carte-corps' },
       phrases.length === 0 ? h('p', { class: 'muet petit', style: { margin: 0 } }, 'La transcription apparaîtra ici après l’analyse.')
         : !monte ? h('div', { class: 'aide', style: { marginBottom: '10px' } }, icone('info'), h('span', {}, 'Voici ce qui est dit dans vos rushs. Proposez un montage : le LLM décidera, phrase par phrase, ce qu’il garde, le rythme et le cadre.'))
-          : h('p', { class: 'tres-petit muet', style: { margin: '0 0 8px' } }, 'Cliquez une phrase pour l’écouter, double-cliquez pour corriger son texte ; ses étiquettes changent le régime ou le cadre ; les ciseaux la coupent ; la baguette pose une incrustation.'),
+          : h('p', { class: 'tres-petit muet', style: { margin: '0 0 8px' } }, 'Cliquez une phrase pour l’écouter, double-cliquez pour corriger son texte ; ses deux menus changent le rythme ou le cadre (l’un ne touche jamais l’autre) ; les ciseaux la coupent ; la baguette pose une incrustation.'),
       phrases.length ? zoneRemplacer() : null,
       E.noeuds.listePhrases));
   E.noeuds.listePhrases.scrollTop = debut;
@@ -1351,12 +1383,13 @@ function dessinerPhrases() {
   suivreLecture();
 }
 
-// ------------------------------------------------------------------ panneau droit
+// ------------------------------------------------------------------ panneau latéral et discussion
 
 function construirePanneau() {
   const n = E.noeuds;
   n.onglets = h('div', { class: 'onglets', role: 'tablist' });
   n.corpsPanneau = h('div', { style: { display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 } });
+  remplir(n.panneau, n.onglets, n.corpsPanneau);
   n.messages = h('div', { class: 'messages' });
   n.saisie = h('textarea', { rows: '1', placeholder: 'Demandez un changement…', 'aria-label': 'Message pour EDIVID' });
   n.saisie.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); envoyer(); } });
@@ -1368,30 +1401,48 @@ function construirePanneau() {
     h('div', { class: 'saisie' },
       h('button', { class: 'btn icone fantome', title: 'Bibliothèque de demandes', onclick: () => afficherBibliotheque() }, icone('livre')),
       n.saisie, n.garder, n.envoyer));
-  remplir(n.panneau, n.onglets, n.corpsPanneau);
+  n.apercuDiscussion = h('span', { class: 'apercu-discussion muet' });
+  n.chevronDiscussion = h('button', { class: 'btn icone fantome chevron', title: 'Replier ou déplier la discussion', onclick: (e) => { e.stopPropagation(); basculerDiscussion(); } }, icone('chevron'));
+  n.teteDiscussion = h('div', { class: 'dock-tete', onclick: () => basculerDiscussion() },
+    icone('discussion'), h('b', {}, 'Assistant'), n.apercuDiscussion, n.chevronDiscussion);
+  remplir(n.dockDiscussion, h('div', { class: 'dock-int' }, n.teteDiscussion, n.discussion));
+  appliquerDiscussion();
+}
+
+function appliquerDiscussion() {
+  const n = E.noeuds;
+  const replie = estReplie('discussion');
+  n.dockDiscussion.classList.toggle('replie', replie);
+  n.chevronDiscussion.setAttribute('aria-expanded', replie ? 'false' : 'true');
+}
+
+function basculerDiscussion(ouvrir) {
+  const replie = ouvrir === undefined ? !estReplie('discussion') : !ouvrir;
+  stocker('edivid_replie_discussion', replie ? '1' : '0');
+  appliquerDiscussion();
+  if (!replie) E.noeuds.messages.scrollTop = E.noeuds.messages.scrollHeight;
 }
 
 function dessinerPanneau() {
   const n = E.noeuds;
   const p = E.vue.projet;
   const onglets = [
-    ['assistant', 'discussion', 'Assistant', 0],
     ['reglages', 'reglages', 'Réglages', 0],
     ['medias', 'image', 'Médias', p.medias.length],
     ['effets', 'baguette', 'Textes', p.incrustations.length],
     ['postprod', 'etincelles', 'PostProd', 0],
   ];
+  const replie = estReplie('panneau');
   appliquerReplie(n.panneau, 'panneau');
-  remplir(n.onglets, ...onglets.map(([id, ic, l, compte]) =>
-    h('button', { role: 'tab', class: E.onglet === id ? 'actif' : '', 'aria-selected': E.onglet === id ? 'true' : 'false',
-      onclick: () => { E.onglet = id; if (estReplie('panneau')) { stocker('edivid_replie_panneau', '0'); } dessinerPanneau(); } }, icone(ic), l, compte ? h('span', { class: 'compte' }, compte) : null)),
-    h('button', { class: 'chevron-panneau', title: 'Replier ou déplier ce panneau', 'aria-expanded': estReplie('panneau') ? 'false' : 'true',
-      onclick: () => { stocker('edivid_replie_panneau', estReplie('panneau') ? '0' : '1'); dessinerPanneau(); } }, icone('chevron')));
-  if (E.onglet === 'assistant') {
-    dessinerDiscussion();
-    if (n.corpsPanneau.firstChild !== n.discussion) remplir(n.corpsPanneau, n.discussion);
-    return;
-  }
+  n.main.classList.toggle('tiroir-replie', replie);
+  remplir(n.onglets,
+    h('button', { class: 'chevron-panneau', title: replie ? 'Ouvrir le panneau des réglages' : 'Rentrer le panneau sur le côté', 'aria-expanded': replie ? 'false' : 'true',
+      onclick: () => { stocker('edivid_replie_panneau', replie ? '0' : '1'); dessinerPanneau(); } }, icone('chevron')),
+    ...onglets.map(([id, ic, l, compte]) =>
+      h('button', { role: 'tab', class: E.onglet === id ? 'actif' : '', 'aria-selected': E.onglet === id ? 'true' : 'false', title: l,
+        onclick: () => { E.onglet = id; if (replie) stocker('edivid_replie_panneau', '0'); dessinerPanneau(); } },
+      icone(ic), h('span', { class: 'libelle' }, l), compte ? h('span', { class: 'compte' }, compte) : null)));
+  if (replie) return;
   const corps = h('div', { class: 'onglet-corps' });
   if (E.onglet === 'reglages') dessinerReglages(corps);
   if (E.onglet === 'medias') dessinerMedias(corps);
@@ -1434,6 +1485,8 @@ function dessinerDiscussion() {
     h('button', { onclick: () => envoyer(s) }, s)));
   n.saisie.disabled = E.attenteReponse;
   n.envoyer.disabled = E.attenteReponse;
+  const dernier = p.discussion[p.discussion.length - 1];
+  n.apercuDiscussion.textContent = E.attenteReponse ? 'EDIVID réfléchit…' : dernier ? dernier.texte.replace(/\s+/g, ' ') : '';
 }
 
 async function envoyer(texte) {
@@ -2133,8 +2186,7 @@ async function chargerBibliotheque(forcer = false) {
 /** Place une demande dans la saisie ; le premier [crochet] est sélectionné, prêt à remplacer. */
 function insererDemande(texte) {
   const n = E.noeuds;
-  E.onglet = 'assistant';
-  dessinerPanneau();
+  basculerDiscussion(true);
   n.saisie.value = texte;
   n.saisie.dispatchEvent(new Event('input'));
   n.saisie.focus();

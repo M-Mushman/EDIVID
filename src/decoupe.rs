@@ -13,7 +13,6 @@ pub const IPS: f64 = 30.0;
 const PAUSE_PHRASE: f64 = 0.45;
 const PAS_ENVELOPPE: f64 = 0.01;
 const HESITATIONS: &[&str] = &["euh", "heu", "hum", "hmm", "euhm", "bah", "mmh"];
-const ZOOM_MAX: f64 = 4.5;
 /// Au-delà de cet agrandissement, la netteté IA est appliquée au plan (rendu final).
 pub const SEUIL_NETTETE: f64 = 1.6;
 const ZOOM_TRANSITION: f64 = 1.4;
@@ -25,7 +24,8 @@ pub const AGRANDISSEMENT_MAX: f64 = 3.0;
 /// Écart minimal entre deux cadrages pour qu'un changement se lise comme voulu : en dessous, l'œil le prend
 /// pour un sursaut de caméra.
 pub const PAS_MIN: f64 = 1.2;
-/// Durée minimale d'un cadrage avant d'en changer sur une coupe franche (secondes).
+/// Durée minimale d'un cadrage avant qu'un changement automatique (punch, recentrage) le modifie
+/// (secondes). Le cadre demandé pour une phrase s'applique, lui, dès sa première image.
 const MAINTIEN_MIN: f64 = 2.5;
 /// Le visage peut s'écarter de l'ancrage du cadre de 10 % de sa taille avant qu'on recadre.
 const TOLERANCE_ANCRAGE: f64 = 0.10;
@@ -353,6 +353,7 @@ struct Grille {
     haut: f64,
     base: (f64, f64),
     niveaux: Vec<f64>,
+    plafond: f64,
 }
 
 impl Grille {
@@ -362,7 +363,9 @@ impl Grille {
         let utile = (source.0, source.1 - haut);
         let aspect = sortie.0 as f64 / sortie.1 as f64;
         let base = if utile.0 / utile.1 > aspect { (utile.1 * aspect, utile.1) } else { (utile.0, utile.0 / aspect) };
-        let plafond = ZOOM_MAX.min(AGRANDISSEMENT_MAX * base.0 / sortie.0 as f64).max(1.0);
+        // Seule borne : l'agrandissement que la source supporte (une source 4K se resserre deux fois plus
+        // qu'une source 1080p).
+        let plafond = (AGRANDISSEMENT_MAX * base.0 / sortie.0 as f64).max(1.0);
         // De l'image entière au plafond, en pas égaux : le nombre de pas qui approche le mieux le pas voulu,
         // sans jamais descendre sous PAS_MIN (exemple : plafond ×1,47, pas voulu 30 % → deux pas de 21 %).
         let etendue = plafond.ln();
@@ -377,7 +380,7 @@ impl Grille {
             }
             None => vec![1.0],
         };
-        Grille { source, haut, base, niveaux }
+        Grille { source, haut, base, niveaux, plafond }
     }
 
     fn plus_serre(&self) -> usize {
@@ -401,18 +404,48 @@ impl Grille {
 }
 
 /// Visage d'un plan (centre et largeur, en pixels de la source), mesuré sur le plan élargi d'une seconde
-/// et demie de chaque côté, pour ne pas suivre le tremblement du repérage.
-fn visage_plan(a: &Analyse, t0: f64, t1: f64) -> Option<(f64, f64, f64)> {
-    visage_median(a, t0 - 1.5, t1 + 1.5, false).map(|b| {
-        let (l, h) = (a.largeur as f64, a.hauteur as f64);
-        (((b[0] + b[2]) / 2.0) * l, ((b[1] + b[3]) / 2.0) * h, (b[2] - b[0]) * l)
-    })
+/// et demie de chaque côté, pour ne pas suivre le tremblement du repérage. Pour le cadre « yeux », le
+/// centre est celui des yeux, la largeur reste celle du visage.
+fn visage_plan(a: &Analyse, t0: f64, t1: f64, yeux: bool) -> Option<(f64, f64, f64)> {
+    let (l, h) = (a.largeur as f64, a.hauteur as f64);
+    let v = visage_median(a, t0 - 1.5, t1 + 1.5, false)?;
+    let c = if yeux { visage_median(a, t0 - 1.5, t1 + 1.5, true).filter(|y| y[2] > y[0]).unwrap_or(v) } else { v };
+    Some((((c[0] + c[2]) / 2.0) * l, ((c[1] + c[3]) / 2.0) * h, (v[2] - v[0]) * l))
 }
 
-/// Cadre tous les plans, dans l'ordre du montage. Un cadrage tenu ne bouge pas d'un pixel. D'une coupe
-/// franche à la suivante, on garde le même cadre ou on change d'un cran entier de la grille, jamais d'un
-/// micro-recadrage, et pas avant d'avoir tenu le cadrage MAINTIEN_MIN. Le cadre ne se recentre sur le visage
-/// que s'il s'est vraiment déplacé, et alors avec un changement de cran. Une transition remet tout à plat.
+/// Cran de chaque cadre (large, moyen, visage, yeux) pour un visage occupant `part` de la largeur de l'image
+/// entière. Chaque cadre vise une taille de visage à l'écran ; quand la source ne permet pas de l'atteindre,
+/// les cadres restent tout de même distincts et dans l'ordre tant que la grille a assez de crans : « yeux »
+/// est toujours le plus serré possible, « large » toujours l'image entière.
+fn crans_cadres(g: &Grille, part: f64, intensite: f64) -> [usize; 4] {
+    if part <= 0.0 {
+        return [0; 4];
+    }
+    let serre = g.plus_serre();
+    let mut c = [0, g.cran(0.17 * intensite / part), g.cran(0.30 * intensite / part), g.cran(0.46 * intensite / part)];
+    for i in 1..4 {
+        c[i] = c[i].max(c[i - 1] + 1).min(serre);
+    }
+    for i in (1..3).rev() {
+        c[i] = c[i].min(c[i + 1].saturating_sub(1)).max(1.min(serre));
+    }
+    c
+}
+
+fn indice_cadre(cadre: &str) -> usize {
+    match cadre {
+        "moyen" => 1,
+        "visage" => 2,
+        "yeux" => 3,
+        _ => 0,
+    }
+}
+
+/// Cadre tous les plans, dans l'ordre du montage. Un cadrage tenu ne bouge pas d'un pixel. Chaque phrase reçoit
+/// directement le cran de son cadre (un plan large revient toujours à l'image entière), indépendamment de ce
+/// qui précède : changer une phrase ne décale pas les cadres des suivantes. Les changements automatiques
+/// (punch d'une rafale, recentrage sur un visage qui s'est déplacé) attendent que le cadrage ait tenu
+/// MAINTIEN_MIN, et se font d'un cran entier, jamais d'un micro-recadrage. Une transition remet tout à plat.
 fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, r: &Reglages, finale: (u32, u32), sortie: (u32, u32)) {
     let pas = (1.0 + nombre(r, "ecart_cadrage") / 100.0).max(PAS_MIN);
     let rognage = nombre(r, "rognage_haut") / 100.0;
@@ -422,43 +455,37 @@ fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, r: &Regl
         _ => 1.0,
     };
     let mut grilles: HashMap<String, Grille> = HashMap::new();
-    // Cadrage en cours : rush, cran atteint à la fin du plan précédent, ancrage, durée déjà tenue.
-    let mut courant: Option<(String, usize, (f64, f64), f64)> = None;
+    // Cadrage en cours : rush, phrase, cran atteint à la fin du plan précédent, ancrage, durée déjà tenue.
+    let mut courant: Option<(String, String, usize, (f64, f64), f64)> = None;
     for pl in plans.iter_mut() {
         let Some(a) = analyses.get(pl.rush.as_str()) else { continue };
         let g = grilles.entry(pl.rush.clone()).or_insert_with(|| Grille::nouvelle(a, finale, rognage, pas));
         let serre_max = g.plus_serre();
-        let (fx, fy, fw) = visage_plan(a, pl.t0, pl.t0 + pl.duree).unwrap_or((g.source.0 / 2.0, g.source.1 / 2.0, 0.0));
+        let (fx, fy, fw) = visage_plan(a, pl.t0, pl.t0 + pl.duree, pl.cadre == "yeux")
+            .unwrap_or((g.source.0 / 2.0, g.source.1 / 2.0, 0.0));
         let part = if fw > 0.0 { fw / g.base.0 } else { 0.0 };
-        let cible = match pl.cadre.as_str() {
-            "moyen" => 0.17,
-            "visage" => 0.30,
-            "yeux" => 0.46,
-            _ => 0.0,
-        };
-        let mut voulu = if cible > 0.0 && part > 0.0 { g.cran(cible * intensite / part) } else { 0 };
-        if pl.punch {
+        let base = crans_cadres(g, part, intensite)[indice_cadre(&pl.cadre)];
+        let mut voulu = base;
+        // Le punch resserre d'un cran un plan sur deux d'une rafale ; un plan large reste l'image entière.
+        if pl.punch && base > 0 {
             voulu = if voulu < serre_max { voulu + 1 } else { voulu.saturating_sub(1) };
         }
         let suite = courant.as_ref().filter(|c| c.0 == pl.rush && pl.transition.is_none());
         let (cran, ancre) = match suite {
-            Some((_, prec, ancre, tenu)) => {
+            Some((_, phrase, prec, ancre, tenu)) => {
                 let prec = *prec;
-                // Un cran à la fois, et pas avant d'avoir tenu le cadrage.
-                let mut n = match voulu.cmp(&prec) {
-                    std::cmp::Ordering::Greater => prec + 1,
-                    std::cmp::Ordering::Less => prec - 1,
-                    std::cmp::Ordering::Equal => prec,
-                };
-                if n != prec && *tenu < MAINTIEN_MIN {
-                    n = prec;
-                }
+                // Le cadre d'une nouvelle phrase s'applique tout de suite ; dans une phrase, un changement
+                // automatique attend que le cadrage ait tenu.
+                let nouvelle = *phrase != pl.phrase;
+                // Une poussée (impact) repart toujours de son cadre : sinon elle s'empilerait de plan en plan.
+                let mut n = if voulu != prec && !nouvelle && !pl.pousse && *tenu < MAINTIEN_MIN { prec } else { voulu };
                 let z = g.niveaux[n];
                 let deplace = (fx - ancre.0).abs() > TOLERANCE_ANCRAGE * g.base.0 / z
                     || (fy - ancre.1).abs() > TOLERANCE_ANCRAGE * g.base.1 / z;
-                if deplace && n == prec && serre_max > 0 {
-                    // Le visage s'est déplacé : on le recentre, avec un changement de cran franc.
-                    n = if (voulu > prec || prec == 0) && prec < serre_max { prec + 1 } else { prec - 1 };
+                // Le visage s'est déplacé : on le recentre, avec un changement de cran franc. Inutile en plan
+                // large, qui montre déjà toute l'image.
+                if deplace && n == prec && n > 0 && *tenu >= MAINTIEN_MIN {
+                    n = if n < serre_max && n <= base { n + 1 } else { n - 1 };
                 }
                 // Un changement de cran recentre sur le visage ; un cadrage tenu garde son ancrage.
                 (n, if n != prec { (fx, fy) } else { *ancre })
@@ -468,7 +495,7 @@ fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, r: &Regl
         let fin = if pl.pousse && cran < serre_max { cran + 1 } else { cran };
         let z_trans = if pl.transition.as_deref() == Some("zoom") { ZOOM_TRANSITION } else { 1.0 };
         let zone = g.cadre(g.niveaux[cran], ancre);
-        let serre = g.cadre(g.niveaux[fin] * z_trans, ancre);
+        let serre = g.cadre((g.niveaux[fin] * z_trans).min(g.plafond.max(g.niveaux[fin])), ancre);
         pl.zone = zone;
         pl.z_fin = g.niveaux[fin] / g.niveaux[cran];
         pl.centre_serre = (
@@ -479,10 +506,10 @@ fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, r: &Regl
         pl.visage_debut = g.niveaux[cran] * part;
         pl.visage_fin = g.niveaux[fin] * part;
         let tenu = match suite {
-            Some((_, prec, _, t)) if *prec == cran => t + pl.duree,
+            Some((_, _, prec, _, t)) if *prec == cran => t + pl.duree,
             _ => pl.duree,
         };
-        courant = Some((pl.rush.clone(), fin, ancre, if fin != cran { 0.0 } else { tenu }));
+        courant = Some((pl.rush.clone(), pl.phrase.clone(), fin, ancre, if fin != cran { 0.0 } else { tenu }));
     }
 }
 
@@ -903,4 +930,73 @@ pub fn rapport(prog: &Programme, duree_source: f64) -> Value {
         "incrustations": prog.incrustations.len(),
         "avertissements": prog.avertissements,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grille(niveaux: usize) -> Grille {
+        let s = 1.3f64;
+        Grille {
+            source: (3840.0, 2160.0),
+            haut: 0.0,
+            base: (3840.0, 2160.0),
+            niveaux: (0..niveaux).map(|k| s.powi(k as i32)).collect(),
+            plafond: s.powi(niveaux as i32 - 1),
+        }
+    }
+
+    #[test]
+    fn cadres_distincts_meme_sur_un_petit_visage() {
+        // Visage de 4 % de la largeur (source 4K filmée de loin) : aucun cadre n'atteint sa taille visée.
+        let c = crans_cadres(&grille(8), 0.04, 1.0);
+        assert_eq!(c[0], 0);
+        assert!(c[0] < c[1] && c[1] < c[2] && c[2] < c[3], "{c:?}");
+        assert_eq!(c[3], 7);
+    }
+
+    #[test]
+    fn grille_courte_garde_large_et_yeux() {
+        let c = crans_cadres(&grille(3), 0.04, 1.0);
+        assert_eq!((c[0], c[3]), (0, 2));
+        let c = crans_cadres(&grille(1), 0.04, 1.0);
+        assert_eq!(c, [0; 4]);
+    }
+
+    /// Recalcule le programme d'un vrai projet : `EDIVID_PROJET=donnees/projets/<id> cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn cadres_d_un_projet() {
+        let dossier = std::path::PathBuf::from(std::env::var("EDIVID_PROJET").expect("EDIVID_PROJET"));
+        let p: Projet = serde_json::from_str(&std::fs::read_to_string(dossier.join("projet.json")).unwrap()).unwrap();
+        let analyses: Vec<(String, Arc<Analyse>)> = p
+            .rushs
+            .iter()
+            .map(|r| {
+                let d = dossier.join("travail").join(&r.id);
+                let mut a: Analyse = serde_json::from_str(&std::fs::read_to_string(d.join("analyse.json")).unwrap()).unwrap();
+                let o = std::fs::read(d.join("enveloppe.f32")).unwrap_or_default();
+                a.enveloppe = o.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+                (r.id.clone(), Arc::new(a))
+            })
+            .collect();
+        let ps = phrases_projet(&p, &analyses);
+        let prog = programme(&p, &analyses, &ps, false);
+        let mut par_cadre: HashMap<&str, Vec<f64>> = HashMap::new();
+        for pl in &prog.plans {
+            par_cadre.entry(pl.cadre.as_str()).or_default().push((pl.zone.w * 10.0).round() / 10.0);
+        }
+        for (k, v) in &par_cadre {
+            let mut u = v.clone();
+            u.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            u.dedup();
+            println!("{k:7} {} plans, largeurs du cadre dans la source : {u:?}", v.len());
+        }
+        for pl in prog.plans.iter().take(16) {
+            println!("{:>7.2} {:7} {:12} {:>7.1} punch={} pousse={}", pl.sortie_t0, pl.cadre, pl.regime, pl.zone.w, pl.punch, pl.pousse);
+        }
+        let large = &par_cadre["large"];
+        assert!(large.iter().all(|w| (*w - large[0]).abs() < 1.0), "un plan large n'est pas l'image entière");
+    }
 }

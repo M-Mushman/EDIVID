@@ -461,11 +461,8 @@ fn changer(p: &mut Projet, ps: &[crate::modele::Phrase], c: &ChangementPhrase) -
             d.cadre = k.clone();
             faits.push(format!("cadre {k}"));
         }
-    } else if d.regime == "impact" && (d.cadre == "large" || d.cadre == "moyen") {
-        // Règle du monteur : un impact se joue serré.
-        d.cadre = "visage".into();
-        faits.push("cadre visage".into());
     }
+    // Le régime ne touche jamais au cadre : changer l'un ne doit pas déplacer l'autre.
     (!faits.is_empty()).then(|| faits.join(", "))
 }
 
