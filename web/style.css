@@ -732,3 +732,4 @@ button.temps:hover { color: var(--accent); }
 .titre-pp { display: flex; align-items: center; gap: 8px; margin: 18px 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--texte-2); }
 .titre-pp:first-of-type { margin-top: 4px; }
 .titre-pp svg { width: 16px; height: 16px; color: var(--accent); }
+.reglage .marque.marque-attente { color: var(--texte-2); background: var(--surface-2); }

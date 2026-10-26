@@ -762,60 +762,15 @@ async fn bruitage(etat: &EtatPartage) -> Result<PathBuf> {
 }
 
 /// Chaîne de la voix, de l'entrée `entree` à la sortie `sortie` du graphe de filtres : niveau, bruit, écho,
-/// timbre, sifflantes, acoustique de lieu, calage. Le rendu et l'écoute d'essai partagent la même.
-fn graphe_voix(r: &crate::reglages::Reglages, gain: f64, entree: &str, sortie: &str, ir: Option<&(PathBuf, f64)>) -> Vec<String> {
-    // asetpts : le son suit son propre compte d'échantillons, sans hériter des arrondis de la concaténation.
-    let mut a: Vec<String> = vec!["aresample=48000".into(), "asetpts=N/SR/TB".into()];
-    // La voix est d'abord ramenée à un niveau connu (−23 LUFS) : les seuils du compresseur et de la porte sont
-    // réglés pour ce niveau. Sans cela, un rush enregistré bas (−43 LUFS) passait sous tous les seuils.
-    a.push(format!("volume={gain:.1}dB"));
-    // afftdn retarde le son d'exactement 1 200 échantillons (mesuré au témoin flash + bip) : on les retire.
-    let compensation = format!(",atrim=start_sample={LATENCE_AFFTDN},asetpts=PTS-STARTPTS,apad=pad_len={LATENCE_AFFTDN}");
-    match texte(r, "debruitage").as_str() {
-        "leger" => a.push(format!("afftdn=nr=10:nf=-40:tn=1{compensation}")),
-        "fort" => a.push(format!("afftdn=nr=22:nf=-35:tn=1{compensation}")),
-        _ => {}
+/// timbre, sifflantes, acoustique de lieu, calage. Le rendu final et l'écoute d'essai la jouent en entier
+/// (`entiere`). L'aperçu n'en garde que la base (niveau, bruit, calage) : le navigateur joue le reste en direct,
+/// à partir des mêmes filtres (`filtres_direct`).
+fn graphe_voix(r: &crate::reglages::Reglages, gain: f64, entree: &str, sortie: &str, ir: Option<&(PathBuf, f64)>, entiere: bool) -> Vec<String> {
+    let mut a = filtres_base(r, gain);
+    if entiere {
+        a.extend(filtres_direct(r));
     }
-    // Écho de la pièce : une porte douce baisse la traîne entre les phrases, après avoir retiré le grave boueux.
-    match texte(r, "reverberation").as_str() {
-        "attenuer" => a.push("highpass=f=90,equalizer=f=300:t=q:w=1:g=-3,agate=threshold=0.015:ratio=3:range=0.2:attack=3:release=120:knee=2".into()),
-        "forte" => a.push("highpass=f=100,equalizer=f=300:t=q:w=1:g=-4,equalizer=f=600:t=q:w=1.2:g=-2,\
-                           agate=threshold=0.02:ratio=5:range=0.1:attack=2:release=90:knee=1.5".into()),
-        _ => {}
-    }
-    if vrai(r, "voix") {
-        a.push(match texte(r, "timbre_voix").as_str() {
-            // Chaud et profond : du corps dans le bas (150 Hz), moins de nasal (400 Hz), une présence douce, des
-            // aigus adoucis, une compression lente qui ne pompe pas.
-            "chaud" => "highpass=f=70,bass=g=3.5:f=150:w=0.7,equalizer=f=420:t=q:w=1.3:g=-2,\
-                        equalizer=f=2800:t=q:w=1.4:g=1.5,treble=g=-3:f=7500:w=0.6,deesser=i=0.3,\
-                        acompressor=threshold=-22dB:ratio=2.5:attack=20:release=250:knee=4:makeup=2.5",
-            "naturel" => "highpass=f=70,acompressor=threshold=-22dB:ratio=2:attack=15:release=200:makeup=1.5",
-            // Voix de studio : présence, air, compression rapide et limiteur, très régulière.
-            "podcast" => "highpass=f=80,equalizer=f=200:t=q:w=1:g=-1.5,equalizer=f=3000:t=q:w=1.5:g=2.5,\
-                          equalizer=f=10000:t=q:w=1:g=1.5,deesser=i=0.3,\
-                          acompressor=threshold=-26dB:ratio=4:attack=5:release=120:knee=3:makeup=3,alimiter=limit=0.9",
-            "graves" => "highpass=f=60,bass=g=6:f=120:w=0.8,acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
-            "aigus_doux" => "highpass=f=70,treble=g=-6:f=6000:w=0.6,deesser=i=0.4,\
-                             acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
-            "radio" => "highpass=f=200,lowpass=f=5000,equalizer=f=1500:t=q:w=1:g=3,\
-                        acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=4",
-            "telephone" => "highpass=f=300,lowpass=f=3400,equalizer=f=1800:t=q:w=1:g=4,\
-                            acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=3",
-            // Proche : l'effet de proximité d'un micro tout près (grave chaud), présence, compression marquée.
-            "proche" => "highpass=f=60,bass=g=4:f=180:w=0.9,equalizer=f=3000:t=q:w=1.4:g=1,treble=g=-2:f=8000:w=0.6,\
-                         acompressor=threshold=-24dB:ratio=3:attack=10:release=180:knee=3:makeup=2.5",
-            // Extérieur : coupe le grondement du vent et de la circulation, garde l'intelligibilité.
-            "exterieur" => "highpass=f=130,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3000:t=q:w=1.4:g=2.5,\
-                            acompressor=threshold=-24dB:ratio=3:attack=8:release=150:makeup=2.5",
-            _ => "highpass=f=80,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=3,\
-                  acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2",
-        }
-        .to_string());
-    }
-    if vrai(r, "deesseur") {
-        a.push("deesser=i=0.4".into());
-    }
+    let ir = ir.filter(|_| entiere);
     // Calage demandé par la personne : positif = son retardé, négatif = son avancé.
     let calage_ms = nombre(r, "calage_son").round() as i64;
     let calage = if calage_ms > 0 {
@@ -839,6 +794,132 @@ fn graphe_voix(r: &crate::reglages::Reglages, gain: f64, entree: &str, sortie: &
         ],
         None => vec![format!("[{entree}]{chaine}{calage}[{sortie}]")],
     }
+}
+
+/// Base de la voix, inscrite dans l'aperçu comme dans le rendu : niveau connu, réduction du bruit.
+fn filtres_base(r: &crate::reglages::Reglages, gain: f64) -> Vec<String> {
+    // asetpts : le son suit son propre compte d'échantillons, sans hériter des arrondis de la concaténation.
+    let mut a: Vec<String> = vec!["aresample=48000".into(), "asetpts=N/SR/TB".into()];
+    // La voix est d'abord ramenée à un niveau connu (−23 LUFS) : les seuils du compresseur et de la porte sont
+    // réglés pour ce niveau. Sans cela, un rush enregistré bas (−43 LUFS) passait sous tous les seuils.
+    a.push(format!("volume={gain:.1}dB"));
+    // afftdn retarde le son d'exactement 1 200 échantillons (mesuré au témoin flash + bip) : on les retire.
+    let compensation = format!(",atrim=start_sample={LATENCE_AFFTDN},asetpts=PTS-STARTPTS,apad=pad_len={LATENCE_AFFTDN}");
+    match texte(r, "debruitage").as_str() {
+        "leger" => a.push(format!("afftdn=nr=10:nf=-40:tn=1{compensation}")),
+        "fort" => a.push(format!("afftdn=nr=22:nf=-35:tn=1{compensation}")),
+        _ => {}
+    }
+    a
+}
+
+/// Réglages du son joués en direct par le navigateur sur l'aperçu (ils ne changent pas l'aperçu rendu).
+pub const REGLAGES_SON_DIRECT: &[&str] = &["reverberation", "voix", "timbre_voix", "deesseur", "espace"];
+
+/// Partie de la chaîne de la voix jouée en direct sur l'aperçu : porte de traîne, timbre, sifflantes. Le navigateur
+/// (web/son-dsp.js) exécute ces mêmes filtres ffmpeg ; il n'en connaît que ceux-ci : highpass, lowpass,
+/// equalizer, bass, treble, agate, acompressor, deesser.
+pub fn filtres_direct(r: &crate::reglages::Reglages) -> Vec<String> {
+    let mut a = Vec::new();
+    // Écho de la pièce : une porte douce baisse la traîne entre les phrases, après avoir retiré le grave boueux.
+    match texte(r, "reverberation").as_str() {
+        "attenuer" => a.push("highpass=f=90,equalizer=f=300:t=q:w=1:g=-3,agate=threshold=0.015:ratio=3:range=0.2:attack=3:release=120:knee=2".into()),
+        "forte" => a.push("highpass=f=100,equalizer=f=300:t=q:w=1:g=-4,equalizer=f=600:t=q:w=1.2:g=-2,\
+                           agate=threshold=0.02:ratio=5:range=0.1:attack=2:release=90:knee=1.5".into()),
+        _ => {}
+    }
+    if vrai(r, "voix") {
+        a.push(match texte(r, "timbre_voix").as_str() {
+            // Chaud et profond : du corps dans le bas (150 Hz), moins de nasal (400 Hz), une présence douce, des
+            // aigus adoucis, une compression lente qui ne pompe pas.
+            "chaud" => "highpass=f=70,bass=g=3.5:f=150:w=0.7,equalizer=f=420:t=q:w=1.3:g=-2,\
+                        equalizer=f=2800:t=q:w=1.4:g=1.5,treble=g=-3:f=7500:w=0.6,deesser=i=0.3,\
+                        acompressor=threshold=-22dB:ratio=2.5:attack=20:release=250:knee=4:makeup=2.5",
+            "naturel" => "highpass=f=70,acompressor=threshold=-22dB:ratio=2:attack=15:release=200:makeup=1.5",
+            // Voix de studio : présence, air, compression rapide, très régulière (la normalisation finale borne les
+            // crêtes ; un limiteur retardait le son de 5 ms).
+            "podcast" => "highpass=f=80,equalizer=f=200:t=q:w=1:g=-1.5,equalizer=f=3000:t=q:w=1.5:g=2.5,\
+                          equalizer=f=10000:t=q:w=1:g=1.5,deesser=i=0.3,\
+                          acompressor=threshold=-26dB:ratio=4:attack=5:release=120:knee=3:makeup=3",
+            "graves" => "highpass=f=60,bass=g=6:f=120:w=0.8,acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
+            "aigus_doux" => "highpass=f=70,treble=g=-6:f=6000:w=0.6,deesser=i=0.4,\
+                             acompressor=threshold=-22dB:ratio=2.5:attack=15:release=200:makeup=2",
+            "radio" => "highpass=f=200,lowpass=f=5000,equalizer=f=1500:t=q:w=1:g=3,\
+                        acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=4",
+            "telephone" => "highpass=f=300,lowpass=f=3400,equalizer=f=1800:t=q:w=1:g=4,\
+                            acompressor=threshold=-26dB:ratio=6:attack=3:release=80:makeup=3",
+            // Proche : l'effet de proximité d'un micro tout près (grave chaud), présence, compression marquée.
+            "proche" => "highpass=f=60,bass=g=4:f=180:w=0.9,equalizer=f=3000:t=q:w=1.4:g=1,treble=g=-2:f=8000:w=0.6,\
+                         acompressor=threshold=-24dB:ratio=3:attack=10:release=180:knee=3:makeup=2.5",
+            // Extérieur : coupe le grondement du vent et de la circulation, garde l'intelligibilité.
+            "exterieur" => "highpass=f=130,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3000:t=q:w=1.4:g=2.5,\
+                            acompressor=threshold=-24dB:ratio=3:attack=8:release=150:makeup=2.5",
+            _ => "highpass=f=80,equalizer=f=250:t=q:w=1:g=-2,equalizer=f=3500:t=q:w=1.2:g=3,\
+                  acompressor=threshold=-20dB:ratio=3:attack=10:release=150:makeup=2",
+        }
+        .to_string());
+    }
+    if vrai(r, "deesseur") {
+        a.push("deesser=i=0.4".into());
+    }
+    // Une entrée de la liste peut tenir plusieurs filtres : on rend un filtre par entrée.
+    a.iter().flat_map(|f| f.split(',').map(str::to_string).collect::<Vec<_>>()).collect()
+}
+
+/// Gain final du son en direct (dB), pour l'aperçu et les réglages actuels : ffmpeg joue sur tout l'aperçu la
+/// partie directe de la chaîne et le fond, et mesure la sonie ; le gain amène le mélange à −14 LUFS, comme la
+/// normalisation du rendu final. Gardé par réglages, à côté de l'aperçu.
+pub async fn niveau_direct(etat: &EtatPartage, p: &Projet) -> Result<f64> {
+    let a = p.apercu.as_ref().ok_or_else(|| anyhow!("pas encore d'aperçu"))?;
+    let sorties = etat.dossier_projet(&p.id).join("sorties");
+    let filtres = filtres_direct(&p.reglages);
+    let espace = texte(&p.reglages, "espace");
+    let cle = format!("{}|{espace}", filtres.join(","));
+    let memo = sorties.join(format!("{}.niveaux.json", a.fichier.trim_end_matches(".mp4")));
+    let mut connus: serde_json::Map<String, Value> = tokio::fs::read(&memo).await.ok()
+        .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if let Some(g) = connus.get(&cle).and_then(|v| v.as_f64()) {
+        return Ok(g);
+    }
+    let ir = reponse_espace(etat, &espace).await?;
+    let mut fc = graphe_direct(&filtres, "0:a", "vd", ir.as_ref());
+    let mut args = vec!["-hide_banner".to_string(), "-nostats".into(), "-i".into(), sorties.join(&a.fichier).to_string_lossy().into()];
+    let fond = a.rapport["son_direct"]["fond"].as_str().map(|f| sorties.join(f)).filter(|f| f.exists());
+    if let Some(f) = &fond {
+        args.extend(["-i".into(), f.to_string_lossy().into()]);
+        fc.push("[vd][1:a]amix=inputs=2:duration=first:normalize=0[m]".into());
+    } else {
+        fc.push("[vd]anull[m]".into());
+    }
+    fc.push("[m]ebur128=framelog=quiet[o]".into());
+    args.extend(["-filter_complex".into(), fc.join(";"), "-map".into(), "[o]".into(), "-f".into(), "null".into(), "-".into()]);
+    let sortie = Command::new("ffmpeg").args(&args).stdin(Stdio::null()).output().await.context("ffmpeg introuvable")?;
+    let texte_err = String::from_utf8_lossy(&sortie.stderr);
+    let i: f64 = texte_err.lines().rev().find_map(|l| l.trim().strip_prefix("I:")?.trim().strip_suffix("LUFS")?.trim().parse().ok())
+        .ok_or_else(|| anyhow!("mesure du niveau impossible : {}", texte_err.lines().rev().take(3).collect::<Vec<_>>().join(" | ")))?;
+    let gain = ((-14.0 - i) * 10.0).round() / 10.0;
+    connus.insert(cle, json!(gain));
+    let _ = tokio::fs::write(&memo, serde_json::to_vec(&connus)?).await;
+    Ok(gain)
+}
+
+/// La partie directe de la chaîne de la voix, avec le lieu, dans un graphe (mesure du niveau).
+fn graphe_direct(filtres: &[String], entree: &str, sortie: &str, ir: Option<&(PathBuf, f64)>) -> Vec<String> {
+    let chaine = if filtres.is_empty() { "anull".to_string() } else { filtres.join(",") };
+    match ir {
+        Some((fichier, part)) => vec![
+            format!("[{entree}]aformat=channel_layouts=stereo,{chaine},asplit=2[dsec][dmou]"),
+            format!("amovie=filename={},aresample=48000,aformat=channel_layouts=stereo[dir]", fichier.to_string_lossy()),
+            "[dmou][dir]afir=irnorm=2[drev]".into(),
+            format!("[dsec][drev]amix=inputs=2:weights='1 {part:.3}':normalize=0[{sortie}]"),
+        ],
+        None => vec![format!("[{entree}]aformat=channel_layouts=stereo,{chaine}[{sortie}]")],
+    }
+}
+
+/// Fichier de la réponse d'un lieu, et son dosage (pour le son en direct du navigateur).
+pub async fn lieu_direct(etat: &EtatPartage, nom: &str) -> Result<Option<(PathBuf, f64)>> {
+    reponse_espace(etat, nom).await
 }
 
 /// Son du rush sans l'écho de la pièce (WPE, capteurs/echo.py), calculé une fois par rush et par dosage.
@@ -889,7 +970,7 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
     }
     let gain = sonie_rush(etat, projet, rush).await.map(|i| (-23.0 - i).clamp(-12.0, 30.0)).unwrap_or(0.0);
     let ir = reponse_espace(etat, &texte(r, "espace")).await?;
-    let mut fc = graphe_voix(r, gain, "0:a", "voix", ir.as_ref());
+    let mut fc = graphe_voix(r, gain, "0:a", "voix", ir.as_ref(), true);
     fc.push("[voix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]".into());
     ffmpeg_simple(vec!["-i".into(), source.to_string_lossy().into(), "-filter_complex".into(), fc.join(";"),
                        "-map".into(), "[a]".into(), "-c:a".into(), "libmp3lame".into(), "-q:a".into(), "3".into(), mp3.to_string_lossy().into()])
@@ -971,7 +1052,12 @@ async fn gain_voix(etat: &EtatPartage, p: &Projet, prog: &Programme) -> f64 {
 /// Empreinte de tout ce qui change une vidéo rendue : un aperçu dont l'empreinte diffère de celle du projet
 /// n'est plus à jour (l'interface le dit, même après un rechargement de la page).
 pub fn empreinte(p: &Projet) -> String {
-    let v = json!([p.reglages, p.montage.as_ref().map(|m| json!([m.phrases, m.accroche, m.accroche_choisie, m.chapitres])),
+    // Les réglages joués en direct sur l'aperçu ne le rendent pas périmé.
+    let mut reglages = p.reglages.clone();
+    for c in REGLAGES_SON_DIRECT {
+        reglages.remove(*c);
+    }
+    let v = json!([reglages, p.montage.as_ref().map(|m| json!([m.phrases, m.accroche, m.accroche_choisie, m.chapitres])),
                    p.incrustations, p.habillage, p.generique, p.corrections, p.fusions,
                    p.medias.iter().map(|m| [&m.id, &m.fichier]).collect::<Vec<_>>(), p.rushs.iter().map(|r| &r.id).collect::<Vec<_>>()]);
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -1117,7 +1203,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     // Son.
     let gain = gain_voix(etat, p, prog).await;
     let ir = reponse_espace(etat, &texte(r, "espace")).await?;
-    fc.extend(graphe_voix(r, gain, "0:a", "voix", ir.as_ref()));
+    fc.extend(graphe_voix(r, gain, "0:a", "voix", ir.as_ref(), !apercu));
     let mut melange = vec!["voix".to_string()];
     let musique = texte(r, "musique");
     if let Some(m) = p.medias.iter().find(|m| m.id == musique && nombre(r, "volume_musique") > 0.0) {
@@ -1146,6 +1232,10 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
             melange.push(format!("wd{i}"));
         }
     }
+    let (avant, apres) = durees_generique(p);
+    if apercu {
+        return assembler_apercu(etat, p, sortie, liste, args, fc, entree, melange, total, (avant, apres), (wo, ho), ass, nvenc).await;
+    }
     let mix = if melange.len() > 1 {
         fc.push(format!("{}amix=inputs={}:duration=first:normalize=0[mix]",
                         melange.iter().map(|m| format!("[{m}]")).collect::<String>(), melange.len()));
@@ -1156,7 +1246,6 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     fc.push(format!("[{mix}]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]"));
 
     // Générique : une séquence avant le montage, une après, au même format, enchaînées en fondu.
-    let (avant, apres) = durees_generique(p);
     let (mut v_final, mut a_final) = ("v", "a");
     if avant > 0.0 || apres > 0.0 {
         let tmp = ass.parent().unwrap_or(Path::new("."));
@@ -1183,18 +1272,116 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         "-map".into(), format!("[{v_final}]"), "-map".into(), format!("[{a_final}]"),
         "-t".into(), format!("{total:.3}"),
     ]);
-    args.extend(encodeur(nvenc, if apercu { "assemblage_apercu" } else { "assemblage" }));
-    args.extend([
+    args.extend(encodeur(nvenc, "assemblage"));
+    args.extend(sortie_video(sortie));
+    lancer_assemblage(etat, p, &args, liste, total).await
+}
+
+/// Réglages de sortie de la vidéo assemblée (image et son).
+fn sortie_video(sortie: &Path) -> Vec<String> {
+    vec![
         "-pix_fmt".into(), "yuv420p".into(),
         "-r".into(), format!("{IPS}"), "-fps_mode".into(), "cfr".into(),
         "-colorspace".into(), "bt709".into(), "-color_primaries".into(), "bt709".into(), "-color_trc".into(), "bt709".into(),
         "-c:a".into(), "aac".into(), "-b:a".into(), "256k".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
         "-movflags".into(), "+faststart".into(),
         sortie.to_string_lossy().into(),
-    ]);
+    ]
+}
+
+async fn lancer_assemblage(etat: &EtatPartage, p: &Projet, args: &[String], liste: &Path, total: f64) -> Result<()> {
     // La commande reste à côté des plans : le dossier temporaire n'est gardé qu'en cas d'échec, pour le diagnostic.
     let _ = tokio::fs::write(liste.with_file_name("assemblage.json"), serde_json::to_vec_pretty(&args).unwrap_or_default()).await;
-    ffmpeg(etat, &p.id, "Assemblage, son et sous-titres", &args, total).await
+    ffmpeg(etat, &p.id, "Assemblage, son et sous-titres", args, total).await
+}
+
+/// Pistes à part d'un aperçu, à côté de sa vidéo : le fond (musique, bruitages, sons des médias), qui passe par le
+/// gain final du son en direct, et le générique, déjà à son niveau.
+pub fn pistes_apercu(video: &str) -> (String, String) {
+    let base = video.trim_end_matches(".mp4");
+    (format!("{base}.fond.m4a"), format!("{base}.generique.m4a"))
+}
+
+/// Assemblage d'un aperçu : la vidéo porte la voix de base (niveau, bruit, écho retiré, calage) ; le fond et le
+/// générique sortent dans leurs propres fichiers. Le navigateur joue en direct le reste de la chaîne de la voix
+/// et mélange les trois, chacun à son niveau. Toutes les pistes ont la durée de la vidéo, générique compris.
+#[allow(clippy::too_many_arguments)]
+async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: &Path, mut args: Vec<String>, mut fc: Vec<String>,
+                          mut entree: usize, melange: Vec<String>, total: f64, (avant, apres): (f64, f64), (wo, ho): (u32, u32),
+                          ass: &Path, nvenc: bool) -> Result<()> {
+    const FORMAT: &str = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo";
+    let silence = |d: f64, nom: &str| format!("aevalsrc=0|0:c=stereo:s=48000:d={d:.3},{FORMAT}[{nom}]");
+    fc.push(format!("[{}]{FORMAT}[vx]", melange[0]));
+    let fond = melange.len() > 1;
+    if fond {
+        fc.push(format!("{}amix=inputs={}:duration=first:normalize=0,{FORMAT}[fd]",
+                        melange[1..].iter().map(|m| format!("[{m}]")).collect::<String>(), melange.len() - 1));
+    }
+    let (mut v_final, mut voix, mut fond_final) = ("v".to_string(), "vx".to_string(), "fd".to_string());
+    let mut generique = None;
+    if avant > 0.0 || apres > 0.0 {
+        let tmp = ass.parent().unwrap_or(Path::new("."));
+        let (mut images, mut voixs, mut fonds, mut gens) = (String::new(), String::new(), String::new(), String::new());
+        let mut n = 1;
+        let morceau = |k: usize, d: f64, fc: &mut Vec<String>, voixs: &mut String, fonds: &mut String, gens: &mut String| {
+            fc.push(silence(d, &format!("sv{k}")));
+            fc.push(silence(d, &format!("sf{k}")));
+            fc.push(format!("[ga{k}]{FORMAT}[gq{k}]"));
+            voixs.push_str(&format!("[sv{k}]"));
+            fonds.push_str(&format!("[sf{k}]"));
+            gens.push_str(&format!("[gq{k}]"));
+        };
+        if let (Some(s), true) = (&p.generique.debut, avant > 0.0) {
+            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp)?;
+            images.push_str("[gv0]");
+            morceau(0, avant, &mut fc, &mut voixs, &mut fonds, &mut gens);
+            n += 1;
+        }
+        images.push_str("[v]");
+        voixs.push_str("[vx]");
+        if fond {
+            fonds.push_str("[fd]");
+        } else {
+            fc.push(silence(total, "fdm"));
+            fonds.push_str("[fdm]");
+        }
+        fc.push(silence(total, "gm"));
+        gens.push_str("[gm]");
+        let mut fin_gen = String::new();
+        if let (Some(s), true) = (&p.generique.fin, apres > 0.0) {
+            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp)?;
+            images.push_str("[gv1]");
+            morceau(1, apres, &mut fc, &mut voixs, &mut fonds, &mut fin_gen);
+            n += 1;
+        }
+        gens.push_str(&fin_gen);
+        // Les silences de fin de la voix et du fond suivent l'ordre des morceaux : [début][montage][fin].
+        fc.push(format!("{images}concat=n={n}:v=1:a=0[vg]"));
+        fc.push(format!("{voixs}concat=n={n}:v=0:a=1[vxg]"));
+        fc.push(format!("{fonds}concat=n={n}:v=0:a=1[fdg]"));
+        fc.push(format!("{gens}concat=n={n}:v=0:a=1[gg]"));
+        (v_final, voix, fond_final) = ("vg".into(), "vxg".into(), "fdg".into());
+        generique = Some("gg".to_string());
+    }
+    let total = avant + total + apres;
+    args.extend(["-filter_complex".into(), fc.join(";"),
+                 "-map".into(), format!("[{v_final}]"), "-map".into(), format!("[{voix}]"), "-t".into(), format!("{total:.3}")]);
+    args.extend(encodeur(nvenc, "assemblage_apercu"));
+    args.extend(sortie_video(sortie));
+    let nom = sortie.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let (f_fond, f_gen) = pistes_apercu(&nom);
+    let piste = |etiquette: &str, fichier: &str| -> Vec<String> {
+        vec!["-map".into(), format!("[{etiquette}]"), "-t".into(), format!("{total:.3}"), "-c:a".into(), "aac".into(),
+             "-b:a".into(), "192k".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
+             sortie.with_file_name(fichier).to_string_lossy().into()]
+    };
+    if fond || generique.is_some() {
+        args.extend(piste(&fond_final, &f_fond));
+    }
+    if let Some(g) = &generique {
+        args.extend(piste(g, &f_gen));
+    }
+    lancer_assemblage(etat, p, &args, liste, total).await
 }
 
 /// Aperçu (demi-définition, sans netteté IA) ou rendu final.
@@ -1256,7 +1443,11 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     let sorties = dossier.join("sorties");
     let ancienne = if apercu { p.apercu.as_ref() } else { p.rendu.as_ref() }.map(|s| s.fichier.clone());
     if let Some(a) = ancienne {
-        let _ = tokio::fs::remove_file(sorties.join(a)).await;
+        let (fond, generique) = pistes_apercu(&a);
+        let niveaux = format!("{}.niveaux.json", a.trim_end_matches(".mp4"));
+        for f in [a, fond, generique, niveaux] {
+            let _ = tokio::fs::remove_file(sorties.join(f)).await;
+        }
     }
     let _ = tokio::fs::remove_dir_all(&tmp).await;
     let duree_source: f64 = analyses.iter().map(|(_, a)| a.duree).sum();
@@ -1268,6 +1459,12 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["son"] = json!(resume_son(&p.reglages));
     // Aperçu sans PostProd : l'interface l'applique en direct (un ancien aperçu l'a déjà dans son image).
     rapport["postprod_direct"] = json!(apercu);
+    if apercu {
+        // Son en direct : la vidéo porte la voix de base ; le fond et le générique, s'il y en a, sont à côté.
+        let (fond, generique) = pistes_apercu(&nom);
+        let existe = |f: &str| sorties.join(f).exists().then(|| f.to_string());
+        rapport["son_direct"] = json!({"fond": existe(&fond), "generique": existe(&generique)});
+    }
     rapport["empreinte"] = json!(empreinte(&p));
     let (avant, apres) = durees_generique(&p);
     rapport["generique"] = json!({"debut": avant, "fin": apres});
@@ -1450,9 +1647,10 @@ mod tests {
                 r.insert(k.clone(), v.clone());
             }
             let ir = lieu(&texte(&r, "espace")).map(|(_, _, _, part)| (dossier.join(format!("lieu_{}.wav", texte(&r, "espace"))), part));
-            let mut fc = graphe_voix(&r, 20.0, "0:a", "voix", ir.as_ref());
+            let mut fc = graphe_voix(&r, 20.0, "0:a", "voix", ir.as_ref(), true);
             fc.push("[voix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]".into());
             std::fs::write(dossier.join(format!("{}.graphe", a["cle"].as_str().unwrap())), fc.join(";")).unwrap();
+            std::fs::write(dossier.join(format!("{}.direct", a["cle"].as_str().unwrap())), filtres_direct(&r).join("\n")).unwrap();
         }
     }
 }

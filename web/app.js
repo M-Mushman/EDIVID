@@ -1,6 +1,7 @@
 // EDIVID — interface. JavaScript sans dépendance : tout passe par l'API du serveur local.
 
 import { creerApercuDirect } from './postprod-direct.js';
+import { creerSonDirect } from './son-direct.js';
 
 const $app = document.getElementById('app');
 
@@ -283,6 +284,7 @@ const E = {
   voirTlMontage: lire('edivid_voirTlMontage') !== '0',
   filtre: 'toutes',
   ppDirect: lire('edivid_ppDirect') !== '0',
+  sonDirect: lire('edivid_sonDirect') !== '0',
   editionSt: null,
   selectionSt: new Set(),
   progression: null,
@@ -766,6 +768,8 @@ function construireLecteur() {
   n.ecran = h('div', { class: 'lecteur' }, n.video, n.calque, n.indicateurDepot);
   // PostProd en direct (WebGL) : null si le navigateur ne le permet pas, l'aperçu reste alors sans PostProd.
   n.direct = creerApercuDirect(n.video, n.ecran);
+  // Son en direct (Web Audio) : null si le navigateur n'a pas les processeurs audio.
+  n.son = window.AudioWorkletNode ? creerSonDirect(n.video) : null;
   const pause = () => n.ecran.classList.toggle('en-pause', n.video.paused);
   n.video.addEventListener('play', pause);
   n.video.addEventListener('pause', pause);
@@ -845,6 +849,39 @@ function dessinerLecteur() {
   dessinerStats();
   dessinerCalque();
   majApercuDirect();
+  majSonDirect();
+}
+
+const CLES_SON_DIRECT = ['reverberation', 'voix', 'timbre_voix', 'deesseur', 'espace'];
+let sonDirectCle = '';
+let sonNiveau = { cle: '', gain: 9 };
+
+/** Son en direct sur l'aperçu : la suite de la chaîne de la voix, le lieu, le fond, le gain final mesuré. */
+async function majSonDirect(forcer = false) {
+  const n = E.noeuds;
+  if (!n.son || !E.vue) return;
+  const p = E.vue.projet;
+  const pistesAp = p.apercu?.rapport?.son_direct;
+  const actif = E.sonDirect && E.lecteur === 'apercu' && !!pistesAp && !!n.video.dataset.url;
+  const cle = JSON.stringify([actif, p.apercu?.fichier, CLES_SON_DIRECT.map((k) => p.reglages[k])]);
+  if (cle === sonDirectCle && !forcer) return;
+  sonDirectCle = cle;
+  if (!actif) { n.son.regler({ actif: false }); return; }
+  try {
+    const d = await api('GET', `/api/projets/${E.projetId}/son/direct`);
+    const url = (f) => (f ? `/api/projets/${E.projetId}/sorties/${encodeURIComponent(f)}` : '');
+    const cleNiveau = JSON.stringify([p.apercu.fichier, d.filtres, d.lieu?.url || '']);
+    const config = { actif: true, filtres: d.filtres, lieuUrl: d.lieu?.url || '', part: d.lieu?.part || 0,
+      gainDb: sonNiveau.gain, pistes: { fond: url(pistesAp.fond), generique: url(pistesAp.generique) } };
+    await n.son.regler(config);
+    // Le gain final se mesure sur tout l'aperçu (quelques secondes la première fois) : le son change d'abord, le
+    // niveau suit.
+    if (cleNiveau !== sonNiveau.cle) {
+      const r = await api('GET', `/api/projets/${E.projetId}/son/niveau`);
+      sonNiveau = { cle: cleNiveau, gain: r.gain };
+      if (sonDirectCle === cle) await n.son.regler({ gainDb: r.gain });
+    }
+  } catch (e) { toast(`Son en direct : ${e.message}`, 'erreur'); }
 }
 
 const PP_NEUTRE = { couleur: 'naturel', exposition: 0, contraste: 0, saturation: 0, temperature: 0, lissage: 0, diffusion: 0, nettete: 0, grain: 0, vignette: 0, bandes: false };
@@ -895,7 +932,10 @@ function dessinerOutilsLecteur() {
     bascule('voirTlMontage', 'Timeline du montage', E.voirTlMontage),
     E.lecteur !== 'rendu' && n.direct ? h('label', { class: 'bascule', title: 'Voir la PostProd (couleur, teint, grain…) en direct sur la vidéo ; décochez pour comparer avec l’image brute' },
       h('input', { type: 'checkbox', checked: E.ppDirect, onchange: (e) => { E.ppDirect = e.target.checked; stocker('edivid_ppDirect', E.ppDirect ? '1' : '0'); majApercuDirect(); } }),
-      h('span', {}, 'PostProd en direct')) : null);
+      h('span', {}, 'PostProd en direct')) : null,
+    E.lecteur === 'apercu' && n.son && E.vue.projet.apercu?.rapport?.son_direct ? h('label', { class: 'bascule', title: 'Le son réglé (écho, timbre, lieu, niveau) en direct ; décochez pour entendre la voix de base, sans musique' },
+      h('input', { type: 'checkbox', checked: E.sonDirect, onchange: (e) => { E.sonDirect = e.target.checked; stocker('edivid_sonDirect', E.sonDirect ? '1' : '0'); majSonDirect(true); } }),
+      h('span', {}, 'Son en direct')) : null);
 }
 
 const NOMS_REGIME_LONG = { respiration: 'Respiration', rafale: 'Rafale', impact: 'Impact' };
@@ -2119,7 +2159,10 @@ function blocSection(corps, s) {
       const enLigne = r.genre === 'interrupteur';
       return h('div', { class: 'reglage' },
         h('div', { class: 'reglage-tete' },
-          h('span', { class: 'reglage-titre' }, r.titre, r.remontage ? h('span', { class: 'marque', title: 'Lu par le LLM au moment du montage' }, 'au prochain montage') : null),
+          h('span', { class: 'reglage-titre' }, r.titre, r.remontage ? h('span', { class: 'marque', title: 'Lu par le LLM au moment du montage' }, 'au prochain montage') : null,
+            s === 'Son' ? (CLES_SON_DIRECT.includes(r.cle)
+              ? h('span', { class: 'marque', title: 'S’entend aussitôt sur l’aperçu (case « Son en direct »)' }, 'en direct')
+              : h('span', { class: 'marque marque-attente', title: 'Inscrit dans l’aperçu : il faut le mettre à jour' }, 'au prochain aperçu')) : null),
           enLigne ? controleReglage(r, valeur) : null),
         h('div', { class: 'reglage-aide' }, r.aide),
         enLigne ? null : controleReglage(r, valeur));
@@ -2180,7 +2223,9 @@ function blocAmbiances(corps) {
           try {
             await api('POST', `/api/projets/${E.projetId}/reglages`, a.reglages);
             E.aMettreAJour = true;
-            toast(`Ambiance « ${a.nom} » appliquée : mettez l’aperçu à jour pour l’entendre dans le montage.`, 'ok');
+            const direct = E.vue.projet.apercu?.rapport?.son_direct;
+            toast(direct ? `Ambiance « ${a.nom} » appliquée : elle s’entend en direct sur l’aperçu (sauf bruit et écho retiré, au prochain aperçu).`
+              : `Ambiance « ${a.nom} » appliquée : mettez l’aperçu à jour pour l’entendre dans le montage.`, 'ok');
           } catch (e) { toast(e.message, 'erreur'); }
         } }, active?.cle === a.cle ? 'Appliquée ✓' : 'Appliquer'))))),
     ])));
@@ -3087,7 +3132,9 @@ function dessinerPostProd(corps) {
       majApercuDirect();
     } }, icone('relancer'), 'Remettre l’image à zéro'),
     h('h3', { class: 'titre-pp' }, icone('onde'), 'Son'),
-    h('div', { class: 'reglage-aide', style: { marginBottom: '10px' } }, 'Le son ne se règle pas en direct : écoutez une ambiance (vingt secondes de votre rush), puis mettez l’aperçu à jour pour l’entendre dans le montage.'));
+    h('div', { class: 'reglage-aide', style: { marginBottom: '10px' } }, p.apercu?.rapport?.son_direct
+      ? 'Le son se règle en direct sur l’aperçu : appliquez une ambiance ou changez un réglage marqué « en direct », il s’entend aussitôt (case « Son en direct » sous le lecteur). La réduction du bruit, le retrait de l’écho et le calage demandent un nouvel aperçu.'
+      : 'Mettez l’aperçu à jour une fois : ensuite, le son se règlera en direct pendant la lecture. En attendant, écoutez une ambiance sur vingt secondes de votre rush.'));
   blocAmbiances(corps);
   blocSection(corps, 'Son');
   if (E.comparaison) comparer();

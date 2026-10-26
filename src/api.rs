@@ -106,6 +106,9 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/postprod/looks", get(looks))
         .route("/api/postprod/lut", get(table_couleurs))
         .route("/api/son/ambiances", get(ambiances))
+        .route("/api/son/lieu/{nom}", get(lieu_son))
+        .route("/api/projets/{id}/son/direct", get(son_direct))
+        .route("/api/projets/{id}/son/niveau", get(son_niveau))
         .route("/api/projets/{id}/son/essai", get(essai_son))
         .route("/api/projets/{id}/postprod", post(changer_postprod))
         .route("/api/projets/{id}/postprod/image", get(image_postprod))
@@ -1592,6 +1595,31 @@ async fn retirer_compte(State(etat): State<EtatPartage>, Path(email): Path<Strin
 }
 
 // ---------------------------------------------------------------- PostProd
+
+/// Ce que le navigateur joue en direct sur l'aperçu : les filtres ffmpeg de la partie directe de la chaîne de la
+/// voix, le lieu, les pistes à part de l'aperçu, et le gain final s'il est déjà mesuré pour ces réglages.
+async fn son_direct(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let espace = reglages::texte(&p.reglages, "espace");
+    let lieu = rendu::lieu_direct(&etat, &espace).await?.map(|(_, part)| json!({"url": format!("/api/son/lieu/{espace}"), "part": part}));
+    Ok(Json(json!({
+        "filtres": rendu::filtres_direct(&p.reglages),
+        "lieu": lieu,
+        "pistes": p.apercu.as_ref().map(|a| a.rapport["son_direct"].clone()),
+    })))
+}
+
+/// Gain final du son en direct pour les réglages actuels (quelques secondes la première fois, puis gardé).
+async fn son_niveau(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    Ok(Json(json!({"gain": rendu::niveau_direct(&etat, &p).await?})))
+}
+
+async fn lieu_son(State(etat): State<EtatPartage>, Path(nom): Path<String>) -> Result<Response, Erreur> {
+    let (f, _) = rendu::lieu_direct(&etat, &nom).await?.ok_or_else(|| refus("lieu inconnu"))?;
+    let octets = tokio::fs::read(f).await.map_err(|e| anyhow!("{e}"))?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "audio/wav"), (axum::http::header::CACHE_CONTROL, "max-age=86400")], octets).into_response())
+}
 
 const AMBIANCES: &str = include_str!("../bibliotheque/ambiances.json");
 
