@@ -627,7 +627,7 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         transition: None,
         mots_forts: vec![],
         transition_choisie: None,
-        mouvement: None, masques: vec![], emphase: None,
+        mouvement: None, masques: vec![], emphase: None, forces: vec![],
     };
     // Corps : phrases gardées, dans l'ordre.
     let corps: Vec<&Phrase> = ps
@@ -791,6 +791,29 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         }
         segments.retain(|(a0, a1)| a1 - a0 >= DUREE_MIN_PLAN * 0.7);
 
+        // Chaque mot va au morceau gardé qu'il recouvre le plus, s'il le recouvre vraiment (50 ms, ou 20 % de sa
+        // durée) : les instants de la transcription débordent souvent de quelques dixièmes sur les coupes, et un
+        // mot qu'on entend ne doit pas disparaître des sous-titres. Un mot affiché à la main va au morceau le plus
+        // proche, même s'il est coupé.
+        let place: Vec<Option<usize>> = ph
+            .mots
+            .iter()
+            .enumerate()
+            .map(|(rang, m)| {
+                let couvre = |&(a, b): &(f64, f64)| (m.t1.min(b) - m.t0.max(a)).max(0.0);
+                let (k, recouvre) = segments.iter().map(couvre).enumerate()
+                    .fold((None, 0.0), |(bk, bv), (k, v)| if v > bv { (Some(k), v) } else { (bk, bv) });
+                let assez = recouvre >= 0.05 || recouvre >= 0.2 * (m.t1 - m.t0);
+                if k.is_some() && assez {
+                    k
+                } else if d.forces.contains(&rang) {
+                    let ecart = |&(a, b): &(f64, f64)| if m.t1 < a { a - m.t1 } else if m.t0 > b { m.t0 - b } else { 0.0 };
+                    (0..segments.len()).min_by(|&x, &y| ecart(&segments[x]).partial_cmp(&ecart(&segments[y])).unwrap())
+                } else {
+                    None
+                }
+            })
+            .collect();
         for (k, (s0, s1)) in segments.iter().enumerate() {
             let t0 = arrondi_image(*s0);
             let duree = arrondi_image(s1 - s0).max(1.0 / IPS);
@@ -823,16 +846,17 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
                 None => indices_forts(&ph.mots, &d.mots_forts),
             };
             for (rang, m) in ph.mots.iter().enumerate() {
-                if d.masques.contains(&rang) {
+                if d.masques.contains(&rang) || place[rang] != Some(k) {
                     continue;
                 }
-                let milieu = (m.t0 + m.t1) / 2.0;
-                if milieu < t0 || milieu > t0 + duree || (vrai(r, "coupe_hesitations") && est_hesitation(&m.mot)) {
+                if vrai(r, "coupe_hesitations") && est_hesitation(&m.mot) && !d.forces.contains(&rang) {
                     continue;
                 }
+                // Un mot qui déborde du morceau (ou affiché à la main hors de lui) y est ramené.
+                let debut = (m.t0 - t0).clamp(0.0, (duree - 0.1).max(0.0));
                 mots_sortie.push(MotSortie {
-                    t0: sortie_t + (m.t0 - t0).max(0.0),
-                    t1: sortie_t + (m.t1 - t0).min(duree),
+                    t0: sortie_t + debut,
+                    t1: sortie_t + (m.t1 - t0).min(duree).max(debut + 0.1).min(duree),
                     mot: m.mot.clone(),
                     fort: forts.contains(&rang),
                     phrase: ph.cle.clone(),
@@ -1154,8 +1178,16 @@ mod tests {
             u.dedup();
             println!("{k:7} {} plans, largeurs du cadre dans la source : {u:?}", v.len());
         }
+        if let Ok(c) = std::env::var("EDIVID_PHRASE") {
+            if let Some(ph) = ps.iter().find(|ph| ph.cle == c) {
+                let affiches: Vec<usize> = prog.mots.iter().filter(|m| m.phrase == c).map(|m| m.rang).collect();
+                for (i, m) in ph.mots.iter().enumerate() {
+                    println!("MOT {i:3} {:>7.2}–{:>7.2} {:14} {}", m.t0, m.t1, m.mot, if affiches.contains(&i) { "affiché" } else { "—" });
+                }
+            }
+        }
         for pl in prog.plans.iter().filter(|pl| std::env::var("EDIVID_PHRASE").map(|c| c == pl.phrase).unwrap_or(false)) {
-            println!("PHRASE {:>7.2} {:7} {:12} {:>7.1} z_fin={:.3} punch={} pousse={} trans={:?}", pl.sortie_t0, pl.cadre, pl.regime, pl.zone.w, pl.z_fin, pl.punch, pl.pousse, pl.transition);
+            println!("PLAN source {:>7.2}–{:>7.2} accroche={}", pl.t0, pl.t0 + pl.duree, pl.accroche);
         }
         for pl in prog.plans.iter().take(16) {
             println!("{:>7.2} {:7} {:12} {:>7.1} punch={} pousse={}", pl.sortie_t0, pl.cadre, pl.regime, pl.zone.w, pl.punch, pl.pousse);

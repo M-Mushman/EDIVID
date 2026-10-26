@@ -482,13 +482,16 @@ struct ChangementPhrase {
     /// Vrai : l'emphase revient au choix du LLM.
     #[serde(default)]
     emphase_auto: Option<bool>,
+    /// Rangs des mots affichés à la main bien que coupés au montage (liste complète).
+    #[serde(default)]
+    forces: Option<Vec<usize>>,
 }
 
 fn montage_par_defaut(ps: &[crate::modele::Phrase]) -> Montage {
     Montage {
         cree: maintenant(),
         phrases: ps.iter().map(|p| Decision { cle: p.cle.clone(), garder: true, regime: "rafale".into(), cadre: "moyen".into(),
-                                               transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None, masques: vec![], emphase: None }).collect(),
+                                               transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None, masques: vec![], emphase: None, forces: vec![] }).collect(),
         accroche: vec![],
         accroche_choisie: false,
         chapitres: vec![],
@@ -500,7 +503,7 @@ fn changer(p: &mut Projet, ps: &[crate::modele::Phrase], c: &ChangementPhrase) -
     let m = p.montage.get_or_insert_with(|| montage_par_defaut(ps));
     if !m.phrases.iter().any(|d| d.cle == c.cle) {
         m.phrases.push(Decision { cle: c.cle.clone(), garder: true, regime: "rafale".into(), cadre: "moyen".into(),
-                                  transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None, masques: vec![], emphase: None });
+                                  transition: None, mots_forts: vec![], transition_choisie: None, mouvement: None, masques: vec![], emphase: None, forces: vec![] });
     }
     let d = m.phrases.iter_mut().find(|d| d.cle == c.cle)?;
     let mut faits = Vec::new();
@@ -540,6 +543,12 @@ fn changer(p: &mut Projet, ps: &[crate::modele::Phrase], c: &ChangementPhrase) -
     if let Some(m) = c.masques.as_ref().map(propre) {
         if d.masques != m {
             d.masques = m;
+            faits.push("sous-titres ajustés".into());
+        }
+    }
+    if let Some(f) = c.forces.as_ref().map(propre) {
+        if d.forces != f {
+            d.forces = f;
             faits.push("sous-titres ajustés".into());
         }
     }
@@ -902,6 +911,7 @@ fn appliquer_actions(p: &mut Projet, ps: &[crate::modele::Phrase], v: &Value) ->
             masques: None,
             emphase: None,
             emphase_auto: None,
+            forces: None,
         };
         if let Some(f) = changer(p, ps, &changement) {
             actions.push(format!("Phrase {} : {f}", rang.get(&cle).copied().unwrap_or(0)));
@@ -1731,6 +1741,7 @@ async fn corriger_phrase(State(etat): State<EtatPartage>, Path(id): Path<String>
             if let Some(d) = p.montage.as_mut().and_then(|m| m.phrases.iter_mut().find(|d| d.cle == cle)) {
                 d.masques.clear();
                 d.emphase = None;
+                d.forces.clear();
             }
         }
         if texte.is_empty() || texte == origine.texte {

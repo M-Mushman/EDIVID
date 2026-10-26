@@ -1491,7 +1491,7 @@ function motsPhrase(ph, zone) {
     if (affiches.get(i)) classes.push('emphase');
     if (choisis?.has(i)) classes.push('choisi');
     morceaux.push(h('span', { class: classes.join(' '), 'data-i': i,
-      title: !st ? '' : affiches.has(i) ? '' : masques.has(i) ? 'Retiré des sous-titres' : 'Coupé au montage (hésitation, silence) : jamais affiché' }, m));
+      title: !st ? '' : affiches.has(i) ? '' : masques.has(i) ? 'Retiré des sous-titres' : 'Coupé au montage (hésitation, silence) : « Affiché » peut le forcer à l’écran' }, m));
   });
   zone.dataset.mots = '1';
   return morceaux;
@@ -1532,12 +1532,18 @@ function editeurSousTitres(ph, zone) {
     return c;
   };
   const masques = new Set(d.masques || []);
+  const forces = new Set(d.forces || []);
+  // Tous les mots choisis sont à l'écran : on les retire. Sinon on les met tous à l'écran, en forçant ceux que le
+  // montage coupe (ils s'affichent au bord du morceau gardé le plus proche).
   const gras = () => {
     const c = exiger();
     if (!c.length) return;
-    const tousAffiches = c.every((i) => !masques.has(i));
-    c.forEach((i) => (tousAffiches ? masques.add(i) : masques.delete(i)));
-    appliquer({ masques: [...masques] });
+    if (c.every((i) => st.has(i))) {
+      c.forEach((i) => { masques.add(i); forces.delete(i); });
+    } else {
+      c.forEach((i) => { masques.delete(i); if (!st.has(i)) forces.add(i); });
+    }
+    appliquer({ masques: [...masques], forces: [...forces] });
   };
   const surligner = () => {
     const c = exiger();
@@ -1558,7 +1564,7 @@ function editeurSousTitres(ph, zone) {
     h('button', { class: 'btn petit primaire', onclick: () => { E.editionSt = null; dessinerPhrases(); } }, 'Fermer'),
     h('div', { class: 'tres-petit muet', style: { flexBasis: '100%' } },
       'Clic sur un mot pour le choisir (glisser, ou Maj+clic, pour plusieurs), puis Affiché ou Emphase. Gras : à l’écran. Surligné : en emphase. Barré : retiré à la main.',
-      nbHors ? ` Grisé : coupé au montage (hésitation, silence), ${nbHors} mot${nbHors > 1 ? 's' : ''} — il n’est pas dans la vidéo, il ne peut donc pas s’afficher.` : '',
+      nbHors ? ` Grisé : coupé au montage (hésitation, silence), ${nbHors} mot${nbHors > 1 ? 's' : ''} ; « Affiché » le force à l’écran, au bord du passage gardé le plus proche.` : '',
       texte_style_sous_titres()));
 }
 

@@ -212,6 +212,9 @@ pub struct Decision {
     /// Rangs des mots mis en emphase, choisis à la main ; absent = ceux du LLM (mots_forts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emphase: Option<Vec<usize>>,
+    /// Rangs des mots affichés à la main bien que le montage les coupe (en tout ou en partie).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forces: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
