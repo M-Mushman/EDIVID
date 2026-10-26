@@ -373,6 +373,24 @@ pub fn completer(reglages: &mut Reglages) {
         }
     }
     reglages.retain(|k, _| chercher(k).is_some());
+    accorder_son(reglages);
+}
+
+/// Les réglages du son qui se contredisent sont accordés d'office (renvoie ce qui a changé, pour le dire) :
+/// - la reconstruction du timbre part toujours de la voix débruitée à fond : retrait de l'écho « Forte » ;
+/// - le débruiteur IA retire déjà le bruit : la réduction du bruit classique (afftdn), qui ajoutait un son
+///   métallique par-dessus, s'éteint.
+pub fn accorder_son(r: &mut Reglages) -> Vec<String> {
+    let mut faits = Vec::new();
+    if vrai(r, "restauration") && texte(r, "dereverberation") != "forte" {
+        r.insert("dereverberation".into(), json!("forte"));
+        faits.push("Retirer l'écho de la voix → Forte (la reconstruction du timbre part de la voix débruitée à fond)".to_string());
+    }
+    if texte(r, "dereverberation") != "non" && texte(r, "debruitage") != "non" {
+        r.insert("debruitage".into(), json!("non"));
+        faits.push("Réduction du bruit → Non (l'IA retire déjà le bruit)".to_string());
+    }
+    faits
 }
 
 pub fn defauts() -> Reglages {

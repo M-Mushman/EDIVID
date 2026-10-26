@@ -2054,8 +2054,10 @@ function blocHabillage(corps) {
         : curseurElement('Taille du texte', Math.round((x.taille || 0.035) * 1000) / 10, 2, 8, 0.5, (v) => `${fr(v)} %`, (v, fin) => { x.taille = v / 100; enregistrer(fin); }),
       curseurElement('Opacité', Math.round((x.opacite || 0.9) * 100), 10, 100, 5, (v) => `${v} %`, (v, fin) => { x.opacite = v / 100; enregistrer(fin); }),
       // Pour détacher le logo d'une image chargée : une ombre portée douce, un halo lumineux autour.
-      x.genre === 'logo' ? curseurElement('Ombre portée', Math.round((x.ombre || 0) * 100), 0, 100, 5, (v) => (v ? `${v} %` : 'aucune'), (v, fin) => { x.ombre = v / 100; enregistrer(fin); }) : null,
-      x.genre === 'logo' ? curseurElement('Halo lumineux', Math.round((x.halo || 0) * 100), 0, 100, 5, (v) => (v ? `${v} %` : 'aucun'), (v, fin) => { x.halo = v / 100; enregistrer(fin); }) : null,
+      // Pas de 1 : un petit logo se règle finement. Le halo s'affiche aussi par son rayon dans la vidéo finale (1920 px).
+      x.genre === 'logo' ? curseurElement('Ombre portée', Math.round((x.ombre || 0) * 100), 0, 100, 1, (v) => (v ? `${v} %` : 'aucune'), (v, fin) => { x.ombre = v / 100; enregistrer(fin); }) : null,
+      x.genre === 'logo' ? curseurElement('Halo lumineux', Math.round((x.halo || 0) * 100), 0, 100, 1,
+        (v) => (v ? `${v} % · rayon ${fr(0.04 * 1920 * (x.taille || 0.16) * (0.6 + v / 100), 1)} px` : 'aucun'), (v, fin) => { x.halo = v / 100; enregistrer(fin); }) : null,
       x.genre === 'texte' ? h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Couleur du texte', style: { marginTop: '8px' } },
         [['blanc', 'Blanc'], ['noir', 'Noir'], ['jaune', 'Jaune']].map(([v, l]) => h('button', { class: (x.couleur || 'blanc') === v ? 'actif' : '',
           onclick: () => { x.couleur = v; enregistrer(); dessiner(); } }, l))) : null);
@@ -2336,11 +2338,21 @@ function blocsSon(corps) {
   const choixTimbre = h('select', { class: 'champ', 'aria-label': 'Timbre de la voix',
     onchange: (e) => reglerSon(e.target.value === 'aucun' ? { voix: false } : { voix: true, timbre_voix: e.target.value }) },
   [...R('timbre_voix').options.map((o) => [o.valeur, o.libelle]), ['aucun', 'Sans traitement']].map(([v, l]) => h('option', { value: v, selected: v === timbre }, l)));
-  // Un seul choix d'écho : porte de traîne et retrait de l'écho mêlé à la voix, ensemble.
+  // Un seul choix d'écho : porte de traîne et retrait de l'écho mêlé à la voix, ensemble. La reconstruction du timbre
+  // part de la voix débruitée à fond : seuls Fort et Très fort lui conviennent (le serveur l'impose aussi).
   const niveau = NIVEAUX_ECHO.find(([, , porte, wpe]) => porte === r.reverberation && wpe === r.dereverberation);
   const echo = h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Retirer l’écho de la pièce' }, NIVEAUX_ECHO.map(([cle, l, porte, wpe]) =>
     h('button', { class: niveau?.[0] === cle ? 'actif' : '', role: 'radio', 'aria-checked': niveau?.[0] === cle ? 'true' : 'false',
+      disabled: r.restauration && wpe !== 'forte', title: r.restauration && wpe !== 'forte' ? 'Indisponible avec « Reconstruire le timbre », qui demande l’écho retiré à fond' : '',
       onclick: () => reglerSon({ reverberation: porte, dereverberation: wpe }) }, l)));
+  // Le débruiteur IA retire déjà le bruit : la réduction du bruit classique est éteinte, et le dit.
+  const ia = r.dereverberation !== 'non';
+  const ligneDebruitage = ligne('debruitage', 'apercu');
+  if (ia) {
+    ligneDebruitage.classList.add('desactive');
+    ligneDebruitage.querySelectorAll('button, select, input').forEach((x) => { x.disabled = true; });
+    ligneDebruitage.querySelector('.reglage-aide').textContent = 'Éteinte : l’IA qui retire l’écho (niveau Moyen et au-delà) retire déjà le bruit, et les deux ensemble rendaient la voix métallique.';
+  }
   const active = ambianceActive();
   // Bruit, écho retiré par l'IA et calage sont inscrits dans l'aperçu : s'il ne les suit plus, on le dit en clair.
   const inscrit = E.vue.projet.apercu?.rapport?.son_inscrit;
@@ -2368,7 +2380,7 @@ function blocsSon(corps) {
   ligneSon('Retirer l’écho de la pièce',
     'Léger : la traîne qui suit chaque phrase baisse. Moyen et Fort : une IA retire aussi l’écho et le bruit pendant que la voix parle, sans changer les mots (quelques secondes par rush sur la carte graphique, au prochain aperçu). Très fort : en plus, la traîne est coupée net, au risque de raboter la fin des mots doux.',
     [echo, niveau ? null : h('div', { class: 'tres-petit muet', style: { marginTop: '6px' } }, 'Réglage sur mesure (venu d’un jeu de réglages ou de l’assistant) : choisissez un niveau pour revenir à l’un d’eux.')], 'partiel'),
-  ligne('debruitage', 'apercu'),
+  ligneDebruitage,
   ligne('restauration', 'apercu'),
   ligne('espace', 'direct', 'Ajouter la résonance d’un lieu', 'L’inverse du retrait de l’écho : prête à la voix, déjà nettoyée, la résonance d’un lieu choisi — petite pièce, salle de conférence, grande salle, cathédrale.')));
 

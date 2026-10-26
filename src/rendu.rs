@@ -1832,6 +1832,8 @@ mod tests {
                 assert!(crate::reglages::valider(k, v).is_ok(), "{} : {k} = {v} refusé", a["cle"]);
                 r.insert(k.clone(), v.clone());
             }
+            // Une ambiance ne contredit pas les règles du son : appliquée, elle reste telle quelle.
+            assert!(crate::reglages::accorder_son(&mut r.clone()).is_empty(), "{} : réglages du son contradictoires", a["cle"]);
             let ir = lieu(&texte(&r, "espace")).map(|(_, _, _, part)| (dossier.join(format!("lieu_{}.wav", texte(&r, "espace"))), part));
             let mut fc = graphe_voix(&r, 20.0, "0:a", "voix", ir.as_ref(), true);
             fc.push("[voix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]".into());

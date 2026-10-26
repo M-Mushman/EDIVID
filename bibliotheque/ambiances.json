@@ -102,7 +102,7 @@
    "nom": "Radio",
    "description": "Bande étroite et compression forte : la voix d'un vieux poste de radio.",
    "reglages": {
-    "debruitage": "leger",
+    "debruitage": "non",
     "dereverberation": "douce",
     "reverberation": "attenuer",
     "voix": true,

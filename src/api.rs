@@ -449,6 +449,7 @@ fn appliquer_reglages(p: &mut Projet, changements: &serde_json::Map<String, Valu
             Err(e) => refus.push(e),
         }
     }
+    faits.extend(reglages::accorder_son(&mut p.reglages));
     (faits, refus)
 }
 

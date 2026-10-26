@@ -752,3 +752,5 @@ button.temps .horloge.rush { font-style: italic; opacity: .75; }
 /* ---------- plein écran du lecteur (vidéo et calques du direct) ---------- */
 .lecteur:fullscreen { width: 100vw; height: 100vh; max-height: none; aspect-ratio: auto; border-radius: 0; background: #000; }
 .lecteur:fullscreen.vertical { height: 100vh; }
+.reglage.desactive { opacity: .6; }
+.segments button:disabled { opacity: .4; cursor: not-allowed; }
