@@ -1,26 +1,124 @@
 {
-  "ambiances": [
-    {"cle": "studio_feutre", "famille": "Voix", "nom": "Studio feutré", "description": "Son chaud et velouté, sans aucun écho : la voix d'une cabine de studio tapissée de mousse.",
-     "reglages": {"debruitage": "leger", "dereverberation": "forte", "reverberation": "attenuer", "voix": true, "timbre_voix": "chaud", "deesseur": true, "espace": "aucun"}},
-    {"cle": "chambre_proximite", "famille": "Voix", "nom": "Chambre, tout près", "description": "Pièce fermée et intime, voix proche comme au creux de l'oreille : graves chauds, présence, écho retiré.",
-     "reglages": {"debruitage": "leger", "dereverberation": "forte", "reverberation": "attenuer", "voix": true, "timbre_voix": "proche", "deesseur": true, "espace": "chambre"}},
-    {"cle": "podcast", "famille": "Voix", "nom": "Podcast", "description": "Voix de studio très régulière, présente et claire, compression et limiteur : on entend chaque mot au même niveau.",
-     "reglages": {"debruitage": "leger", "dereverberation": "forte", "reverberation": "attenuer", "voix": true, "timbre_voix": "podcast", "deesseur": false, "espace": "aucun"}},
-    {"cle": "voix_off", "famille": "Voix", "nom": "Voix off documentaire", "description": "Narration posée et profonde, sans la pièce autour : l'écho est retiré fortement, les fins de phrase s'éteignent net.",
-     "reglages": {"debruitage": "leger", "dereverberation": "forte", "reverberation": "forte", "voix": true, "timbre_voix": "chaud", "deesseur": true, "espace": "aucun"}},
-    {"cle": "naturel", "famille": "Voix", "nom": "Naturel", "description": "La voix telle qu'enregistrée, seulement nettoyée du souffle et lissée.",
-     "reglages": {"debruitage": "leger", "dereverberation": "non", "reverberation": "non", "voix": true, "timbre_voix": "naturel", "deesseur": false, "espace": "aucun"}},
-    {"cle": "exterieur", "famille": "Lieu", "nom": "Extérieur", "description": "Tournage dehors : réduction forte du bruit (vent, circulation), grondement grave coupé, voix rendue intelligible.",
-     "reglages": {"debruitage": "fort", "dereverberation": "non", "reverberation": "non", "voix": true, "timbre_voix": "exterieur", "deesseur": true, "espace": "aucun"}},
-    {"cle": "conference", "famille": "Lieu", "nom": "Salle de conférence", "description": "Une salle moyenne qui porte la voix : légère résonance, son naturel et clair.",
-     "reglages": {"debruitage": "leger", "dereverberation": "douce", "reverberation": "non", "voix": true, "timbre_voix": "clair", "deesseur": false, "espace": "conference"}},
-    {"cle": "grande_salle", "famille": "Lieu", "nom": "Grande salle", "description": "Auditorium ou théâtre : une résonance ample derrière la voix, qui garde sa netteté.",
-     "reglages": {"debruitage": "leger", "dereverberation": "forte", "reverberation": "non", "voix": true, "timbre_voix": "naturel", "deesseur": false, "espace": "salle"}},
-    {"cle": "cathedrale", "famille": "Lieu", "nom": "Cathédrale", "description": "Longue traîne de pierre de plusieurs secondes, aigus adoucis : solennel, à réserver aux phrases lentes.",
-     "reglages": {"debruitage": "leger", "dereverberation": "forte", "reverberation": "non", "voix": true, "timbre_voix": "aigus_doux", "deesseur": true, "espace": "cathedrale"}},
-    {"cle": "radio", "famille": "Effet", "nom": "Radio", "description": "Bande étroite et compression forte : la voix d'un vieux poste de radio.",
-     "reglages": {"debruitage": "leger", "dereverberation": "douce", "reverberation": "non", "voix": true, "timbre_voix": "radio", "deesseur": false, "espace": "aucun"}},
-    {"cle": "telephone", "famille": "Effet", "nom": "Téléphone", "description": "Voix filtrée comme au bout du fil : pour un appel, un souvenir, une voix rapportée.",
-     "reglages": {"debruitage": "leger", "dereverberation": "non", "reverberation": "non", "voix": true, "timbre_voix": "telephone", "deesseur": false, "espace": "aucun"}}
-  ]
+ "ambiances": [
+  {
+   "cle": "studio_feutre",
+   "famille": "Voix",
+   "nom": "Studio feutré",
+   "description": "Son chaud et velouté, sans aucun écho : la voix d'une cabine de studio tapissée de mousse.",
+   "reglages": {
+    "debruitage": "leger",
+    "dereverberation": "forte",
+    "reverberation": "attenuer",
+    "voix": true,
+    "timbre_voix": "chaud",
+    "deesseur": true,
+    "espace": "aucun"
+   }
+  },
+  {
+   "cle": "chambre_proximite",
+   "famille": "Voix",
+   "nom": "Chambre, tout près",
+   "description": "Pièce fermée et intime, voix proche comme au creux de l'oreille : graves chauds, présence, écho retiré.",
+   "reglages": {
+    "debruitage": "leger",
+    "dereverberation": "forte",
+    "reverberation": "attenuer",
+    "voix": true,
+    "timbre_voix": "proche",
+    "deesseur": true,
+    "espace": "chambre"
+   }
+  },
+  {
+   "cle": "podcast",
+   "famille": "Voix",
+   "nom": "Podcast",
+   "description": "Voix de studio très régulière, présente et claire, compression rapide : on entend chaque mot au même niveau.",
+   "reglages": {
+    "debruitage": "leger",
+    "dereverberation": "forte",
+    "reverberation": "attenuer",
+    "voix": true,
+    "timbre_voix": "podcast",
+    "deesseur": false,
+    "espace": "aucun"
+   }
+  },
+  {
+   "cle": "voix_off",
+   "famille": "Voix",
+   "nom": "Voix off documentaire",
+   "description": "Narration posée et profonde, sans la pièce autour : l'écho est retiré fortement, les fins de phrase s'éteignent net.",
+   "reglages": {
+    "debruitage": "leger",
+    "dereverberation": "forte",
+    "reverberation": "forte",
+    "voix": true,
+    "timbre_voix": "chaud",
+    "deesseur": true,
+    "espace": "aucun"
+   }
+  },
+  {
+   "cle": "naturel",
+   "famille": "Voix",
+   "nom": "Naturel",
+   "description": "La voix telle qu'enregistrée, seulement nettoyée du souffle et lissée.",
+   "reglages": {
+    "debruitage": "leger",
+    "dereverberation": "non",
+    "reverberation": "non",
+    "voix": true,
+    "timbre_voix": "naturel",
+    "deesseur": false,
+    "espace": "aucun"
+   }
+  },
+  {
+   "cle": "exterieur",
+   "famille": "Voix",
+   "nom": "Extérieur",
+   "description": "Tournage dehors : réduction forte du bruit (vent, circulation), grondement grave coupé, voix rendue intelligible.",
+   "reglages": {
+    "debruitage": "fort",
+    "dereverberation": "non",
+    "reverberation": "non",
+    "voix": true,
+    "timbre_voix": "exterieur",
+    "deesseur": true,
+    "espace": "aucun"
+   }
+  },
+  {
+   "cle": "radio",
+   "famille": "Effets",
+   "nom": "Radio",
+   "description": "Bande étroite et compression forte : la voix d'un vieux poste de radio.",
+   "reglages": {
+    "debruitage": "leger",
+    "dereverberation": "douce",
+    "reverberation": "attenuer",
+    "voix": true,
+    "timbre_voix": "radio",
+    "deesseur": false,
+    "espace": "aucun"
+   }
+  },
+  {
+   "cle": "telephone",
+   "famille": "Effets",
+   "nom": "Téléphone",
+   "description": "Voix filtrée comme au bout du fil : pour un appel, un souvenir, une voix rapportée.",
+   "reglages": {
+    "debruitage": "leger",
+    "dereverberation": "non",
+    "reverberation": "non",
+    "voix": true,
+    "timbre_voix": "telephone",
+    "deesseur": false,
+    "espace": "aucun"
+   }
+  }
+ ]
 }

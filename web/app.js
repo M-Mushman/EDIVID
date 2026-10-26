@@ -2153,16 +2153,13 @@ function dessinerReglages(corps) {
 function blocSection(corps, s) {
   const p = E.vue.projet;
   const [famille, ic] = SECTIONS_REGLAGES[s] || ['recettes', 'reglages'];
-  corps.append(blocOutil(`reglages_${s}`, { icone: ic, titre: s === 'Son' ? 'Réglages du son' : s, famille, resume: resumeSection(s, p.reglages) },
+  corps.append(blocOutil(`reglages_${s}`, { icone: ic, titre: s, famille, resume: resumeSection(s, p.reglages) },
     E.catalogue.filter((r) => r.section === s).map((r) => {
       const valeur = p.reglages[r.cle];
       const enLigne = r.genre === 'interrupteur';
       return h('div', { class: 'reglage' },
         h('div', { class: 'reglage-tete' },
-          h('span', { class: 'reglage-titre' }, r.titre, r.remontage ? h('span', { class: 'marque', title: 'Lu par le LLM au moment du montage' }, 'au prochain montage') : null,
-            s === 'Son' ? (CLES_SON_DIRECT.includes(r.cle)
-              ? h('span', { class: 'marque', title: 'S’entend aussitôt sur l’aperçu (case « Son en direct »)' }, 'en direct')
-              : h('span', { class: 'marque marque-attente', title: 'Inscrit dans l’aperçu : il faut le mettre à jour' }, 'au prochain aperçu')) : null),
+          h('span', { class: 'reglage-titre' }, r.titre, r.remontage ? h('span', { class: 'marque', title: 'Lu par le LLM au moment du montage' }, 'au prochain montage') : null),
           enLigne ? controleReglage(r, valeur) : null),
         h('div', { class: 'reglage-aide' }, r.aide),
         enLigne ? null : controleReglage(r, valeur));
@@ -2200,6 +2197,72 @@ function boutonEcoute(cle, libelle) {
   return b;
 }
 
+/** Niveaux d'écho de la pièce : chacun règle ensemble la porte de traîne (en direct) et le retrait de l'écho
+ *  mêlé à la voix (WPE, inscrit dans l'aperçu). */
+const NIVEAUX_ECHO = [
+  ['aucun', 'Aucun', 'non', 'non'], ['leger', 'Léger', 'attenuer', 'non'], ['moyen', 'Moyen', 'attenuer', 'douce'],
+  ['fort', 'Fort', 'attenuer', 'forte'], ['tres_fort', 'Très fort', 'forte', 'forte'],
+];
+
+async function reglerSon(changements) {
+  try {
+    const r = await api('POST', `/api/projets/${E.projetId}/reglages`, changements);
+    if (r.faits?.length) E.aMettreAJour = true;
+  } catch (e) { toast(e.message, 'erreur'); }
+}
+
+function marqueSon(genre) {
+  if (genre === 'direct') return h('span', { class: 'marque', title: 'S’entend aussitôt sur l’aperçu (case « Son en direct »)' }, 'en direct');
+  if (genre === 'partiel') return h('span', { class: 'marque marque-attente', title: 'Léger s’entend aussitôt ; à partir de Moyen, le retrait de l’écho est inscrit dans l’aperçu : il faut le mettre à jour' }, 'en partie au prochain aperçu');
+  return h('span', { class: 'marque marque-attente', title: 'Inscrit dans l’aperçu : il faut le mettre à jour' }, 'au prochain aperçu');
+}
+
+function ligneSon(titre, aide, controle, genre, enLigne = false) {
+  return h('div', { class: 'reglage' },
+    h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, titre, marqueSon(genre)), enLigne ? controle : null),
+    aide ? h('div', { class: 'reglage-aide' }, aide) : null,
+    enLigne ? null : controle);
+}
+
+/** Le son en cinq blocs sans recouvrement : ambiances (point de départ), voix, écho et bruit, lieu, musique. */
+function blocsSon(corps) {
+  const r = E.vue.projet.reglages;
+  const R = (cle) => E.catalogue.find((x) => x.cle === cle);
+  const ligne = (cle, genre) => ligneSon(R(cle).titre, R(cle).aide, controleReglage(R(cle), r[cle]), genre, R(cle).genre === 'interrupteur');
+  const libelle = (cle, v) => R(cle).options.find((o) => o.valeur === v)?.libelle || v;
+  blocAmbiances(corps);
+
+  // Voix : « Voix plus présente » et le timbre ne font qu'un choix ; « Sans traitement » éteint le traitement.
+  const timbre = r.voix ? r.timbre_voix : 'aucun';
+  const choixTimbre = h('select', { class: 'champ', 'aria-label': 'Timbre de la voix',
+    onchange: (e) => reglerSon(e.target.value === 'aucun' ? { voix: false } : { voix: true, timbre_voix: e.target.value }) },
+  [...R('timbre_voix').options.map((o) => [o.valeur, o.libelle]), ['aucun', 'Sans traitement']].map(([v, l]) => h('option', { value: v, selected: v === timbre }, l)));
+  corps.append(blocOutil('son_voix', { icone: 'onde', titre: 'Voix', famille: 'son',
+    resume: [timbre === 'aucun' ? 'sans traitement' : libelle('timbre_voix', timbre), r.deesseur ? '« s » adoucis' : null].filter(Boolean).join(' · ') },
+  ligneSon('Timbre', 'La couleur de la voix : égaliseur et compression qui lisse les écarts de volume. Clair, chaud, naturel, podcast… ou sans traitement.', choixTimbre, 'direct'),
+  ligne('deesseur', 'direct')));
+
+  // Écho et bruit : un seul choix d'écho (porte de traîne + retrait de l'écho), le bruit, le calage.
+  const niveau = NIVEAUX_ECHO.find(([, , porte, wpe]) => porte === r.reverberation && wpe === r.dereverberation);
+  const echo = h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Écho de la pièce' }, NIVEAUX_ECHO.map(([cle, l, porte, wpe]) =>
+    h('button', { class: niveau?.[0] === cle ? 'actif' : '', role: 'radio', 'aria-checked': niveau?.[0] === cle ? 'true' : 'false',
+      onclick: () => reglerSon({ reverberation: porte, dereverberation: wpe }) }, l)));
+  corps.append(blocOutil('son_nettoyage', { icone: 'onde', titre: 'Écho et bruit', famille: 'son',
+    resume: [`écho ${niveau ? niveau[1].toLowerCase() : 'sur mesure'}`, `bruit ${libelle('debruitage', r.debruitage).toLowerCase()}`, r.calage_son ? `calage ${r.calage_son} ms` : null].filter(Boolean).join(' · ') },
+  ligneSon('Écho de la pièce',
+    'Léger : la traîne qui suit chaque phrase baisse. Moyen et Fort : l’écho mêlé à la voix pendant qu’elle parle est aussi retiré (sur le processeur, environ une minute par dizaine de minutes de rush, la première fois). Très fort : la traîne est coupée net, au risque de raboter la fin des mots doux.',
+    [echo, niveau ? null : h('div', { class: 'tres-petit muet', style: { marginTop: '6px' } }, 'Réglage sur mesure (venu d’un jeu de réglages ou de l’assistant) : choisissez un niveau pour revenir à l’un d’eux.')], 'partiel'),
+  ligne('debruitage', 'apercu'),
+  ligne('calage_son', 'apercu')));
+
+  corps.append(blocOutil('son_lieu', { icone: 'onde', titre: 'Lieu', famille: 'son', resume: libelle('espace', r.espace) },
+    ligne('espace', 'direct')));
+
+  corps.append(blocOutil('son_musique', { icone: 'musique', titre: 'Musique', famille: 'son',
+    resume: r.musique ? `${E.vue.projet.medias.find((m) => m.id === r.musique)?.nom || 'musique'} · ${r.volume_musique} %` : 'sans musique' },
+  ligne('musique', 'apercu'), ligne('volume_musique', 'apercu')));
+}
+
 /** Bibliothèque d'ambiances : un clic applique d'un coup tous les réglages de son d'une ambiance. */
 function blocAmbiances(corps) {
   const p = E.vue.projet;
@@ -2211,7 +2274,7 @@ function blocAmbiances(corps) {
   const familles = [...new Set(catalogueAmbiances.map((a) => a.famille))];
   corps.append(blocOutil('ambiances', { icone: 'onde', titre: 'Ambiances sonores', famille: 'son', resume: active ? active.nom : 'Son réglé sur mesure' },
     h('div', { class: 'reglage-aide', style: { marginBottom: '8px' } },
-      'Un son complet en un clic : écho, bruit, timbre et lieu. Écoutez d’abord vingt secondes de votre rush avec chaque ambiance (la première écoute qui retire l’écho prend quelques secondes). Le détail reste réglable dans le bloc Son.'),
+      'Le point de départ : un son complet en un clic (voix, écho, bruit, lieu). Écoutez d’abord vingt secondes de votre rush avec chaque ambiance (la première écoute qui retire l’écho prend quelques secondes), puis ajustez dans les blocs Voix, Écho et bruit, Lieu.'),
     h('div', { style: { marginBottom: '10px' } }, boutonEcoute('actuel', 'Écouter le son actuel')),
     familles.map((fam) => [
       h('h4', { class: 'titre-famille' }, fam),
@@ -3135,8 +3198,7 @@ function dessinerPostProd(corps) {
     h('div', { class: 'reglage-aide', style: { marginBottom: '10px' } }, p.apercu?.rapport?.son_direct
       ? 'Le son se règle en direct sur l’aperçu : appliquez une ambiance ou changez un réglage marqué « en direct », il s’entend aussitôt (case « Son en direct » sous le lecteur). La réduction du bruit, le retrait de l’écho et le calage demandent un nouvel aperçu.'
       : 'Mettez l’aperçu à jour une fois : ensuite, le son se règlera en direct pendant la lecture. En attendant, écoutez une ambiance sur vingt secondes de votre rush.'));
-  blocAmbiances(corps);
-  blocSection(corps, 'Son');
+  blocsSon(corps);
   if (E.comparaison) comparer();
 }
 
