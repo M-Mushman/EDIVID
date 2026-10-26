@@ -1344,6 +1344,9 @@ async fn changer_habillage(State(etat): State<EtatPartage>, Path(id): Path<Strin
         h.opacite = if h.opacite > 0.0 { h.opacite.clamp(0.1, 1.0) } else { 0.9 };
         h.ombre = h.ombre.clamp(0.0, 1.0);
         h.halo = h.halo.clamp(0.0, 1.0);
+        if h.halo_couleur != "noir" {
+            h.halo_couleur = "blanc".into();
+        }
         if h.id.is_empty() {
             h.id = nouvel_id();
         }

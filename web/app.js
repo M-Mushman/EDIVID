@@ -2056,8 +2056,13 @@ function blocHabillage(corps) {
       // Pour détacher le logo d'une image chargée : une ombre portée douce, un halo lumineux autour.
       // Pas de 1 : un petit logo se règle finement. Le halo s'affiche aussi par son rayon dans la vidéo finale (1920 px).
       x.genre === 'logo' ? curseurElement('Ombre portée', Math.round((x.ombre || 0) * 100), 0, 100, 1, (v) => (v ? `${v} %` : 'aucune'), (v, fin) => { x.ombre = v / 100; enregistrer(fin); }) : null,
-      x.genre === 'logo' ? curseurElement('Halo lumineux', Math.round((x.halo || 0) * 100), 0, 100, 1,
-        (v) => (v ? `${v} % · rayon ${fr(0.04 * 1920 * (x.taille || 0.16) * (0.6 + v / 100), 1)} px` : 'aucun'), (v, fin) => { x.halo = v / 100; enregistrer(fin); }) : null,
+      // Le halo se règle par son opacité ; son rayon (dans la vidéo finale, 1920 px) varie peu.
+      x.genre === 'logo' ? curseurElement('Halo', Math.round((x.halo || 0) * 100), 0, 100, 1,
+        (v) => (v ? `opacité ${v} % · rayon ${fr(0.03 * 1920 * (x.taille || 0.16) * (0.7 + 0.6 * v / 100), 1)} px` : 'aucun'), (v, fin) => { x.halo = v / 100; enregistrer(fin); }) : null,
+      x.genre === 'logo' && x.halo > 0 ? h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Couleur du halo'),
+        h('div', { class: 'reglage-aide' }, 'Blanc sur une image sombre ; noir sur une image claire, où un halo blanc efface le logo.'),
+        h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Couleur du halo' }, [['blanc', 'Blanc'], ['noir', 'Noir']].map(([v, l]) =>
+          h('button', { class: (x.halo_couleur || 'blanc') === v ? 'actif' : '', onclick: () => { x.halo_couleur = v; enregistrer(); dessiner(); } }, l)))) : null,
       x.genre === 'texte' ? h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Couleur du texte', style: { marginTop: '8px' } },
         [['blanc', 'Blanc'], ['noir', 'Noir'], ['jaune', 'Jaune']].map(([v, l]) => h('button', { class: (x.couleur || 'blanc') === v ? 'actif' : '',
           onclick: () => { x.couleur = v; enregistrer(); dessiner(); } }, l))) : null);

@@ -659,7 +659,10 @@ fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, h
     let l = largeur as f64;
     let flou_ombre = (0.025 * l).max(1.0);
     let decalage = (0.03 * l).round().max(1.0);
-    let flou_halo = (0.04 * l * (0.6 + hab.halo)).max(1.0);
+    // Le réglage du halo est son opacité (0 à 1) ; son étendue varie peu (0,021 à 0,039 × largeur du logo). Avant,
+    // il ne réglait que l'étendue : même à 1 %, la lueur était presque opaque et noyait un logo fin sur fond clair.
+    let flou_halo = (0.03 * l * (0.7 + 0.6 * hab.halo)).max(1.0);
+    let teinte = if hab.halo_couleur == "noir" { 0 } else { 255 };
     let bord = (3.0 * flou_ombre.max(flou_halo) + decalage).ceil() as u32 / 2 * 2 + 2;
     // Une expression écrite pour le logo seul (w, h) vaut pour le logo agrandi de sa bordure (w-2b, h-2b), moins b.
     let corriger = |e: &str| format!("({})-{bord}", e.replace('w', &format!("(w-{})", 2 * bord)).replace('h', &format!("(h-{})", 2 * bord)));
@@ -679,8 +682,8 @@ fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, h
     if hab.halo > 0.0 {
         // Le flou étale et dilue l'opacité : on la relève pour que le halo se voie.
         fc.push(format!(
-            "[hhalo{j}]lutrgb=r=255:g=255:b=255,gblur=sigma={flou_halo:.1},lutrgb=a='min(255,val*{:.2})'[hhb{j}]",
-            1.0 + 3.0 * hab.halo
+            "[hhalo{j}]lutrgb=r={teinte}:g={teinte}:b={teinte},gblur=sigma={flou_halo:.1},lutrgb=a='min(255,val*{:.3})'[hhb{j}]",
+            3.0 * hab.halo
         ));
         fc.push(format!("[{sur}][hhb{j}]overlay=x='{x}':y='{y}':eof_action=pass[hvh{j}]"));
         sur = format!("hvh{j}");
@@ -1852,8 +1855,10 @@ mod tests_logo {
     #[ignore]
     fn graphe_du_logo() {
         let dossier = PathBuf::from(std::env::var("EDIVID_GRAPHES").expect("EDIVID_GRAPHES"));
-        let hab = crate::modele::Habillage { genre: "logo".into(), position: "haut_gauche".into(), taille: 0.16, opacite: 0.9,
-                                             ombre: 0.7, halo: 0.6, ..Default::default() };
-        std::fs::write(dossier.join("logo.graphe"), graphe_logo("1:v", "0:v", "v", 0, 154, &hab, 38).join(";")).unwrap();
+        for (nom, halo, couleur) in [("faible", 0.01, "blanc"), ("moyen", 0.3, "blanc"), ("noir", 0.3, "noir")] {
+            let hab = crate::modele::Habillage { genre: "logo".into(), position: "haut_gauche".into(), taille: 0.16, opacite: 0.9,
+                                                 ombre: 0.7, halo, halo_couleur: couleur.into(), ..Default::default() };
+            std::fs::write(dossier.join(format!("logo_{nom}.graphe")), graphe_logo("1:v", "0:v", "v", 0, 154, &hab, 38).join(";")).unwrap();
+        }
     }
 }

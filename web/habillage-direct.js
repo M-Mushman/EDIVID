@@ -2,8 +2,8 @@
 // même géométrie que le rendu final (src/rendu.rs : graphe_logo, habillage_textes). Toutes les mesures sont des
 // parts de la largeur de l'image, comme au rendu : elles valent à toute taille du lecteur.
 //  - Logo : largeur = taille × largeur de l'image, à 4 % du bord. Ombre portée et halo par un filtre SVG qui suit
-//    le graphe ffmpeg : halo = silhouette blanche floutée (σ = 0,04 × largeur du logo × (0,6 + halo)), opacité
-//    × (1 + 3 × halo) ; ombre = silhouette noire floutée (σ = 0,025 × logo), décalée de 0,03 × logo, opacité
+//    le graphe ffmpeg : halo = silhouette blanche ou noire floutée (σ = 0,03 × largeur du logo × (0,7 + 0,6 × halo)),
+//    opacité × 3 × halo ; ombre = silhouette noire floutée (σ = 0,025 × logo), décalée de 0,03 × logo, opacité
 //    × 0,9 × ombre ; puis le logo.
 //  - Texte : police Anton, corps du rendu = taille × largeur (0,578 fois ce corps dans le navigateur, ligne de la
 //    hauteur du corps, comme libass), espacement d'un pixel du rendu, contour de 6 % du corps, ombre d'un pixel.
@@ -22,10 +22,11 @@ function filtreLogo(defs, id, hab, largeur) {
   const f = el('filter', { id, x: '-60%', y: '-60%', width: '220%', height: '220%', 'color-interpolation-filters': 'sRGB' }, defs);
   const fusion = [];
   if (hab.halo > 0) {
-    el('feGaussianBlur', { in: 'SourceAlpha', stdDeviation: 0.04 * largeur * (0.6 + hab.halo), result: 'hb' }, f);
+    // Comme le rendu (graphe_logo) : le réglage est l'opacité du halo, son étendue varie peu.
+    el('feGaussianBlur', { in: 'SourceAlpha', stdDeviation: 0.03 * largeur * (0.7 + 0.6 * hab.halo), result: 'hb' }, f);
     const ct = el('feComponentTransfer', { in: 'hb', result: 'ha' }, f);
-    el('feFuncA', { type: 'linear', slope: 1 + 3 * hab.halo }, ct);
-    el('feFlood', { 'flood-color': '#fff', result: 'hc' }, f);
+    el('feFuncA', { type: 'linear', slope: 3 * hab.halo }, ct);
+    el('feFlood', { 'flood-color': hab.halo_couleur === 'noir' ? '#000' : '#fff', result: 'hc' }, f);
     el('feComposite', { in: 'hc', in2: 'ha', operator: 'in', result: 'halo' }, f);
     fusion.push('halo');
   }
