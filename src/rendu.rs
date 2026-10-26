@@ -972,7 +972,8 @@ async fn gain_voix(etat: &EtatPartage, p: &Projet, prog: &Programme) -> f64 {
 /// n'est plus à jour (l'interface le dit, même après un rechargement de la page).
 pub fn empreinte(p: &Projet) -> String {
     let v = json!([p.reglages, p.montage.as_ref().map(|m| json!([m.phrases, m.accroche, m.accroche_choisie, m.chapitres])),
-                   p.incrustations, p.habillage, p.generique, p.corrections, p.fusions, p.postprod, p.rushs.iter().map(|r| &r.id).collect::<Vec<_>>()]);
+                   p.incrustations, p.habillage, p.generique, p.corrections, p.fusions,
+                   p.medias.iter().map(|m| [&m.id, &m.fichier]).collect::<Vec<_>>(), p.rushs.iter().map(|r| &r.id).collect::<Vec<_>>()]);
     let mut h = std::collections::hash_map::DefaultHasher::new();
     v.to_string().hash(&mut h);
     format!("{:016x}", h.finish())
@@ -1001,7 +1002,9 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
 
     // Image : cadence fixe, puis PostProd (couleur, teint, diffusion, netteté, grain…), puis les effets ponctuels.
     fc.push(format!("[0:v]setpts=N/({IPS}*TB)[ppe]"));
-    fc.push(p.postprod.filtre("ppe", "pps", wo, ho));
+    // L'aperçu sort sans PostProd : le navigateur l'applique en direct, chaque réglage se voit aussitôt. Le rendu
+    // final, lui, l'inscrit dans l'image.
+    fc.push(if apercu { "[ppe]null[pps]".to_string() } else { p.postprod.filtre("ppe", "pps", wo, ho) });
     let mut v = vec![];
     let effets = |nom: &str| prog.incrustations.iter().filter(|i| i.effet == nom).map(|i| (i.debut, i.fin)).collect::<Vec<_>>();
     let secousses = effets("secousse");
@@ -1263,6 +1266,8 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["duree_rendu_s"] = json!(debut.elapsed().as_secs());
     rapport["encodeur"] = json!(if nvenc { "NVENC" } else { "x264" });
     rapport["son"] = json!(resume_son(&p.reglages));
+    // Aperçu sans PostProd : l'interface l'applique en direct (un ancien aperçu l'a déjà dans son image).
+    rapport["postprod_direct"] = json!(apercu);
     rapport["empreinte"] = json!(empreinte(&p));
     let (avant, apres) = durees_generique(&p);
     rapport["generique"] = json!({"debut": avant, "fin": apres});
@@ -1341,6 +1346,25 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
 // ---------------------------------------------------------------- PostProd : image avant / après
 
 /// Une image de la source à cet instant, sans ou avec la PostProd (JPEG), pour comparer sans rendre.
+/// Table de couleurs (Hald CLUT niveau 8, image 512 × 512, cube de 64³) de la partie couleur d'une PostProd,
+/// calculée par ffmpeg lui-même : l'aperçu en direct reproduit exactement ses couleurs. Gardée par réglage.
+pub async fn table_couleurs(etat: &EtatPartage, pp: &crate::postprod::PostProd) -> Result<Vec<u8>> {
+    let filtres = pp.filtres_couleur();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    filtres.join(",").hash(&mut h);
+    let f = etat.cfg.donnees.join("luts").join(format!("{:016x}.png", h.finish()));
+    if let Ok(b) = tokio::fs::read(&f).await {
+        return Ok(b);
+    }
+    tokio::fs::create_dir_all(f.parent().unwrap()).await?;
+    // Comme dans le rendu, les filtres reçoivent une image YUV.
+    let chaine = if filtres.is_empty() { "null".to_string() } else { filtres.join(",") };
+    ffmpeg_simple(vec!["-f".into(), "lavfi".into(), "-i".into(), "haldclutsrc=level=8".into(), "-frames:v".into(), "1".into(),
+                       "-vf".into(), format!("format=yuv444p,{chaine},format=rgb24"), f.to_string_lossy().into()])
+        .await?;
+    Ok(tokio::fs::read(&f).await?)
+}
+
 pub async fn image_postprod(mezz: &Path, t: f64, pp: &crate::postprod::PostProd, avec: bool) -> Result<Vec<u8>> {
     let d = ffprobe(mezz).await?;
     let v = d["streams"].as_array().and_then(|s| s.iter().find(|s| s["codec_type"] == "video")).cloned().unwrap_or_default();

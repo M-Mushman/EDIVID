@@ -723,3 +723,12 @@ button.temps:hover { color: var(--accent); }
 .vignette-incrustation img, .vignette-incrustation video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .vignette-incrustation svg { width: 16px; height: 16px; color: var(--texte-2); }
 .phrase:has(.vignettes-incrustations) .boutons { opacity: 1; }
+
+/* ---------- PostProd en direct ---------- */
+.lecteur .pp-direct { position: absolute; pointer-events: none; display: block; }
+.lecteur .pp-direct.cache { display: none; }
+/* Commandes du lecteur visibles (survol, pause) : le canevas s'arrête au-dessus d'elles. */
+.lecteur:hover .pp-direct, .lecteur.en-pause .pp-direct { clip-path: inset(0 0 var(--clip-bas, 52px) 0); }
+.titre-pp { display: flex; align-items: center; gap: 8px; margin: 18px 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--texte-2); }
+.titre-pp:first-of-type { margin-top: 4px; }
+.titre-pp svg { width: 16px; height: 16px; color: var(--accent); }

@@ -1,5 +1,7 @@
 // EDIVID — interface. JavaScript sans dépendance : tout passe par l'API du serveur local.
 
+import { creerApercuDirect } from './postprod-direct.js';
+
 const $app = document.getElementById('app');
 
 // ------------------------------------------------------------------ outils
@@ -280,6 +282,7 @@ const E = {
   voirTlOrigine: lire('edivid_voirTlOrigine') !== '0',
   voirTlMontage: lire('edivid_voirTlMontage') !== '0',
   filtre: 'toutes',
+  ppDirect: lire('edivid_ppDirect') !== '0',
   editionSt: null,
   selectionSt: new Set(),
   progression: null,
@@ -761,6 +764,11 @@ function construireLecteur() {
   n.calque = h('div', { class: 'calque' });
   n.indicateurDepot = h('div', { class: 'indicateur-depot cache' }, 'Déposez ici : la position et l’instant de la vidéo seront retenus');
   n.ecran = h('div', { class: 'lecteur' }, n.video, n.calque, n.indicateurDepot);
+  // PostProd en direct (WebGL) : null si le navigateur ne le permet pas, l'aperçu reste alors sans PostProd.
+  n.direct = creerApercuDirect(n.video, n.ecran);
+  const pause = () => n.ecran.classList.toggle('en-pause', n.video.paused);
+  n.video.addEventListener('play', pause);
+  n.video.addEventListener('pause', pause);
   n.ecran.addEventListener('dragover', (e) => {
     if (!e.dataTransfer.types.includes('application/x-edivid')) return;
     e.preventDefault();
@@ -836,6 +844,26 @@ function dessinerLecteur() {
   dessinerTimelines();
   dessinerStats();
   dessinerCalque();
+  majApercuDirect();
+}
+
+const PP_NEUTRE = { couleur: 'naturel', exposition: 0, contraste: 0, saturation: 0, temperature: 0, lissage: 0, diffusion: 0, nettete: 0, grain: 0, vignette: 0, bandes: false };
+
+/** La PostProd en cours (celle qu'on règle, sinon celle du projet) sur l'aperçu et la vidéo d'origine. Le rendu
+ *  final l'a déjà dans son image : on ne la rajoute pas. */
+function majApercuDirect() {
+  const n = E.noeuds;
+  if (!n.direct || !E.vue) return;
+  const enReglage = E.onglet === 'postprod' && E.postprod && E.postprodDe === E.projetId;
+  const pp = { ...PP_NEUTRE, ...(enReglage ? E.postprod : E.vue.projet.postprod) };
+  const neutre = Object.keys(PP_NEUTRE).every((k) => pp[k] === PP_NEUTRE[k]);
+  // Un aperçu rendu avant le direct a déjà la PostProd dans son image : on ne l'applique pas deux fois.
+  const dejaDansImage = E.lecteur === 'apercu' && !E.vue.projet.apercu?.rapport?.postprod_direct;
+  const actif = E.ppDirect && E.lecteur !== 'rendu' && !dejaDansImage && !!n.video.dataset.url && !neutre;
+  const couleurNeutre = pp.couleur === 'naturel' && !pp.exposition && !pp.contraste && !pp.saturation && !pp.temperature;
+  const table = couleurNeutre ? '' : `/api/postprod/lut?${new URLSearchParams({ couleur: pp.couleur, exposition: pp.exposition, contraste: pp.contraste, saturation: pp.saturation, temperature: pp.temperature })}`;
+  n.direct.regler(pp, table);
+  n.direct.activer(actif);
 }
 
 function changerLecteur(mode, rush) {
@@ -864,7 +892,10 @@ function dessinerOutilsLecteur() {
     h('span', {}, libelle));
   remplir(n.outilsLecteur, commenter, choixRush, h('span', { class: 'espace' }),
     bascule('voirTlOrigine', 'Timeline d’origine', E.voirTlOrigine),
-    bascule('voirTlMontage', 'Timeline du montage', E.voirTlMontage));
+    bascule('voirTlMontage', 'Timeline du montage', E.voirTlMontage),
+    E.lecteur !== 'rendu' && n.direct ? h('label', { class: 'bascule', title: 'Voir la PostProd (couleur, teint, grain…) en direct sur la vidéo ; décochez pour comparer avec l’image brute' },
+      h('input', { type: 'checkbox', checked: E.ppDirect, onchange: (e) => { E.ppDirect = e.target.checked; stocker('edivid_ppDirect', E.ppDirect ? '1' : '0'); majApercuDirect(); } }),
+      h('span', {}, 'PostProd en direct')) : null);
 }
 
 const NOMS_REGIME_LONG = { respiration: 'Respiration', rafale: 'Rafale', impact: 'Impact' };
@@ -1076,7 +1107,7 @@ function dessinerCalque() {
     } else {
       const m = p.medias.find((x) => x.id === inc.media);
       if (!m) return null;
-      const url = `/api/projets/${E.projetId}/medias/${m.id}`;
+      const url = urlMedia(m);
       style.width = inc.position === 'plein' && inc.x == null ? '100%' : `${inc.taille * 100}%`;
       contenu = m.genre === 'video' ? h('video', { src: url, muted: true, autoplay: true, loop: true, playsinline: true }) : h('img', { src: url, alt: m.nom, draggable: 'false' });
     }
@@ -1872,7 +1903,7 @@ function blocHabillage(corps) {
       const choix = choixMedia({ genres: ['image', 'gif'], valeur: x.media, libelle: 'Image du logo',
         changer: (id) => { x.media = id; enregistrer(); dessiner(); } });
       tete = h('div', { class: 'habillage-tete' },
-        h('div', { class: 'habillage-vignette' }, x.media ? h('img', { src: `/api/projets/${E.projetId}/medias/${x.media}`, alt: '' }) : icone('image')),
+        h('div', { class: 'habillage-vignette' }, x.media ? h('img', { src: urlMedia(E.vue.projet.medias.find((m) => m.id === x.media) || { id: x.media }), alt: '' }) : icone('image')),
         h('div', { style: { flex: 1, minWidth: 0 } }, h('b', { class: 'petit' }, 'Logo'), choix), retirer);
     } else {
       const champ = h('input', { class: 'champ', value: x.texte || '', maxlength: '80', 'aria-label': 'Texte' });
@@ -2074,22 +2105,25 @@ function dessinerReglages(corps) {
   sectionConsignes(corps);
   blocHabillage(corps);
   blocGenerique(corps);
-  blocAmbiances(corps);
-  const sections = [...new Set(E.catalogue.map((r) => r.section))];
-  for (const s of sections) {
-    const [famille, ic] = SECTIONS_REGLAGES[s] || ['recettes', 'reglages'];
-    corps.append(blocOutil(`reglages_${s}`, { icone: ic, titre: s, famille, resume: resumeSection(s, p.reglages) },
-      E.catalogue.filter((r) => r.section === s).map((r) => {
-        const valeur = p.reglages[r.cle];
-        const enLigne = r.genre === 'interrupteur';
-        return h('div', { class: 'reglage' },
-          h('div', { class: 'reglage-tete' },
-            h('span', { class: 'reglage-titre' }, r.titre, r.remontage ? h('span', { class: 'marque', title: 'Lu par le LLM au moment du montage' }, 'au prochain montage') : null),
-            enLigne ? controleReglage(r, valeur) : null),
-          h('div', { class: 'reglage-aide' }, r.aide),
-          enLigne ? null : controleReglage(r, valeur));
-      })));
-  }
+  // Le son se règle dans l'onglet PostProd, avec l'image.
+  for (const s of [...new Set(E.catalogue.map((r) => r.section))].filter((x) => x !== 'Son')) blocSection(corps, s);
+}
+
+/** Un bloc de réglages du catalogue (une section : Autocut, Zooms, Son…). */
+function blocSection(corps, s) {
+  const p = E.vue.projet;
+  const [famille, ic] = SECTIONS_REGLAGES[s] || ['recettes', 'reglages'];
+  corps.append(blocOutil(`reglages_${s}`, { icone: ic, titre: s === 'Son' ? 'Réglages du son' : s, famille, resume: resumeSection(s, p.reglages) },
+    E.catalogue.filter((r) => r.section === s).map((r) => {
+      const valeur = p.reglages[r.cle];
+      const enLigne = r.genre === 'interrupteur';
+      return h('div', { class: 'reglage' },
+        h('div', { class: 'reglage-tete' },
+          h('span', { class: 'reglage-titre' }, r.titre, r.remontage ? h('span', { class: 'marque', title: 'Lu par le LLM au moment du montage' }, 'au prochain montage') : null),
+          enLigne ? controleReglage(r, valeur) : null),
+        h('div', { class: 'reglage-aide' }, r.aide),
+        enLigne ? null : controleReglage(r, valeur));
+    })));
 }
 
 // ------------------------------------------------------------------ ambiances sonores
@@ -2154,8 +2188,14 @@ function blocAmbiances(corps) {
 
 const GENRES_MEDIA = { image: 'Image', gif: 'GIF animé', video: 'Vidéo', son: 'Son' };
 
+/** Adresse d'un média, versionnée par son fichier : un fichier remplacé change d'adresse, le navigateur ne
+ *  ressert pas l'ancienne image de son cache. */
+function urlMedia(m) {
+  return `/api/projets/${E.projetId}/medias/${m.id}${m.fichier ? `?v=${encodeURIComponent(m.fichier)}` : ''}`;
+}
+
 function vignetteMedia(m) {
-  const url = `/api/projets/${E.projetId}/medias/${m.id}`;
+  const url = urlMedia(m);
   if (m.genre === 'image' || m.genre === 'gif') return h('img', { src: url, alt: m.nom, loading: 'lazy' });
   if (m.genre === 'video') return h('video', { src: url, muted: true, preload: 'metadata', onmouseenter: (e) => e.target.play(), onmouseleave: (e) => e.target.pause() });
   return icone('musique');
@@ -2966,6 +3006,7 @@ function signe(v) { return `${v > 0 ? '+' : ''}${v}`; }
 function dessinerPostProd(corps) {
   const p = E.vue.projet;
   const pp = E.postprod = { ...p.postprod };
+  E.postprodDe = E.projetId;
   if (!catalogueLooks) {
     remplir(corps, h('p', { class: 'muet petit' }, 'Chargement…'));
     api('GET', '/api/postprod/looks').then((c) => { catalogueLooks = c; dessinerPanneau(); });
@@ -2976,11 +3017,12 @@ function dessinerPostProd(corps) {
     minuteriePostProd = setTimeout(async () => {
       try {
         await api('POST', `/api/projets/${E.projetId}/postprod`, E.postprod);
-        E.aMettreAJour = true;
-        dessinerBarre();
+        E.vue.projet.postprod = { ...E.postprod };
         if (E.comparaison) comparer();
       } catch (e) { toast(e.message, 'erreur'); }
     }, 450);
+    // La vidéo suit tout de suite, sans attendre l'enregistrement.
+    majApercuDirect();
   };
   const curseur = (cle, titre, aide, min, max) => {
     const sortie = h('b', { class: 'petit', style: { minWidth: '38px', textAlign: 'right' } }, `${pp[cle] > 0 && min < 0 ? '+' : ''}${pp[cle]}`);
@@ -2996,7 +3038,8 @@ function dessinerPostProd(corps) {
   const horizontal = (p.apercu?.rapport?.largeur || 0) > (p.apercu?.rapport?.hauteur || 1);
   corps.append(
     h('div', { class: 'aide', style: { marginBottom: '14px' } }, icone('info'),
-      h('span', {}, 'Le traitement de l’image sur toute la vidéo : couleur, teint, lumière, grain. Choisissez un look, ajustez, puis comparez avant/après sur l’image affichée. Les textes et sous-titres restent nets.')),
+      h('span', {}, 'Le traitement de l’image et du son sur toute la vidéo. L’image se règle en direct : chaque look, chaque curseur se voit aussitôt sur la vidéo du lecteur (case « PostProd en direct » pour comparer avec l’image brute). Le rendu final l’inscrit dans l’image, sous les textes et sous-titres, qui restent nets.')),
+    h('h3', { class: 'titre-pp' }, icone('image'), 'Image'),
     blocOutil('pp_looks', { icone: 'etincelles', titre: 'Looks', famille: 'image',
       resume: pp.look ? (catalogueLooks.looks.find((l) => l.cle === pp.look)?.nom || pp.look) : 'Réglage sur mesure' },
       h('div', { class: 'grille-looks' }, catalogueLooks.looks.map((l) => h('button', {
@@ -3006,9 +3049,9 @@ function dessinerPostProd(corps) {
           try {
             await api('POST', `/api/projets/${E.projetId}/postprod`, E.postprod);
             E.vue.projet.postprod = { ...E.postprod };
-            E.aMettreAJour = true;
-            toast(`Look « ${l.nom} » appliqué. Mettez à jour l’aperçu pour le voir dans la vidéo.`, 'ok');
+            toast(`Look « ${l.nom} » appliqué : il se voit en direct sur la vidéo.`, 'ok');
             dessinerPanneau();
+            majApercuDirect();
             if (E.comparaison) comparer();
           } catch (e) { toast(e.message, 'erreur'); }
         },
@@ -3040,9 +3083,13 @@ function dessinerPostProd(corps) {
       E.postprod = { look: '', couleur: 'naturel', exposition: 0, contraste: 0, saturation: 0, temperature: 0, lissage: 0, diffusion: 0, nettete: 0, grain: 0, vignette: 0, bandes: false };
       await api('POST', `/api/projets/${E.projetId}/postprod`, E.postprod);
       E.vue.projet.postprod = { ...E.postprod };
-      E.aMettreAJour = true;
       dessinerPanneau();
-    } }, icone('relancer'), 'Tout remettre à zéro'));
+      majApercuDirect();
+    } }, icone('relancer'), 'Remettre l’image à zéro'),
+    h('h3', { class: 'titre-pp' }, icone('onde'), 'Son'),
+    h('div', { class: 'reglage-aide', style: { marginBottom: '10px' } }, 'Le son ne se règle pas en direct : écoutez une ambiance (vingt secondes de votre rush), puis mettez l’aperçu à jour pour l’entendre dans le montage.'));
+  blocAmbiances(corps);
+  blocSection(corps, 'Son');
   if (E.comparaison) comparer();
 }
 

@@ -104,6 +104,7 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/parametres/drive/verifier", post(verifier_drive))
         .route("/api/parametres/drive/maintenant", post(passage_drive))
         .route("/api/postprod/looks", get(looks))
+        .route("/api/postprod/lut", get(table_couleurs))
         .route("/api/son/ambiances", get(ambiances))
         .route("/api/projets/{id}/son/essai", get(essai_son))
         .route("/api/projets/{id}/postprod", post(changer_postprod))
@@ -1632,6 +1633,14 @@ async fn looks() -> Json<Value> {
         "looks": postprod::looks()["looks"],
         "couleurs": postprod::COULEURS.iter().map(|(c, n, _)| json!({"cle": c, "nom": n})).collect::<Vec<_>>(),
     }))
+}
+
+/// Table de couleurs d'une PostProd donnée dans l'adresse (pas celle enregistrée) : pendant qu'on tire un
+/// curseur, l'aperçu en direct suit sans attendre l'enregistrement.
+async fn table_couleurs(State(etat): State<EtatPartage>, Query(mut pp): Query<PostProd>) -> Result<Response, Erreur> {
+    pp.borner();
+    let octets = rendu::table_couleurs(&etat, &pp).await?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "image/png"), (axum::http::header::CACHE_CONTROL, "max-age=86400")], octets).into_response())
 }
 
 async fn changer_postprod(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(mut pp): Json<PostProd>) -> Reponse {

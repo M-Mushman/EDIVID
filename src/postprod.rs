@@ -82,9 +82,9 @@ impl PostProd {
         }
     }
 
-    /// Chaîne de filtres ffmpeg, entre [entree] et [sortie] ; largeur et hauteur de l'image traitée.
-    pub fn filtre(&self, entree: &str, sortie: &str, largeur: u32, hauteur: u32) -> String {
-        let echelle = largeur.min(hauteur) as f64 / 1080.0;
+    /// La partie couleur seule (colorimétrie, exposition, contraste, saturation, température) : elle ne dépend
+    /// que de la couleur de chaque pixel, et se met donc en table (LUT) pour l'aperçu en direct du navigateur.
+    pub fn filtres_couleur(&self) -> Vec<String> {
         let mut etapes: Vec<String> = Vec::new();
         if let Some((_, _, f)) = COULEURS.iter().find(|(c, _, _)| *c == self.couleur) {
             if !f.is_empty() {
@@ -104,6 +104,13 @@ impl PostProd {
             let k = 6500.0 - self.temperature * 30.0;
             etapes.push(format!("colortemperature=temperature={k:.0}:mix={:.2}", (self.temperature.abs() / 100.0) * 0.7));
         }
+        etapes
+    }
+
+    /// Chaîne de filtres ffmpeg, entre [entree] et [sortie] ; largeur et hauteur de l'image traitée.
+    pub fn filtre(&self, entree: &str, sortie: &str, largeur: u32, hauteur: u32) -> String {
+        let echelle = largeur.min(hauteur) as f64 / 1080.0;
+        let etapes = self.filtres_couleur();
         let mut chaine = format!("[{entree}]{}", if etapes.is_empty() { "null".to_string() } else { etapes.join(",") });
         let mut n = 0;
         let mut etiquette = |chaine: &mut String, suite: String| {
