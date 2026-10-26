@@ -250,6 +250,8 @@ pub async fn capteur(etat: &EtatPartage, projet: &str, script: &str, args: &[Str
         .arg(etat.cfg.racine.join("capteurs").join(script))
         .args(args)
         .env("HF_HUB_OFFLINE", "1")
+        // Moins de mémoire perdue en fragments quand la taille des lots varie (netteté IA).
+        .env("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -284,7 +286,14 @@ pub async fn capteur(etat: &EtatPartage, projet: &str, script: &str, args: &[Str
     let erreurs = lecture_erreurs.await.unwrap_or_default();
     if !statut.success() {
         let utile: Vec<&str> = erreurs.lines().filter(|l| !l.contains("WARN")).collect();
-        bail!("{script} en échec : {}", utile.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join(" | "));
+        // L'exception Python d'abord (sa dernière ligne « Type: message ») : les messages de ffmpeg qui suivent
+        // (tube cassé quand le script s'arrête) n'en sont que la conséquence.
+        let exception = utile.iter().rev().find(|l| !l.starts_with(' ') && !l.starts_with('[') && l.split(':').next().is_some_and(|t| t.ends_with("Error") || t.ends_with("Exception")));
+        let fin = utile.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join(" | ");
+        match exception {
+            Some(e) => bail!("{script} en échec : {e}"),
+            None => bail!("{script} en échec : {fin}"),
+        }
     }
     Ok(())
 }
@@ -1606,10 +1615,15 @@ async fn nettete_ia(etat: &EtatPartage, p: &Projet, prog: &Programme, indices: &
     }
     let fichier = tmp.join("nettete.json");
     tokio::fs::write(&fichier, serde_json::to_vec(&travaux)?).await?;
-    let secondes: f64 = a_nettoyer.iter().map(|(_, p)| p.duree).sum();
+    // Durée annoncée au bail : le temps croît avec la taille des zones (mesuré le 2026-10-26 : ~3 s de calcul par
+    // seconde de plan pour 0,9 Mpx, ~8 s pour 2,8 Mpx en 4K).
+    let secondes: f64 = a_nettoyer.iter().map(|(_, pl)| {
+        let z = zone_entiere(pl, sources[&pl.rush]);
+        pl.duree * (1.0 + 2.5 * (z.w * z.h) as f64 / 1e6)
+    }).sum();
     let bail = etat
         .carte
-        .prendre(etat, projet, "other:nettete", carte::VRAM_NETTETE_MO, (secondes * 2.0 + 120.0) as u64)
+        .prendre(etat, projet, "other:nettete", carte::VRAM_NETTETE_MO, (secondes * 1.5 + 120.0) as u64)
         .await?;
     let res = capteur(etat, projet, "nettete.py", &[fichier.to_string_lossy().into()]).await;
     etat.carte.rendre(bail).await;
@@ -1968,5 +1982,31 @@ mod tests_qualite {
         let t: f64 = std::env::var("EDIVID_T").unwrap().parse().unwrap();
         let r = plan_qualite(&etat, &std::env::var("EDIVID_PROJET").unwrap(), t).await.unwrap();
         println!("{r}");
+    }
+}
+
+#[cfg(test)]
+mod tests_capteur {
+    use super::*;
+
+    /// Un capteur sous bail de la carte : `EDIVID_SCRIPT=nettete.py EDIVID_ARGS=<travaux.json> cargo test capteur -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn capteur_sous_bail() {
+        let cfg = crate::config::Config::charger().unwrap();
+        let etat = crate::etat::Etat::nouveau(cfg, false).await.unwrap();
+        let bail = etat.carte.prendre(&etat, "essai", "other:nettete", carte::VRAM_NETTETE_MO, 600).await.unwrap();
+        // Lancé à la main (même environnement que `capteur`) pour voir toute sa sortie, mémoire de la carte comprise.
+        let r = Command::new(&etat.cfg.python)
+            .arg(etat.cfg.racine.join("capteurs").join(std::env::var("EDIVID_SCRIPT").unwrap()))
+            .arg(std::env::var("EDIVID_ARGS").unwrap())
+            .env("HF_HUB_OFFLINE", "1")
+            .env("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+            .output()
+            .await;
+        etat.carte.rendre(bail).await;
+        let r = r.unwrap();
+        println!("{}", String::from_utf8_lossy(&r.stdout).lines().filter(|l| !l.contains("\"pct\"")).collect::<Vec<_>>().join("\n"));
+        assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
     }
 }

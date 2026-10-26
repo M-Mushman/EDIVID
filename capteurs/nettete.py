@@ -26,6 +26,10 @@ ICI = Path(__file__).resolve().parent
 MODELES = ICI.parent / "modeles"
 IPS = 30
 LOT = 8
+# Pixels d'entrée par lot : la mémoire de la carte croît avec eux (~600 octets par pixel d'entrée au pic, mesuré
+# le 2026-10-26). 3 Mpx tiennent dans le bail de 3 Go (carte.rs, VRAM_NETTETE_MO) ; en 4K, une zone de
+# 2 216 × 1 246 px passe ainsi seule, là où 8 images à la fois demandaient plus de 9 Go.
+PIXELS_PAR_LOT = 3_000_000
 ECHELLE = 4
 MELANGE_VISAGE = 0.75  # part du visage restauré : en dessous de 1, moins de scintillement d'une image à l'autre
 # Gabarit FFHQ des cinq points (œil gauche à l'écran, œil droit, nez, coins de la bouche) pour 512 × 512.
@@ -101,12 +105,13 @@ def traiter(travail: dict, agrandisseur, restaurateur, avance) -> None:
          "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p", travail["sortie"]],
         stdin=subprocess.PIPE)
     taille = w * h * 3
+    par_lot = max(1, min(LOT, PIXELS_PAR_LOT // (w * h)))
     melange = min(1.0, max(0.0, float(travail.get("melange", 1.0))))
     total = max(1, round(travail["duree"] * IPS))
     faites = 0
     while True:
         lot = []
-        for _ in range(LOT):
+        for _ in range(par_lot):
             brut = lecteur.stdout.read(taille)
             if len(brut) < taille:
                 break
@@ -122,6 +127,7 @@ def traiter(travail: dict, agrandisseur, restaurateur, avance) -> None:
                 simple = F.interpolate(entree.float(), size=(H, W), mode="bicubic", align_corners=False)
                 t = t.float() * melange + simple * (1.0 - melange)
             grandes = en_images(t)
+            del entree, t
         for image in grandes:
             if restaurateur:
                 image = restaurateur(np.ascontiguousarray(image))
@@ -146,6 +152,7 @@ def main() -> None:
                 lambda f, base=fait, p=p: signaler(100 * (base + f * p) / sum(poids)))
         fait += p
     signaler(100)
+    print(json.dumps({"vram_max_mo": round(torch.cuda.max_memory_allocated() / 2**20)}), flush=True)
 
 
 if __name__ == "__main__":
