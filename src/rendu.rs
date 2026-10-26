@@ -1583,6 +1583,101 @@ async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: 
     lancer_assemblage(etat, p, &args, liste, total).await
 }
 
+/// Netteté IA (Real-ESRGAN, sous bail de la carte), en une passe, sur ceux des plans `indices` qui la demandent :
+/// fichiers nets par indice de plan.
+async fn nettete_ia(etat: &EtatPartage, p: &Projet, prog: &Programme, indices: &[usize],
+                    sources: &std::collections::HashMap<String, (u32, u32)>, tmp: &Path)
+                    -> Result<std::collections::HashMap<usize, PathBuf>> {
+    let projet = p.id.as_str();
+    let mut nettes = std::collections::HashMap::new();
+    let a_nettoyer: Vec<(usize, &Plan)> = indices.iter().map(|&i| (i, &prog.plans[i])).filter(|(_, pl)| pl.nettete).collect();
+    if a_nettoyer.is_empty() {
+        return Ok(nettes);
+    }
+    let visage = texte(&p.reglages, "nettete_ia") == "visage";
+    let mut travaux = Vec::new();
+    for (i, pl) in &a_nettoyer {
+        let z = zone_entiere(pl, sources[&pl.rush]);
+        let f = tmp.join(format!("net{i:04}.mkv"));
+        travaux.push(json!({"entree": etat.dossier_travail(projet, &pl.rush).join("mezz.mkv"), "debut": pl.t0, "duree": pl.duree,
+                            "crop": [z.x, z.y, z.w, z.h], "sortie": f, "visage": visage, "melange": MELANGE_IA,
+                            "largeur_max": largeur_nette(pl, z.w, prog.largeur)}));
+        nettes.insert(*i, f);
+    }
+    let fichier = tmp.join("nettete.json");
+    tokio::fs::write(&fichier, serde_json::to_vec(&travaux)?).await?;
+    let secondes: f64 = a_nettoyer.iter().map(|(_, p)| p.duree).sum();
+    let bail = etat
+        .carte
+        .prendre(etat, projet, "other:nettete", carte::VRAM_NETTETE_MO, (secondes * 2.0 + 120.0) as u64)
+        .await?;
+    let res = capteur(etat, projet, "nettete.py", &[fichier.to_string_lossy().into()]).await;
+    etat.carte.rendre(bail).await;
+    res?;
+    Ok(nettes)
+}
+
+/// Quelques secondes du montage à l'instant `t` (temps du montage, générique exclu), en qualité finale : les plans
+/// du rendu final (définition, netteté IA), sans PostProd, habillage, textes ni son, pour juger la netteté des
+/// zooms à côté de l'aperçu. Écrit `sorties/qualite-<date>.mp4` (le précédent est effacé).
+pub async fn plan_qualite(etat: &EtatPartage, projet: &str, t: f64) -> Result<Value> {
+    let p = etat.projet(projet).await?;
+    let analyses = etat.analyses_du_projet(&p).await?;
+    if analyses.is_empty() {
+        bail!("aucun rush analysé");
+    }
+    let ps = decoupe::phrases_projet(&p, &analyses);
+    let prog = decoupe::programme(&p, &analyses, &ps, false);
+    let premier = prog.plans.iter().rposition(|pl| pl.sortie_t0 <= t + 1e-6).context("aucun plan à cet instant")?;
+    // Le plan de l'instant et les suivants, jusqu'à trois secondes au moins (quatre plans au plus).
+    let mut indices = vec![premier];
+    let mut duree = prog.plans[premier].duree;
+    while duree < 3.0 && indices.len() < 4 && premier + indices.len() < prog.plans.len() {
+        let i = premier + indices.len();
+        duree += prog.plans[i].duree;
+        indices.push(i);
+    }
+    let dossier = etat.dossier_projet(projet);
+    let tmp = dossier.join("tmp").join("qualite");
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+    tokio::fs::create_dir_all(&tmp).await?;
+    let sources: std::collections::HashMap<String, (u32, u32)> =
+        analyses.iter().map(|(id, a)| (id.clone(), (a.largeur, a.hauteur))).collect();
+    let nettes = nettete_ia(etat, &p, &prog, &indices, &sources, &tmp).await?;
+    let mut liste = String::new();
+    for &i in &indices {
+        let pl = &prog.plans[i];
+        let f = tmp.join(format!("plan{i:04}.mkv"));
+        let mezz = etat.dossier_travail(projet, &pl.rush).join("mezz.mkv");
+        rendre_plan(pl, &mezz, nettes.get(&i).map(|x| x.as_path()), None, sources[&pl.rush], (prog.largeur, prog.hauteur), &f, false, false).await?;
+        liste.push_str(&format!("file '{}'\n", f.to_string_lossy()));
+    }
+    tokio::fs::write(tmp.join("liste.txt"), liste).await?;
+    let sorties = dossier.join("sorties");
+    tokio::fs::create_dir_all(&sorties).await?;
+    let mut lus = tokio::fs::read_dir(&sorties).await?;
+    while let Some(e) = lus.next_entry().await? {
+        if e.file_name().to_string_lossy().starts_with("qualite-") {
+            let _ = tokio::fs::remove_file(e.path()).await;
+        }
+    }
+    let nom = format!("qualite-{}.mp4", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    let mut args: Vec<String> = ["-f", "concat", "-safe", "0", "-i"].iter().map(|x| x.to_string()).collect();
+    args.push(tmp.join("liste.txt").to_string_lossy().into());
+    args.extend(["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p",
+                 "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-movflags", "+faststart"]
+        .iter().map(|x| x.to_string()));
+    args.push(sorties.join(&nom).to_string_lossy().into());
+    ffmpeg_simple(args).await?;
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+    Ok(json!({
+        "fichier": nom, "debut": prog.plans[premier].sortie_t0, "duree": duree,
+        "largeur": prog.largeur, "hauteur": prog.hauteur,
+        "plans": indices.iter().map(|&i| { let pl = &prog.plans[i];
+            json!({"agrandissement": (pl.agrandissement * 100.0).round() / 100.0, "nettete": nettes.contains_key(&i)}) }).collect::<Vec<_>>(),
+    }))
+}
+
 /// Aperçu (demi-définition, sans netteté IA) ou rendu final.
 pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<Sortie> {
     let debut = Instant::now();
@@ -1602,33 +1697,10 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     tokio::fs::create_dir_all(&tmp).await?;
     let sources: std::collections::HashMap<String, (u32, u32)> =
         analyses.iter().map(|(id, a)| (id.clone(), (a.largeur, a.hauteur))).collect();
-    let mezz = |rush: &str| etat.dossier_travail(projet, rush).join("mezz.mkv");
 
     // Netteté IA, en une passe pour tous les plans concernés.
-    let mut nettes: std::collections::HashMap<usize, PathBuf> = std::collections::HashMap::new();
-    let a_nettoyer: Vec<(usize, &Plan)> = prog.plans.iter().enumerate().filter(|(_, p)| p.nettete).collect();
-    if !a_nettoyer.is_empty() {
-        let visage = texte(&p.reglages, "nettete_ia") == "visage";
-        let mut travaux = Vec::new();
-        for (i, pl) in &a_nettoyer {
-            let z = zone_entiere(pl, sources[&pl.rush]);
-            let f = tmp.join(format!("net{i:04}.mkv"));
-            travaux.push(json!({"entree": mezz(&pl.rush), "debut": pl.t0, "duree": pl.duree,
-                                "crop": [z.x, z.y, z.w, z.h], "sortie": f, "visage": visage, "melange": MELANGE_IA,
-                                "largeur_max": largeur_nette(pl, z.w, prog.largeur)}));
-            nettes.insert(*i, f);
-        }
-        let fichier = tmp.join("nettete.json");
-        tokio::fs::write(&fichier, serde_json::to_vec(&travaux)?).await?;
-        let secondes: f64 = a_nettoyer.iter().map(|(_, p)| p.duree).sum();
-        let bail = etat
-            .carte
-            .prendre(etat, projet, "other:nettete", carte::VRAM_NETTETE_MO, (secondes * 2.0 + 120.0) as u64)
-            .await?;
-        let res = capteur(etat, projet, "nettete.py", &[fichier.to_string_lossy().into()]).await;
-        etat.carte.rendre(bail).await;
-        res?;
-    }
+    let tous: Vec<usize> = (0..prog.plans.len()).collect();
+    let nettes = nettete_ia(etat, &p, &prog, &tous, &sources, &tmp).await?;
 
     // Encodage matériel seulement si la carte nous fait une petite place ; sinon x264.
     let bail_nvenc = if etat.nvenc { etat.carte.essayer("other:encodage", carte::VRAM_ENCODAGE_MO, 1800).await } else { None };
@@ -1879,5 +1951,22 @@ mod tests_logo {
                                                  ombre: 0.7, halo, halo_couleur: couleur.into(), ..Default::default() };
             std::fs::write(dossier.join(format!("logo_{nom}.graphe")), graphe_logo("1:v", "0:v", "v", 0, 154, &hab, 38).join(";")).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_qualite {
+    use super::*;
+
+    /// Plan en qualité finale sur un projet réel (carte graphique sous bail) :
+    /// `EDIVID_PROJET=<id> EDIVID_T=<s> cargo test qualite -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn plan_en_qualite_finale() {
+        let cfg = crate::config::Config::charger().unwrap();
+        let etat = crate::etat::Etat::nouveau(cfg, false).await.unwrap();
+        let t: f64 = std::env::var("EDIVID_T").unwrap().parse().unwrap();
+        let r = plan_qualite(&etat, &std::env::var("EDIVID_PROJET").unwrap(), t).await.unwrap();
+        println!("{r}");
     }
 }

@@ -168,10 +168,10 @@ function logo() {
   return h('span', { class: 'logo' }, h('span', { class: 'logo-marque' }, icone('lecture')), 'EDIVID');
 }
 
-function fenetre(titre, contenu, { large = false } = {}) {
+function fenetre(titre, contenu, { large = false, largeur = null } = {}) {
   const fermer = () => voile.remove();
   const voile = h('div', { class: 'voile', onclick: (e) => { if (e.target === voile) fermer(); } },
-    h('div', { class: 'carte fenetre', role: 'dialog', 'aria-modal': 'true', style: large ? { width: 'min(760px, 100%)' } : null },
+    h('div', { class: 'carte fenetre', role: 'dialog', 'aria-modal': 'true', style: largeur ? { width: `min(${largeur}, 100%)` } : large ? { width: 'min(760px, 100%)' } : null },
       h('div', { class: 'fenetre-tete' }, h('h2', {}, titre),
         h('button', { class: 'btn icone fantome', title: 'Fermer', onclick: fermer }, icone('fermer'))),
       typeof contenu === 'function' ? contenu(fermer) : contenu));
@@ -984,7 +984,13 @@ function dessinerOutilsLecteur() {
     h('span', {}, libelle));
   const pleinEcran = n.ecran.requestFullscreen ? h('button', { class: 'btn petit', title: 'Plein écran, avec sous-titres, habillage et PostProd (double-clic sur la vidéo)',
     onclick: basculerPleinEcran }, icone('film'), document.fullscreenElement === n.ecran ? 'Quitter le plein écran' : 'Plein écran') : null;
-  remplir(n.outilsLecteur, commenter, pleinEcran, choixRush, h('span', { class: 'espace' }),
+  const qualite = E.lecteur === 'apercu' && p.apercu ? h('button', {
+    class: 'btn petit', disabled: !enPause || E.qualiteEnCours,
+    title: enPause ? 'Calcule ce plan (et les suivants, quelques secondes) comme au rendu final — définition, netteté IA — pour le comparer à l’aperçu'
+      : 'Mettez la vidéo en pause sur le plan voulu',
+    onclick: voirQualiteFinale,
+  }, icone('zoom'), E.qualiteEnCours ? 'Calcul du plan…' : 'Ce plan en qualité finale') : null;
+  remplir(n.outilsLecteur, commenter, qualite, pleinEcran, choixRush, h('span', { class: 'espace' }),
     bascule('voirTlOrigine', 'Timeline d’origine', E.voirTlOrigine),
     bascule('voirTlMontage', 'Timeline du montage', E.voirTlMontage),
     E.lecteur !== 'rendu' && n.direct ? h('label', { class: 'bascule', title: 'Voir la PostProd (couleur, teint, grain…) en direct sur la vidéo ; décochez pour comparer avec l’image brute' },
@@ -993,6 +999,51 @@ function dessinerOutilsLecteur() {
     E.lecteur === 'apercu' && n.son && E.vue.projet.apercu?.rapport?.son_direct ? h('label', { class: 'bascule', title: 'Le son réglé (écho, timbre, lieu, niveau) en direct ; décochez pour entendre la voix de base, sans musique' },
       h('input', { type: 'checkbox', checked: E.sonDirect, onchange: (e) => { E.sonDirect = e.target.checked; stocker('edivid_sonDirect', E.sonDirect ? '1' : '0'); majSonDirect(true); } }),
       h('span', {}, 'Son en direct')) : null);
+}
+
+/** Le plan sous la tête de lecture, rendu comme au final (sans PostProd, habillage, textes ni son), à comparer à
+ *  l'aperçu : on bascule de l'un à l'autre au même instant. */
+async function voirQualiteFinale() {
+  const n = E.noeuds;
+  const p = E.vue.projet;
+  const t = Math.max(0, n.video.currentTime - decalageGenerique(p.apercu));
+  E.qualiteEnCours = true;
+  dessinerOutilsLecteur();
+  let r;
+  try { r = await api('GET', `/api/projets/${E.projetId}/plan/qualite?t=${t.toFixed(3)}`); } catch (e) { toast(`Qualité finale : ${e.message}`, 'erreur'); return; } finally {
+    E.qualiteEnCours = false;
+    dessinerOutilsLecteur();
+  }
+  const sortie = (f) => `/api/projets/${E.projetId}/sorties/${encodeURIComponent(f)}`;
+  const finale = h('video', { src: sortie(r.fichier), muted: true, loop: true, playsinline: true, autoplay: true });
+  const apercu = h('video', { src: sortie(p.apercu.fichier), muted: true, playsinline: true, preload: 'auto' });
+  const debut = r.debut + decalageGenerique(p.apercu);
+  apercu.currentTime = debut;
+  // L'aperçu suit la version finale, à l'image près ; il se superpose quand on le choisit.
+  const caler = () => {
+    if (Math.abs(apercu.currentTime - (debut + finale.currentTime)) > 0.04) apercu.currentTime = debut + finale.currentTime;
+    if (!vu.ouvert) return;
+    requestAnimationFrame(caler);
+  };
+  const vu = { ouvert: true, mode: 'finale' };
+  const boutons = {};
+  const montrer = (mode) => {
+    vu.mode = mode;
+    apercu.style.visibility = mode === 'apercu' ? 'visible' : 'hidden';
+    for (const [m, b] of Object.entries(boutons)) b.classList.toggle('primaire', m === mode);
+  };
+  boutons.finale = h('button', { class: 'btn petit', onclick: () => montrer('finale') }, `Qualité finale (${r.largeur} × ${r.hauteur})`);
+  boutons.apercu = h('button', { class: 'btn petit', onclick: () => montrer('apercu') }, `Aperçu (${p.apercu.rapport?.largeur || 960} × ${p.apercu.rapport?.hauteur || 540})`);
+  const pause = h('button', { class: 'btn petit', onclick: () => { if (finale.paused) finale.play(); else finale.pause(); pause.textContent = finale.paused ? 'Lecture' : 'Pause'; } }, 'Pause');
+  const detail = r.plans.map((x, i) => `plan ${i + 1} : ${x.agrandissement > 1.001 ? `agrandi ×${String(x.agrandissement).replace('.', ',')}` : 'sans zoom'}${x.nettete ? ', netteté IA' : ''}`).join(' · ');
+  fenetre('Ce plan en qualité finale', h('div', {},
+    h('div', { class: 'comparaison-qualite', style: { aspectRatio: `${r.largeur} / ${r.hauteur}`, maxHeight: '70vh', margin: '0 auto' } }, finale, apercu),
+    h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' } }, boutons.finale, boutons.apercu, h('span', { class: 'espace' }), pause),
+    h('p', { class: 'muet', style: { marginTop: '10px' } }, `${detail}. Image seule, sans PostProd, habillage, textes ni son : pour juger la netteté et le grain. Basculez entre les deux au même instant ; en pause, regardez de près pour le détail.`)), { largeur: '1240px' });
+  montrer('finale');
+  requestAnimationFrame(caler);
+  // Fermeture : on arrête les deux lectures.
+  new MutationObserver((_, o) => { if (!finale.isConnected) { vu.ouvert = false; finale.pause(); apercu.pause(); o.disconnect(); } }).observe(document.body, { childList: true });
 }
 
 const NOMS_REGIME_LONG = { respiration: 'Respiration', rafale: 'Rafale', impact: 'Impact' };

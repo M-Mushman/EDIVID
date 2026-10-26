@@ -110,6 +110,7 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/son/direct", get(son_direct))
         .route("/api/projets/{id}/son/niveau", get(son_niveau))
         .route("/api/projets/{id}/son/essai", get(essai_son))
+        .route("/api/projets/{id}/plan/qualite", get(plan_qualite))
         .route("/api/projets/{id}/postprod", post(changer_postprod))
         .route("/api/projets/{id}/postprod/image", get(image_postprod))
         .route("/api/projets/{id}/correction", post(corriger_phrase))
@@ -1650,6 +1651,17 @@ const AMBIANCES: &str = include_str!("../bibliotheque/ambiances.json");
 
 async fn ambiances() -> Json<Value> {
     Json(serde_json::from_str(AMBIANCES).expect("bibliotheque/ambiances.json invalide"))
+}
+
+#[derive(Deserialize)]
+struct Moment {
+    /// Instant du montage, en secondes (générique exclu).
+    t: f64,
+}
+
+/// Le plan de cet instant (et les suivants, quelques secondes) en qualité finale, netteté IA comprise.
+async fn plan_qualite(State(etat): State<EtatPartage>, Path(id): Path<String>, Query(q): Query<Moment>) -> Reponse {
+    Ok(Json(rendu::plan_qualite(&etat, &id, q.t).await?))
 }
 
 #[derive(Deserialize)]
