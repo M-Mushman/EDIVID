@@ -2224,59 +2224,62 @@ function ligneSon(titre, aide, controle, genre, enLigne = false) {
     enLigne ? null : controle);
 }
 
-/** Le son en cinq blocs sans recouvrement : ambiances (point de départ), voix, écho et bruit, lieu, musique. */
+/** Le son en deux blocs : la voix (une ambiance pour partir, puis chaque réglage une seule fois), et la musique
+ *  avec le calage. Une ambiance n'est qu'un ensemble de valeurs de ces mêmes réglages. */
 function blocsSon(corps) {
   const r = E.vue.projet.reglages;
   const R = (cle) => E.catalogue.find((x) => x.cle === cle);
-  const ligne = (cle, genre) => ligneSon(R(cle).titre, R(cle).aide, controleReglage(R(cle), r[cle]), genre, R(cle).genre === 'interrupteur');
+  const ligne = (cle, genre, titre = R(cle).titre, aide = R(cle).aide) => ligneSon(titre, aide, controleReglage(R(cle), r[cle]), genre, R(cle).genre === 'interrupteur');
   const libelle = (cle, v) => R(cle).options.find((o) => o.valeur === v)?.libelle || v;
-  blocAmbiances(corps);
 
-  // Voix : « Voix plus présente » et le timbre ne font qu'un choix ; « Sans traitement » éteint le traitement.
+  // « Voix plus présente » et le timbre ne font qu'un choix ; « Sans traitement » éteint le traitement.
   const timbre = r.voix ? r.timbre_voix : 'aucun';
   const choixTimbre = h('select', { class: 'champ', 'aria-label': 'Timbre de la voix',
     onchange: (e) => reglerSon(e.target.value === 'aucun' ? { voix: false } : { voix: true, timbre_voix: e.target.value }) },
   [...R('timbre_voix').options.map((o) => [o.valeur, o.libelle]), ['aucun', 'Sans traitement']].map(([v, l]) => h('option', { value: v, selected: v === timbre }, l)));
-  corps.append(blocOutil('son_voix', { icone: 'onde', titre: 'Voix', famille: 'son',
-    resume: [timbre === 'aucun' ? 'sans traitement' : libelle('timbre_voix', timbre), r.deesseur ? '« s » adoucis' : null].filter(Boolean).join(' · ') },
-  ligneSon('Timbre', 'La couleur de la voix : égaliseur et compression qui lisse les écarts de volume. Clair, chaud, naturel, podcast… ou sans traitement.', choixTimbre, 'direct'),
-  ligne('deesseur', 'direct')));
-
-  // Écho et bruit : un seul choix d'écho (porte de traîne + retrait de l'écho), le bruit, le calage.
+  // Un seul choix d'écho : porte de traîne et retrait de l'écho mêlé à la voix, ensemble.
   const niveau = NIVEAUX_ECHO.find(([, , porte, wpe]) => porte === r.reverberation && wpe === r.dereverberation);
-  const echo = h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Écho de la pièce' }, NIVEAUX_ECHO.map(([cle, l, porte, wpe]) =>
+  const echo = h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Retirer l’écho de la pièce' }, NIVEAUX_ECHO.map(([cle, l, porte, wpe]) =>
     h('button', { class: niveau?.[0] === cle ? 'actif' : '', role: 'radio', 'aria-checked': niveau?.[0] === cle ? 'true' : 'false',
       onclick: () => reglerSon({ reverberation: porte, dereverberation: wpe }) }, l)));
-  corps.append(blocOutil('son_nettoyage', { icone: 'onde', titre: 'Écho et bruit', famille: 'son',
-    resume: [`écho ${niveau ? niveau[1].toLowerCase() : 'sur mesure'}`, `bruit ${libelle('debruitage', r.debruitage).toLowerCase()}`, r.calage_son ? `calage ${r.calage_son} ms` : null].filter(Boolean).join(' · ') },
-  ligneSon('Écho de la pièce',
+  const active = ambianceActive();
+  corps.append(blocOutil('son_voix', { icone: 'onde', titre: 'Son de la voix', famille: 'son',
+    resume: active ? `ambiance ${active.nom}` : [timbre === 'aucun' ? 'sans traitement' : libelle('timbre_voix', timbre),
+      `écho retiré ${niveau ? niveau[1].toLowerCase() : 'sur mesure'}`, r.espace !== 'aucun' ? libelle('espace', r.espace).toLowerCase() : null].filter(Boolean).join(' · ') },
+  h('div', { class: 'reglage-aide', style: { marginBottom: '8px' } },
+    'Partez d’une ambiance : elle règle d’un coup tous les réglages ci-dessous. Écoutez d’abord vingt secondes de votre rush avec chacune, puis ajustez. Toucher un réglage fait passer le son « sur mesure ».'),
+  h('div', { style: { marginBottom: '10px' } }, boutonEcoute('actuel', 'Écouter le son actuel')),
+  cartesAmbiances(),
+  h('h4', { class: 'titre-famille', style: { marginTop: '18px' } }, active ? `Ajuster « ${active.nom} »` : 'Ajuster'),
+  ligneSon('Timbre', 'La couleur de la voix : égaliseur et compression qui lisse les écarts de volume.', choixTimbre, 'direct'),
+  ligne('deesseur', 'direct'),
+  ligneSon('Retirer l’écho de la pièce',
     'Léger : la traîne qui suit chaque phrase baisse. Moyen et Fort : l’écho mêlé à la voix pendant qu’elle parle est aussi retiré (sur le processeur, environ une minute par dizaine de minutes de rush, la première fois). Très fort : la traîne est coupée net, au risque de raboter la fin des mots doux.',
     [echo, niveau ? null : h('div', { class: 'tres-petit muet', style: { marginTop: '6px' } }, 'Réglage sur mesure (venu d’un jeu de réglages ou de l’assistant) : choisissez un niveau pour revenir à l’un d’eux.')], 'partiel'),
   ligne('debruitage', 'apercu'),
-  ligne('calage_son', 'apercu')));
+  ligne('espace', 'direct', 'Ajouter la résonance d’un lieu', 'L’inverse du retrait de l’écho : prête à la voix, déjà nettoyée, la résonance d’un lieu choisi — petite pièce, salle de conférence, grande salle, cathédrale.')));
 
-  corps.append(blocOutil('son_lieu', { icone: 'onde', titre: 'Lieu', famille: 'son', resume: libelle('espace', r.espace) },
-    ligne('espace', 'direct')));
-
-  corps.append(blocOutil('son_musique', { icone: 'musique', titre: 'Musique', famille: 'son',
-    resume: r.musique ? `${E.vue.projet.medias.find((m) => m.id === r.musique)?.nom || 'musique'} · ${r.volume_musique} %` : 'sans musique' },
-  ligne('musique', 'apercu'), ligne('volume_musique', 'apercu')));
+  corps.append(blocOutil('son_musique', { icone: 'musique', titre: 'Musique et calage', famille: 'son',
+    resume: [r.musique ? `${E.vue.projet.medias.find((m) => m.id === r.musique)?.nom || 'musique'} · ${r.volume_musique} %` : 'sans musique',
+      r.calage_son ? `calage ${r.calage_son} ms` : null].filter(Boolean).join(' · ') },
+  ligne('musique', 'apercu'), ligne('volume_musique', 'apercu'), ligne('calage_son', 'apercu')));
 }
 
-/** Bibliothèque d'ambiances : un clic applique d'un coup tous les réglages de son d'une ambiance. */
-function blocAmbiances(corps) {
-  const p = E.vue.projet;
+/** L'ambiance active (tous ses réglages égaux à ceux du projet), ou null. */
+function ambianceActive() {
+  const r = E.vue.projet.reglages;
+  return catalogueAmbiances?.find((a) => Object.entries(a.reglages).every(([k, v]) => r[k] === v)) || null;
+}
+
+/** Cartes des ambiances : un clic applique d'un coup tous les réglages de son d'une ambiance. */
+function cartesAmbiances() {
   if (!catalogueAmbiances) {
     api('GET', '/api/son/ambiances').then((c) => { catalogueAmbiances = c.ambiances; dessinerPanneau(); }).catch(() => {});
-    return;
+    return h('p', { class: 'muet petit' }, 'Chargement des ambiances…');
   }
-  const active = catalogueAmbiances.find((a) => Object.entries(a.reglages).every(([k, v]) => p.reglages[k] === v));
+  const active = ambianceActive();
   const familles = [...new Set(catalogueAmbiances.map((a) => a.famille))];
-  corps.append(blocOutil('ambiances', { icone: 'onde', titre: 'Ambiances sonores', famille: 'son', resume: active ? active.nom : 'Son réglé sur mesure' },
-    h('div', { class: 'reglage-aide', style: { marginBottom: '8px' } },
-      'Le point de départ : un son complet en un clic (voix, écho, bruit, lieu). Écoutez d’abord vingt secondes de votre rush avec chaque ambiance (la première écoute qui retire l’écho prend quelques secondes), puis ajustez dans les blocs Voix, Écho et bruit, Lieu.'),
-    h('div', { style: { marginBottom: '10px' } }, boutonEcoute('actuel', 'Écouter le son actuel')),
-    familles.map((fam) => [
+  return familles.map((fam) => [
       h('h4', { class: 'titre-famille' }, fam),
       h('div', { class: 'grille-looks' }, catalogueAmbiances.filter((a) => a.famille === fam).map((a) => h('div', {
         class: `look ${active?.cle === a.cle ? 'choisi' : ''}` },
@@ -2291,7 +2294,7 @@ function blocAmbiances(corps) {
               : `Ambiance « ${a.nom} » appliquée : mettez l’aperçu à jour pour l’entendre dans le montage.`, 'ok');
           } catch (e) { toast(e.message, 'erreur'); }
         } }, active?.cle === a.cle ? 'Appliquée ✓' : 'Appliquer'))))),
-    ])));
+  ]);
 }
 
 const GENRES_MEDIA = { image: 'Image', gif: 'GIF animé', video: 'Vidéo', son: 'Son' };
