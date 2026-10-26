@@ -749,6 +749,7 @@ button.temps .horloge.rush { font-style: italic; opacity: .75; }
 /* ---------- textes et images en direct ---------- */
 .lecteur .textes-direct { position: absolute; pointer-events: none; overflow: hidden; }
 .textes-direct.cache { display: none; }
+.textes-direct .voile-fondu { position: absolute; inset: 0; z-index: 5; }
 @font-face { font-family: 'DejaVu Sans'; src: url('/polices/DejaVuSans-Bold.ttf') format('truetype'); font-weight: 700; font-display: swap; }
 /* En direct, le calque d'édition ne montre que ses poignées : on voit le rendu du direct en dessous. */
 .calque.direct .element-calque > :not(.supprimer-calque) { opacity: 0; }

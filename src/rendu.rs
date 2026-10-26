@@ -1214,7 +1214,8 @@ pub fn empreinte(p: &Projet) -> String {
     // mots affichés, emphase), titres des parties (le début des parties, lui, compte : il pose une transition),
     // textes et images posés (sauf le fond vert et le son d'une vidéo, inscrits dans l'aperçu), habillage.
     let mut reglages = p.reglages.clone();
-    for c in REGLAGES_SON_DIRECT.iter().chain(&["sous_titres", "style_sous_titres", "position_sous_titres", "titres_chapitres"]) {
+    for c in REGLAGES_SON_DIRECT.iter().chain(&["sous_titres", "style_sous_titres", "position_sous_titres", "titres_chapitres",
+                                                 "fondu_ouverture", "fondu_fin", "duree_fondus"]) {
         reglages.remove(*c);
     }
     let decisions = p.montage.as_ref().map(|m| m.phrases.iter().map(|d| {
@@ -1446,6 +1447,24 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         (v_final, a_final) = ("vg", "ag");
     }
     let total = avant + total + apres;
+    // Fondus d'ouverture et de fin, sur toute la vidéo (générique compris) : image et son ensemble. L'aperçu ne les
+    // inscrit pas : le navigateur les joue en direct (textes-direct.js, son-direct.js).
+    let (ouverture, fin) = (texte(r, "fondu_ouverture"), texte(r, "fondu_fin"));
+    if ouverture != "aucun" || fin != "aucun" {
+        let d = nombre(r, "duree_fondus").clamp(0.5, 4.0).min(total / 2.0);
+        let (mut vf, mut af) = (Vec::new(), Vec::new());
+        if ouverture != "aucun" {
+            vf.push(format!("fade=t=in:st=0:d={d:.3}:color={}", if ouverture == "blanc" { "white" } else { "black" }));
+            af.push(format!("afade=t=in:st=0:d={d:.3}"));
+        }
+        if fin != "aucun" {
+            vf.push(format!("fade=t=out:st={:.3}:d={d:.3}:color={}", total - d, if fin == "blanc" { "white" } else { "black" }));
+            af.push(format!("afade=t=out:st={:.3}:d={d:.3}", total - d));
+        }
+        fc.push(format!("[{v_final}]{}[vfd]", vf.join(",")));
+        fc.push(format!("[{a_final}]{}[afd]", af.join(",")));
+        (v_final, a_final) = ("vfd", "afd");
+    }
 
     args.extend([
         "-filter_complex".into(), fc.join(";"),

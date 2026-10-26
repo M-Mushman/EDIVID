@@ -48,6 +48,9 @@ export function creerTextesDirect(video, conteneur) {
   let cache = new Map();
   let rappel = null;
   let actif = false;
+  // Voile des fondus d'ouverture et de fin (rendu : fade sur toute la vidéo), par-dessus le logo et les textes.
+  const voile = document.createElement('div');
+  voile.className = 'voile-fondu';
 
   /** Élément d'une entrée, créé une fois puis réutilisé tant que l'état ne change pas. */
   const element = (cle, fabriquer) => {
@@ -234,6 +237,20 @@ export function creerTextesDirect(video, conteneur) {
       }
     }
     for (const [cle, n] of cache) n.style.display = vus.has(cle) ? '' : 'none';
+
+    // Fondus d'ouverture et de fin, sur toute la vidéo (générique compris), comme le fade du rendu (linéaire).
+    const total = video.duration || 0;
+    const dF = Math.min(Math.max(Number(r.duree_fondus) || 1, 0.5), 4, total / 2);
+    const tv = video.currentTime;
+    let opaciteVoile = 0;
+    let teinte = '#000';
+    if (r.fondu_ouverture && r.fondu_ouverture !== 'aucun' && tv < dF) { opaciteVoile = 1 - tv / dF; teinte = r.fondu_ouverture === 'blanc' ? '#fff' : '#000'; }
+    if (r.fondu_fin && r.fondu_fin !== 'aucun' && total && tv > total - dF) {
+      opaciteVoile = Math.max(opaciteVoile, Math.min(1, (tv - (total - dF)) / dF));
+      teinte = r.fondu_fin === 'blanc' ? '#fff' : '#000';
+    }
+    if (voile.parentNode !== calque) calque.append(voile);
+    Object.assign(voile.style, { background: teinte, opacity: opaciteVoile, display: opaciteVoile > 0 ? '' : 'none' });
   };
 
   const boucle = () => {

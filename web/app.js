@@ -906,6 +906,10 @@ async function majSonDirect(forcer = false) {
   const n = E.noeuds;
   if (!n.son || !E.vue) return;
   const p = E.vue.projet;
+  // Les fondus d'ouverture et de fin ne sont pas dans l'aperçu : joués en direct ; le rendu final les a déjà.
+  const avecFondus = E.lecteur === 'apercu' && !!p.apercu?.rapport?.textes_direct;
+  n.son.fondus(avecFondus ? { ouverture: p.reglages.fondu_ouverture || 'aucun', fin: p.reglages.fondu_fin || 'aucun', duree: p.reglages.duree_fondus || 1 }
+    : { ouverture: 'aucun', fin: 'aucun' });
   const pistesAp = p.apercu?.rapport?.son_direct;
   const actif = E.sonDirect && E.lecteur === 'apercu' && !!pistesAp && !!n.video.dataset.url;
   const cle = JSON.stringify([actif, p.apercu?.fichier, CLES_SON_DIRECT.map((k) => p.reglages[k])]);

@@ -5,7 +5,8 @@
 //
 //   vidéo ─ voix-edivid ─┬─ sec ──────────┬─ maître (gain mesuré) ─ limiteur ─┬─ sortie
 //                        └─ lieu ─ dosage ─┘        fond ─┘                     │
-//                                                              générique ──────┘
+//                                                              générique ──────┴─ fondu ─ sortie
+// (fondu : fondus d'ouverture et de fin de la vidéo, suivis à l'image près sur la position de lecture)
 
 /** Le graphe audio, sur un contexte quelconque (en ligne ou hors ligne : les essais l'utilisent aussi). */
 export async function construireGraphe(ctx, voixSource, base = '', depart = {}) {
@@ -18,14 +19,16 @@ export async function construireGraphe(ctx, voixSource, base = '', depart = {}) 
     maitre: ctx.createGain(),
     limiteur: new AudioWorkletNode(ctx, 'limiteur-edivid', { outputChannelCount: [2], processorOptions: { actif: depart.limiteur ?? true } }),
     generique: ctx.createGain(),
+    fondu: ctx.createGain(),
   };
   n.lieu.normalize = false;
   n.mouille.gain.value = 0;
   voixSource.connect(n.voix);
   n.voix.connect(n.sec).connect(n.maitre);
   n.voix.connect(n.lieu).connect(n.mouille).connect(n.maitre);
-  n.maitre.connect(n.limiteur).connect(ctx.destination);
-  n.generique.connect(ctx.destination);
+  n.maitre.connect(n.limiteur).connect(n.fondu);
+  n.generique.connect(n.fondu);
+  n.fondu.connect(ctx.destination);
   n.voix.port.onmessage = (e) => { if (e.data.inconnus) console.warn('Son en direct : filtres inconnus', e.data.inconnus); };
   return n;
 }
@@ -66,6 +69,7 @@ export function creerSonDirect(video) {
   const pistes = { fond: new Audio(), generique: new Audio() };
   for (const p of Object.values(pistes)) { p.preload = 'auto'; p.crossOrigin = 'anonymous'; }
   let config = { actif: false, filtres: [], lieuUrl: '', part: 0, gainDb: 0, pistes: {} };
+  let fondus = { ouverture: 'aucun', fin: 'aucun', duree: 1 };
   const lieux = new Map();
 
   const appliquer = async () => {
@@ -108,7 +112,25 @@ export function creerSonDirect(video) {
   for (const ev of ['pause', 'seeked', 'ratechange', 'waiting', 'playing']) video.addEventListener(ev, suivre);
   setInterval(() => { if (!video.paused) suivre(); }, 250);
 
+  // Gain des fondus (afade du rendu, linéaire), recalculé à chaque image tant que la vidéo joue.
+  const gainFondu = () => {
+    const total = video.duration || 0;
+    const d = Math.min(Math.max(Number(fondus.duree) || 1, 0.5), 4, total / 2);
+    const t = video.currentTime;
+    let g = 1;
+    if (fondus.ouverture !== 'aucun' && t < d) g = Math.min(g, t / d);
+    if (fondus.fin !== 'aucun' && total && t > total - d) g = Math.min(g, Math.max(0, (total - t) / d));
+    return g;
+  };
+  const suivreFondu = () => {
+    if (n && ctx) n.fondu.gain.setTargetAtTime(gainFondu(), ctx.currentTime, 0.01);
+    if (!video.paused) requestAnimationFrame(suivreFondu);
+  };
+  for (const ev of ['play', 'seeked', 'pause']) video.addEventListener(ev, () => requestAnimationFrame(suivreFondu));
+
   return {
+    /** Fondus d'ouverture et de fin : { ouverture, fin ('aucun' | 'noir' | 'blanc'), duree (s) }. */
+    fondus(f) { fondus = { ...fondus, ...f }; suivreFondu(); },
     /** actif : l'aperçu a ses pistes à part et la personne veut le son en direct ; sinon la vidéo passe telle quelle. */
     async regler(c) {
       config = { ...config, ...c };
