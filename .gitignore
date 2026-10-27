@@ -16,3 +16,6 @@ __pycache__/
 /modeles/separation
 /.venv-deepfilter
 /.venv-clearvoice
+/outils/sgmse-amont
+/.venv-sgmse
+/.venv-gridnet

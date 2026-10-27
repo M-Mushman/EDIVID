@@ -2511,6 +2511,7 @@ mod tests_capteur {
             "separe.py" | "qualite_son.py" | "egaliseur.py" => &etat.cfg.python_son,
             "seche_ia.py" => &etat.cfg.python_clearvoice,
             "debruite.py" => &etat.cfg.python_deepfilter,
+            "seche_gridnet.py" => &etat.cfg.racine.join(".venv-gridnet/bin/python"),
             _ => &etat.cfg.python,
         };
         let r = Command::new(python)
