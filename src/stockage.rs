@@ -39,7 +39,7 @@ fn chemins(etat: &EtatPartage, p: &Projet, cle: &str) -> Vec<PathBuf> {
     let mut v = Vec::new();
     match cle {
         "rushs" => v.push(dossier.join("rushs")),
-        "travail" => v.extend(p.rushs.iter().map(|r| travail(&r.id).join("mezz.mkv"))),
+        "travail" => v.extend(p.rushs.iter().flat_map(|r| [travail(&r.id).join("mezz.mkv"), travail(&r.id).join("mezz_hlg.mkv")])),
         "voix" => {
             for r in &p.rushs {
                 if let Ok(lus) = std::fs::read_dir(travail(&r.id)) {

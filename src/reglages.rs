@@ -242,6 +242,14 @@ pub const CATALOGUE: &[Reglage] = &[
     },
     Reglage {
         section: "Image",
+        cle: "plage_dynamique",
+        titre: "Plage dynamique du rendu final",
+        aide: "HDR comme le rush : l'image de l'iPhone (HLG) sans conversion, hautes lumières et couleurs intactes sur iPhone, Mac et YouTube ; la couleur de la PostProd n'y est pas appliquée et l'aperçu reste en SDR. SDR : lu partout, couleurs de la PostProd appliquées.",
+        genre: Genre::Choix(&[("sdr", "SDR"), ("hdr", "HDR comme le rush")]),
+        defaut: || json!("sdr"),
+    },
+    Reglage {
+        section: "Image",
         cle: "codec_final",
         titre: "Format du rendu final",
         aide: "HEVC 10 bits : un seul encodage, dégradés sans marches, lu par l'iPhone, le Mac et YouTube ; certains navigateurs ne le lisent pas. H.264 : lu partout, en 8 bits.",

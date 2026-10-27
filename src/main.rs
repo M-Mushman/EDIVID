@@ -5,6 +5,7 @@ mod api;
 mod bibliotheque;
 mod carte;
 mod config;
+mod couleur;
 mod courriel;
 mod decoupe;
 mod drive;

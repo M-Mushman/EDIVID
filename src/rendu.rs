@@ -32,10 +32,47 @@ const ZOOM_TRANSITION: f64 = 1.4;
 pub struct Passe {
     pub ips: f64,
     pub dix_bits: bool,
+    /// Sortie HDR HLG (BT.2100), comme le rush iPhone : sans conversion en SDR.
+    pub hdr: bool,
 }
 
+/// Étiquetage couleur HLG BT.2020 de la sortie HDR.
+const BT2020_HLG: &str = "setparams=color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc";
+/// Table SDR → HLG des images incrustées (couleur::table_sdr_vers_hlg), écrite au premier rendu HDR.
+static TABLE_HLG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 impl Passe {
-    pub const APERCU: Passe = Passe { ips: 30.0, dix_bits: false };
+    pub const APERCU: Passe = Passe { ips: 30.0, dix_bits: false, hdr: false };
+
+    fn setparams(&self) -> &'static str {
+        if self.hdr { BT2020_HLG } else { BT709 }
+    }
+
+    /// Niveau du blanc pour lutyuv : le blanc de référence HLG (75 % du signal) en HDR, le blanc en SDR.
+    fn blanc(&self) -> &'static str {
+        if self.hdr { "minval+(maxval-minval)*0.75" } else { "maxval" }
+    }
+
+    /// Fin de chaîne d'un élément incrusté en RVBA (logo, image, gif, vidéo) avant l'overlay : passage en YUV avec
+    /// la matrice de la sortie (sans elle, swscale prend BT.601 et décale les couleurs), et en HDR, couleurs SDR
+    /// portées en HLG par la table BT.2408.
+    fn vers_sortie_rgba(&self) -> String {
+        let (fmt, matrice) = (if self.dix_bits { "yuva420p10le" } else { "yuva420p" }, if self.hdr { "bt2020" } else { "bt709" });
+        let table = match (self.hdr, TABLE_HLG.get()) {
+            (true, Some(t)) => format!("format=rgba,lut3d=file='{t}':interp=tetrahedral,"),
+            _ => String::new(),
+        };
+        format!("{table}scale=out_color_matrix={matrice}:out_range=tv,format={fmt}")
+    }
+
+    /// Même chose pour une image opaque (vidéo ou image du générique) : rien en SDR, la table HLG en HDR.
+    fn vers_sortie_opaque(&self) -> String {
+        match (self.hdr, TABLE_HLG.get()) {
+            (true, Some(t)) => format!("format=rgb48le,lut3d=file='{t}':interp=tetrahedral,scale=out_color_matrix=bt2020:out_range=tv,format={},",
+                                       self.format()),
+            _ => String::new(),
+        }
+    }
 
     /// Échantillons de son par image, à 48 kHz.
     fn echantillons_par_image(&self) -> u64 {
@@ -54,9 +91,10 @@ impl Passe {
 
 /// Fondu depuis ou vers le blanc entre [entree] et [sortie], sans quitter la profondeur de l'image (le fondu en
 /// couleur de ffmpeg repasse en RVB 8 bits). `k` : part du blanc, expression du temps T de l'image.
-fn fondu_blanc(entree: &str, sortie: &str, etiquette: &str, k: &str) -> String {
+fn fondu_blanc(entree: &str, sortie: &str, etiquette: &str, k: &str, passe: Passe) -> String {
+    let blanc = passe.blanc();
     format!(
-        "[{entree}]split[{etiquette}a][{etiquette}b];[{etiquette}b]lutyuv=y=maxval:u=(maxval+minval)/2:v=(maxval+minval)/2[{etiquette}w];\
+        "[{entree}]split[{etiquette}a][{etiquette}b];[{etiquette}b]lutyuv=y={blanc}:u=(maxval+minval)/2:v=(maxval+minval)/2[{etiquette}w];\
          [{etiquette}a][{etiquette}w]blend=all_expr='A+(B-A)*({k})'[{sortie}]"
     )
 }
@@ -205,10 +243,17 @@ pub async fn sonder_rush(fichier: &Path) -> Result<InfosSource> {
 /// rush (60 ou 30 i/s), son PCM. Conversion « mobius » : elle garde le contraste des tons moyens et le détail des
 /// fenêtres, là où « hable » délavait toute l'image (comparé sur épisode 0, 2026-10-26).
 pub async fn preparer(etat: &EtatPartage, projet: &str, source: &Path, infos: &InfosSource, mezz: &Path) -> Result<()> {
+    preparer_en(etat, projet, source, infos, mezz, false).await
+}
+
+/// `garder_hlg` : fichier de travail HDR (mezz_hlg.mkv) d'un rush HLG, sans conversion en SDR, pour la sortie HDR.
+async fn preparer_en(etat: &EtatPartage, projet: &str, source: &Path, infos: &InfosSource, mezz: &Path, garder_hlg: bool) -> Result<()> {
     let d = ffprobe(source).await?;
     let a_son = d["streams"].as_array().into_iter().flatten().any(|s| s["codec_type"] == "audio");
     let mut vf = Vec::new();
+    let hlg = garder_hlg && infos.hdr.as_deref() == Some("HLG");
     match infos.hdr.as_deref() {
+        _ if hlg => {}
         Some(hdr) => {
             let (tin, npl) = if hdr == "HLG" { ("arib-std-b67", 203) } else { ("smpte2084", 100) };
             vf.push(format!(
@@ -221,7 +266,8 @@ pub async fn preparer(etat: &EtatPartage, projet: &str, source: &Path, infos: &I
     let ips = cadence_travail(infos.ips);
     vf.push(format!("fps={ips}"));
     vf.push("format=yuv420p10le".into());
-    vf.push(BT709.into());
+    vf.push(if hlg { BT2020_HLG } else { BT709 }.into());
+    let (matrice, primaires, transfert) = if hlg { ("bt2020nc", "bt2020", "arib-std-b67") } else { ("bt709", "bt709", "bt709") };
     let mut args: Vec<String> = vec!["-i".into(), source.to_string_lossy().into()];
     if !a_son {
         args.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"].map(String::from));
@@ -231,7 +277,7 @@ pub async fn preparer(etat: &EtatPartage, projet: &str, source: &Path, infos: &I
         "-vf".into(), vf.join(","),
         "-c:v".into(), "libx264".into(), "-profile:v".into(), "high10".into(), "-preset".into(), "veryfast".into(),
         "-crf".into(), "10".into(), "-g".into(), format!("{ips}"), "-pix_fmt".into(), "yuv420p10le".into(),
-        "-colorspace".into(), "bt709".into(), "-color_primaries".into(), "bt709".into(), "-color_trc".into(), "bt709".into(),
+        "-colorspace".into(), matrice.into(), "-color_primaries".into(), primaires.into(), "-color_trc".into(), transfert.into(),
         "-c:a".into(), "pcm_s16le".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
     ]);
     if !a_son {
@@ -416,7 +462,7 @@ fn filtre_plan(p: &Plan, sortie: (u32, u32), nette: bool, passe: Passe) -> Strin
     match p.transition.as_deref() {
         Some("flash") => {
             chaine.push_str("[fl0];");
-            chaine.push_str(&fondu_blanc("fl0", "fl1", "flb", "clip(1-T/0.15,0,1)"));
+            chaine.push_str(&fondu_blanc("fl0", "fl1", "flb", "clip(1-T/0.15,0,1)", passe));
             chaine.push_str(";[fl1]null");
         }
         Some("fondu") => ajouter(&mut chaine, "fade=t=in:st=0:d=0.25".into()),
@@ -443,6 +489,8 @@ async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, voix: Option<&
                      sortie: (u32, u32), fichier: &Path, passe: Passe, nvenc: bool) -> Result<()> {
     let zone = zone_entiere(p, source);
     let n = (p.duree * passe.ips).round().max(1.0) as u32;
+    let mezz_hdr = mezz.with_file_name("mezz_hlg.mkv");
+    let mezz = if passe.hdr { mezz_hdr.as_path() } else { mezz };
     // Image et son de durée exacte : n images et n × 1 600 échantillons (à 30 i/s). Avec « -frames:v », ffmpeg coupait
     // le son au dernier bloc entier : jusqu'à 20 ms perdus par plan, près d'une seconde d'avance de la voix
     // sur 200 plans (mesuré le 2026-10-18).
@@ -729,6 +777,7 @@ fn textes(prog: &Programme, l: &mut Vec<String>) {
 fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, hab: &crate::modele::Habillage, marge: u32,
                passe: Passe) -> Vec<String> {
     let (ips, fmt) = (passe.ips, passe.format_overlay());
+    let conv = passe.vers_sortie_rgba();
     let (x, y) = position_habillage(&hab.position, marge);
     let l = largeur as f64;
     let flou_ombre = (0.025 * l).max(1.0);
@@ -756,7 +805,7 @@ fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, h
     if hab.halo > 0.0 {
         // Le flou étale et dilue l'opacité : on la relève pour que le halo se voie.
         fc.push(format!(
-            "[hhalo{j}]lutrgb=r={teinte}:g={teinte}:b={teinte},gblur=sigma={flou_halo:.1},lutrgb=a='min(255,val*{:.3})'[hhb{j}]",
+            "[hhalo{j}]lutrgb=r={teinte}:g={teinte}:b={teinte},gblur=sigma={flou_halo:.1},lutrgb=a='min(255,val*{:.3})',{conv}[hhb{j}]",
             3.0 * hab.halo
         ));
         fc.push(format!("[{sur}][hhb{j}]overlay=x='{x}':y='{y}':eof_action=pass{fmt}[hvh{j}]"));
@@ -764,13 +813,14 @@ fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, h
     }
     if hab.ombre > 0.0 {
         fc.push(format!(
-            "[hombre{j}]lutrgb=r=0:g=0:b=0,gblur=sigma={flou_ombre:.1},lutrgb=a='val*{:.2}'[hob{j}]",
+            "[hombre{j}]lutrgb=r=0:g=0:b=0,gblur=sigma={flou_ombre:.1},lutrgb=a='val*{:.2}',{conv}[hob{j}]",
             0.9 * hab.ombre
         ));
         fc.push(format!("[{sur}][hob{j}]overlay=x='{x}+{decalage}':y='{y}+{decalage}':eof_action=pass{fmt}[hvo{j}]"));
         sur = format!("hvo{j}");
     }
-    fc.push(format!("[{sur}][hlo{j}]overlay=x='{x}':y='{y}':eof_action=pass{fmt}[{sortie}]"));
+    fc.push(format!("[hlo{j}]{conv}[hlc{j}]"));
+    fc.push(format!("[{sur}][hlc{j}]overlay=x='{x}':y='{y}':eof_action=pass{fmt}[{sortie}]"));
     fc
 }
 
@@ -827,7 +877,8 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
     let media = p.medias.iter().find(|m| m.id == s.media);
     let fondu = format!("fade=t=in:st=0:d=0.35,fade=t=out:st={:.3}:d=0.35", (d - 0.35).max(0.0));
     let afondu = format!("afade=t=in:st=0:d=0.3,afade=t=out:st={:.3}:d=0.35", (d - 0.35).max(0.0));
-    let finir = format!("trim=0:{d:.3},setpts=PTS-STARTPTS,fps={ips},setsar=1,format={},{BT709},{fondu}", passe.format());
+    let finir = format!("trim=0:{d:.3},setpts=PTS-STARTPTS,fps={ips},setsar=1,format={},{},{fondu}", passe.format(), passe.setparams());
+    let opaque = passe.vers_sortie_opaque();
     let silence = |args: &mut Vec<String>, fc: &mut Vec<String>, entree: &mut usize| {
         args.extend(["-f".into(), "lavfi".into(), "-t".into(), format!("{d:.3}"), "-i".into(), "anullsrc=r=48000:cl=stereo".into()]);
         fc.push(format!("[{}:a]aresample=48000,asetpts=PTS-STARTPTS[ga{k}]", *entree));
@@ -842,7 +893,7 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
             "[{i}:v]fps={ips},split[gs{k}a][gs{k}b];\
              [gs{k}b]scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho},gblur=sigma=30[gs{k}c];\
              [gs{k}a]scale={wo}:{ho}:force_original_aspect_ratio=decrease[gs{k}d];\
-             [gs{k}c][gs{k}d]overlay=(W-w)/2:(H-h)/2,{finir}[gv{k}]"
+             [gs{k}c][gs{k}d]overlay=(W-w)/2:(H-h)/2,{opaque}{finir}[gv{k}]"
         ));
         if m.a_son {
             fc.push(format!(
@@ -865,10 +916,10 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
             }
             args.extend(["-t".into(), format!("{d:.3}"), "-i".into(), medias.join(&m.fichier).to_string_lossy().into()]);
             let assombrir = if s.titre.is_empty() && s.sous_titre.is_empty() { "" } else { ",eq=brightness=-0.08" };
-            fc.push(format!("[{i}:v]scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho}{assombrir}[gc{k}]"));
+            fc.push(format!("[{i}:v]scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho}{assombrir},{}null[gc{k}]", opaque));
         }
         None => {
-            args.extend(["-f".into(), "lavfi".into(), "-t".into(), format!("{d:.3}"), "-i".into(), format!("color=c=0x101014:s={wo}x{ho}:r={ips}")]);
+            args.extend(["-f".into(), "lavfi".into(), "-t".into(), format!("{d:.3}"), "-i".into(), format!("color=c={}:s={wo}x{ho}:r={ips}", crate::couleur::hex_ffmpeg([0x10, 0x10, 0x14], passe.hdr))]);
             fc.push(format!("[{i}:v]null[gc{k}]"));
         }
     }
@@ -1305,7 +1356,7 @@ pub fn empreinte(p: &Projet) -> String {
     let mut reglages = p.reglages.clone();
     for c in REGLAGES_SON_DIRECT.iter().chain(&["sous_titres", "style_sous_titres", "position_sous_titres", "titres_chapitres",
                                                  "fondu_ouverture", "fondu_fin", "duree_fondus",
-                                                 "cadence", "codec_final", "nettete_ia"]) {
+                                                 "cadence", "codec_final", "nettete_ia", "plage_dynamique"]) {
         reglages.remove(*c);
     }
     let decisions = p.montage.as_ref().map(|m| m.phrases.iter().map(|d| {
@@ -1357,8 +1408,13 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     fc.push(if apercu {
         "[ppe]null[pps]".to_string()
     } else {
-        let table = table_couleurs_cube(etat, &p.postprod).await?;
-        p.postprod.filtre_avec_table("ppe", "pps", wo, ho, table.as_deref())
+        // En HDR, la couleur de la PostProd (pensée en SDR) n'est pas appliquée ; le reste (teint, netteté, grain…) l'est.
+        let mut pp = p.postprod.clone();
+        if passe.hdr {
+            (pp.couleur, pp.exposition, pp.contraste, pp.saturation, pp.temperature) = ("naturel".into(), 0.0, 0.0, 0.0, 0.0);
+        }
+        let table = table_couleurs_cube(etat, &pp).await?;
+        pp.filtre_avec_table("ppe", "pps", wo, ho, table.as_deref())
     });
     let mut v = vec![];
     let effets = |nom: &str| prog.incrustations.iter().filter(|i| i.effet == nom).map(|i| (i.debut, i.fin)).collect::<Vec<_>>();
@@ -1416,7 +1472,8 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
             format!(",fade=t=out:st={:.3}:d=0.15:alpha=1", (d - 0.15).max(0.0))
         };
         if !direct {
-            fc.push(format!("[{entree}:v]fps={ips},{echelle},format=yuva420p{cle}{fondu},setpts=PTS-STARTPTS+{:.3}/TB[inc{k}]", inc.debut));
+            fc.push(format!("[{entree}:v]fps={ips},{echelle},format=yuva420p{cle}{fondu},{},setpts=PTS-STARTPTS+{:.3}/TB[inc{k}]",
+                            passe.vers_sortie_rgba(), inc.debut));
         }
         let (mut x, mut y) = match (inc.x, inc.y) {
             _ if plein => ("0".to_string(), "0".to_string()),
@@ -1478,7 +1535,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     let polices = etat.cfg.racine.join("modeles").join("polices");
     // Pixels carrés : un recadrage d'effet (secousse) laisse sinon une forme de pixel à peine faussée (4064:4059),
     // que l'enchaînement avec le générique refuse.
-    fc.push(format!("[{base}]subtitles=f={}:fontsdir={},{BT709},setsar=1[v]", ass.to_string_lossy(), polices.to_string_lossy()));
+    fc.push(format!("[{base}]subtitles=f={}:fontsdir={},{},setsar=1[v]", ass.to_string_lossy(), polices.to_string_lossy(), passe.setparams()));
 
     // Son.
     let gain = gain_voix(etat, p, prog).await;
@@ -1564,7 +1621,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
             let st = if entrant { 0.0 } else { total - d };
             if genre == "blanc" {
                 let k = if entrant { format!("clip(1-T/{d:.3},0,1)") } else { format!("clip((T-{st:.3})/{d:.3},0,1)") };
-                fc.push(fondu_blanc(&v, &suite, &format!("fb{}", if entrant { 0 } else { 1 }), &k));
+                fc.push(fondu_blanc(&v, &suite, &format!("fb{}", if entrant { 0 } else { 1 }), &k, passe));
             } else {
                 fc.push(format!("[{v}]fade=t={}:st={st:.3}:d={d:.3}[{suite}]", if entrant { "in" } else { "out" }));
             }
@@ -1580,12 +1637,14 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         "-map".into(), format!("[{v_final}]"), "-map".into(), format!("[{a_final}]"),
         "-t".into(), format!("{total:.3}"),
     ]);
-    let hevc = texte(r, "codec_final") != "h264";
+    // Le HDR exige le HEVC 10 bits (le H.264 10 bits ne se lit presque nulle part).
+    let hevc = texte(r, "codec_final") != "h264" || passe.hdr;
     args.extend(encodeur(nvenc, if hevc { "final_hevc" } else { "assemblage" }));
     let brut = sortie.with_extension("brut.mkv");
+    let (matrice, primaires, transfert) = if passe.hdr { ("bt2020nc", "bt2020", "arib-std-b67") } else { ("bt709", "bt709", "bt709") };
     args.extend([
         "-r".into(), format!("{}", passe.ips), "-fps_mode".into(), "cfr".into(),
-        "-colorspace".into(), "bt709".into(), "-color_primaries".into(), "bt709".into(), "-color_trc".into(), "bt709".into(),
+        "-colorspace".into(), matrice.into(), "-color_primaries".into(), primaires.into(), "-color_trc".into(), transfert.into(),
         "-c:a".into(), "pcm_s24le".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
         brut.to_string_lossy().into(),
     ]);
@@ -1799,7 +1858,8 @@ pub async fn plan_qualite(etat: &EtatPartage, projet: &str, t: f64) -> Result<Va
     let sources: std::collections::HashMap<String, (u32, u32)> =
         analyses.iter().map(|(id, a)| (id.clone(), (a.largeur, a.hauteur))).collect();
     mettre_a_jour_travail(etat, &p, true).await?;
-    let passe = passe_finale(etat, &p, &analyses).await?;
+    // L'extrait se regarde dans le navigateur, en SDR : même en sortie HDR, on le calcule depuis le travail SDR.
+    let passe = Passe { hdr: false, ..passe_finale(etat, &p, &analyses).await? };
     let nettes = nettete_ia(etat, &p, &prog, &indices, &sources, &tmp, passe).await?;
     let mut liste = String::new();
     for &i in &indices {
@@ -1846,14 +1906,35 @@ async fn passe_finale(etat: &EtatPartage, p: &Projet, analyses: &[(String, std::
             ips = ips.max(ratio(v["r_frame_rate"].as_str().unwrap_or("30/1")).round());
         }
     }
-    Ok(Passe { ips: ips.min(60.0), dix_bits: true })
+    // HDR : demandé, et tous les rushs en HLG (un rush SDR ou PQ ne se mêle pas à une sortie HLG).
+    let hdr = texte(&p.reglages, "plage_dynamique") == "hdr" && !p.rushs.is_empty()
+        && p.rushs.iter().all(|r| r.source.as_ref().and_then(|s| s.hdr.as_deref()) == Some("HLG"));
+    if hdr && TABLE_HLG.get().is_none() {
+        let f = etat.cfg.donnees.join("luts").join("sdr-vers-hlg.cube");
+        if !f.exists() {
+            tokio::fs::create_dir_all(f.parent().unwrap()).await?;
+            crate::fichiers::ecrire(&f, crate::couleur::table_sdr_vers_hlg().as_bytes(), false)?;
+        }
+        let _ = TABLE_HLG.set(f.to_string_lossy().into_owned());
+    }
+    Ok(Passe { ips: ips.min(60.0), dix_bits: true, hdr })
 }
 
 /// Fichier de travail absent (libéré dans « Fichiers du projet ») ou, pour un rendu final (`dix_bits`), d'avant la
 /// chaîne 10 bits (8 bits, 30 i/s) : refait depuis le rush. Les temps ne changent pas : analyse, proxy et voix
 /// traitées restent valables.
 pub async fn mettre_a_jour_travail(etat: &EtatPartage, p: &Projet, dix_bits: bool) -> Result<()> {
+    let veut_hdr = dix_bits && texte(&p.reglages, "plage_dynamique") == "hdr";
     for r in &p.rushs {
+        // Sortie HDR : un second fichier de travail, en HLG, à côté du premier (l'aperçu reste en SDR).
+        let hlg = etat.dossier_travail(&p.id, &r.id).join("mezz_hlg.mkv");
+        let source = etat.dossier_projet(&p.id).join("rushs").join(&r.fichier);
+        if veut_hdr && !hlg.exists() && source.exists() && r.source.as_ref().and_then(|s| s.hdr.as_deref()) == Some("HLG") {
+            let infos = sonder_rush(&source).await?;
+            let provisoire = hlg.with_file_name("mezz_hlg.en-cours.mkv");
+            preparer_en(etat, &p.id, &source, &infos, &provisoire, true).await?;
+            tokio::fs::rename(&provisoire, &hlg).await?;
+        }
         let mezz = etat.dossier_travail(&p.id, &r.id).join("mezz.mkv");
         if let Ok(d) = ffprobe(&mezz).await {
             let v = d["streams"].as_array().and_then(|s| s.iter().find(|s| s["codec_type"] == "video")).cloned().unwrap_or_default();
@@ -1931,6 +2012,7 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["codec"] = json!(if apercu || texte(&p.reglages, "codec_final") == "h264" { "h264" } else { "hevc" });
     rapport["ips"] = json!(passe.ips);
     rapport["bits"] = json!(if passe.dix_bits { 10 } else { 8 });
+    rapport["hdr"] = json!(passe.hdr);
     rapport["son"] = json!(resume_son(&p.reglages));
     // Ce que l'aperçu a dans son son (le reste se joue en direct) : l'interface prévient s'il ne suit plus les réglages.
     rapport["son_inscrit"] = json!({"debruitage": texte(&p.reglages, "debruitage"), "dereverberation": texte(&p.reglages, "dereverberation"),
@@ -2022,7 +2104,7 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
     let liste = tmp.join("liste.txt");
     tokio::fs::write(&liste, fichiers.iter().map(|f| format!("file '{}'\n", f.to_string_lossy())).collect::<String>()).await?;
     let ass = tmp.join("sous_titres.ass");
-    tokio::fs::write(&ass, sous_titres(&prog, &p, apercu)).await?;
+    tokio::fs::write(&ass, crate::couleur::couleurs_ass(&sous_titres(prog, p, apercu), passe.hdr)).await?;
     let sorties = dossier.join("sorties");
     tokio::fs::create_dir_all(&sorties).await?;
     let nom = format!("{}-{}.mp4", if apercu { "apercu" } else { "rendu" }, chrono::Utc::now().format("%Y%m%d-%H%M%S"));
@@ -2161,7 +2243,14 @@ pub async fn exporter(etat: &EtatPartage, projet: &str, preset: &str) -> Result<
     let nom = format!("export-{preset}-{}.mp4", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
     let mut args: Vec<String> = vec!["-i".into(), source.to_string_lossy().into()];
     let echelle = if (lo, ho) != (l, h) { format!("scale={lo}:{ho}:flags=lanczos,") } else { String::new() };
-    args.extend(["-vf".into(), format!("{echelle}{BT709}")]);
+    // Rendu HDR : la version légère (messageries, ancien téléphone) repasse en SDR, comme le fichier de travail.
+    let sdr = if rendu.rapport["hdr"].as_bool() == Some(true) {
+        "zscale=tin=arib-std-b67:min=bt2020nc:pin=bt2020:rin=tv:t=linear:npl=203,format=gbrpf32le,zscale=p=bt709,\
+         tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
+    } else {
+        ""
+    };
+    args.extend(["-vf".into(), format!("{sdr}{echelle}{BT709}")]);
     args.extend(video);
     args.extend([
         "-pix_fmt", "yuv420p", "-r", "30", "-fps_mode", "cfr", "-tag:v", "avc1",

@@ -9,10 +9,13 @@ transitions, sous-titres — puis on l'ajuste en discutant avec lui, dans une in
   sonore, visage YuNet), `nettete.py` (Real-ESRGAN, GFPGAN), `rehausse.py` (écho et bruit retirés par IA : débruiteur de Resemble Enhance,
   environnement à part `.venv-rehaussement`, poids dans `modeles/resemble-enhance`), `restaure.py` (timbre
   reconstruit par VoiceFixer, `.venv-voicefixer`), `verifie_voix.py` (garde-fou : Whisper retranscrit la voix
-  reconstruite ; là où un mot change, la voix débruitée reste).
+  reconstruite ; à moins de 99 % de mots identiques, toute la voix débruitée est gardée, jamais un mélange).
 - `web/` : interface (HTML, CSS, JavaScript sans dépendance).
 - `deploy/` : service utilisateur systemd et script d'installation.
-- `docs/plan-v0.1.md` : plan technique ; `p0/` : la preuve de concept d'origine.
+- `docs/` : plans techniques (`plan-qualite-et-pro.md` : qualité de captation, puis logiciel professionnel) ;
+  `p0/` : scripts de la preuve de concept d'origine.
+- `outils/` : banc d'essai de l'interface (`banc/banc.cjs`, Playwright) et médias d'essai.
+- `essais/` (hors git, sauf `LISEZMOI.md`) : un dossier jetable par campagne d'essais (`AAAA-MM-JJ-sujet`).
 
 ## Installation
 
@@ -39,10 +42,16 @@ uv pip install --python .venv-voicefixer/bin/python voicefixer==0.1.3
 ./deploy/installer.sh
 ```
 
-Interface : `https://<machine>.<tailnet>.ts.net` (par `tailscale serve`), ou `http://<machine>:8030`
-(localhost et adresse du tailnet, renvoyée vers l'https). Un appareil du tailnet appartenant à une
-personne entre sans code (identité `Tailscale-User-Login`, crue seulement par le relais local) ; sinon,
-code d'accès tiré au premier lancement dans `donnees/acces.json`.
+Interface : `https://<machine>.<tailnet>.ts.net` (par `tailscale serve --bg http://127.0.0.1:8031`), ou
+`http://<machine>:8030` (localhost et adresse du tailnet, renvoyée vers l'https). Un appareil du tailnet
+appartenant à une personne entre sans code (identité `Tailscale-User-Login`, crue seulement sur l'écoute
+réservée au relais, `EDIVID_ECOUTE_RELAIS`, 127.0.0.1:8031 par défaut) ; sinon, code d'accès tiré au premier
+lancement dans `donnees/acces.json` (droits 600, dix essais par quart d'heure).
+
+Sécurité : tout chemin d'adresse qui sortirait de son dossier est refusé ; toute requête qui modifie porte
+l'en-tête `X-EDIVID: 1` (contre les requêtes forgées) ; sessions signées HMAC-SHA256 ; secrets (code, jetons
+Google, mot de passe SMTP, compte rclone) écrits de façon atomique en 600 ; téléversements bornés (64 Go,
+50 Go laissés libres).
 
 ## Fonctions
 
@@ -67,14 +76,22 @@ code d'accès tiré au premier lancement dans `donnees/acces.json`.
 - Cadrage lissé : un coefficient de saut (rapport de taille du visage à l'écran d'un plan au suivant)
   est borné sur les coupes franches (réglage « Écart entre deux cadrages ») et rapporté (médiane, p90,
   max) ; l'agrandissement est plafonné à ×3 de la source, au-delà duquel l'IA invente les traits.
-- Netteté IA : Real-ESRGAN mélangé à 60 % avec l'image d'origine agrandie, pour garder le grain de peau.
+- Qualité de captation : fichier de travail 10 bits à la cadence du rush (60 i/s), conversion HDR « mobius »,
+  zooms agrandis en lanczos (plafond ×1,5 en sortie 4K, ×3 en 1080p) relevés par netteté adaptative (CAS), une
+  seule compression avec perte (HEVC Main 10, ou H.264), export YouTube = le rendu final lui-même. Sortie HDR
+  (HLG) au choix : incrustations portées en HLG selon BT.2408 (blanc à 75 % du signal). Couleurs des
+  sous-titres et textes compensées (ffmpeg les dessine en BT.601).
+- Netteté IA (expérimentale, désactivée par défaut) : Real-ESRGAN mélangé à 60 % avec l'image d'origine
+  agrandie ; « Ce plan en qualité finale » permet de l'essayer sur un plan.
+- Fichiers du projet (Réglages) : place par catégorie ; fichiers de travail, voix traitées, écoutes,
+  extraits et temporaires se libèrent d'un clic et se recalculent au besoin.
 - Habillage permanent (logos et textes sur toute la durée, place, taille, opacité) et générique (vidéo, ou
   titre sur une image, avant et après le montage, enchaînés en fondu) ; repris par les jeux de réglages,
   avec copie des médias nécessaires.
 - Choix de fichiers sur le Google Drive relié (rushs ou médiathèque), téléchargés avec progression.
 - Rognage du haut de la source (logo CapCut ou TikTok) ; timbre de voix clair, chaud ou naturel ;
   look « Lumière cinéma ».
-- Export YouTube (débits recommandés), léger (720p) ou qualité maximale ; publication sur YouTube
+- Export YouTube et archive (le rendu final, sans recompression), léger (720p, H.264, SDR) ; publication sur YouTube
   (API Data v3, envoi reprenable) avec titre, description à chapitres et mots-clés proposés par le LLM.
 - Transcription modifiable en place et « rechercher et remplacer » ; les sous-titres suivent.
 - Onglet PostProd (couleur, lissage du teint, diffusion, netteté, grain, vignette, bandes cinéma) et
