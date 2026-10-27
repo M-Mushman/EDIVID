@@ -34,6 +34,8 @@ pub struct Config {
     pub python_deepfilter: PathBuf,
     /// Python de TF-GridNet (`.venv-gridnet`, espnet).
     pub python_gridnet: PathBuf,
+    /// Python de Sidon (`.venv-sidon`, transformers).
+    pub python_sidon: PathBuf,
     pub code_acces: String,
     /// Valeur du témoin de session, dérivée du code.
     pub jeton: String,
@@ -102,6 +104,7 @@ impl Config {
             python_clearvoice: racine.join(".venv-clearvoice/bin/python"),
             python_deepfilter: racine.join(".venv-deepfilter/bin/python"),
             python_gridnet: racine.join(".venv-gridnet/bin/python"),
+            python_sidon: racine.join(".venv-sidon/bin/python"),
             racine,
             donnees,
             ecoute,

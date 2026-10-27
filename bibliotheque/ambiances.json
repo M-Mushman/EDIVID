@@ -4,10 +4,10 @@
    "cle": "studio_feutre",
    "famille": "Voix",
    "nom": "Studio feutré",
-   "description": "La voix séchée puis refaite en qualité studio par l'IA, chaque tranche vérifiée mot à mot : pleine, proche, sans la pièce.",
+   "description": "La voix refaite en qualité studio par l'IA (Sidon), sans la pièce ni le bruit, mots relevés et comparés au rush : pleine, proche.",
    "reglages": {
     "debruitage": "non",
-    "dereverberation": "forte",
+    "dereverberation": "non",
     "reverberation": "non",
     "voix": false,
     "timbre_voix": "studio_chaud",
@@ -26,7 +26,7 @@
    "description": "Pièce fermée et intime, voix proche comme au creux de l'oreille : graves chauds, présence, écho retiré.",
    "reglages": {
     "debruitage": "non",
-    "dereverberation": "forte",
+    "dereverberation": "non",
     "reverberation": "non",
     "voix": false,
     "timbre_voix": "studio_chaud",
@@ -45,7 +45,7 @@
    "description": "Voix de studio très régulière, présente et claire, compression rapide : on entend chaque mot au même niveau.",
    "reglages": {
     "debruitage": "non",
-    "dereverberation": "forte",
+    "dereverberation": "non",
     "reverberation": "non",
     "voix": true,
     "timbre_voix": "naturel",
@@ -64,7 +64,7 @@
    "description": "Narration posée et profonde, sans la pièce autour : l'écho est retiré fortement, les fins de phrase s'éteignent net.",
    "reglages": {
     "debruitage": "non",
-    "dereverberation": "forte",
+    "dereverberation": "non",
     "reverberation": "non",
     "voix": false,
     "timbre_voix": "studio_chaud",

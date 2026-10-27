@@ -349,10 +349,9 @@ pub const CATALOGUE: &[Reglage] = &[
         section: "Son",
         cle: "restauration",
         titre: "Voix de studio (IA)",
-        aide: "La voix est séchée (TF-GridNet), puis refaite en qualité studio par VoiceFixer, à partir de deux voix séchées différentes. \
-               Whisper vérifie chaque tranche de 1 à 4 s : on garde une version dont les mots sont ceux du rush ; s'il n'y en a pas (un nom \
-               propre déformé, un « et » avalé), la tranche garde la voix séchée, égalisée vers le même timbre. Quelques minutes par rush sur \
-               la carte graphique, la première fois.",
+        aide: "Refait la voix en qualité studio, sans la pièce ni le bruit (Sidon : il part de la parole elle-même, pas d'une \
+               imitation du son ; une seule voix, aucun raccord). Les mots de la voix refaite sont ensuite relevés par Whisper et \
+               comparés à ceux du rush : les écarts sont signalés. Une minute environ par rush sur la carte graphique, la première fois.",
         genre: Genre::Interrupteur,
         defaut: || json!(false),
     },
@@ -458,9 +457,15 @@ pub fn completer(reglages: &mut Reglages) {
 ///   métallique par-dessus, s'éteint.
 pub fn accorder_son(r: &mut Reglages) -> Vec<String> {
     let mut faits = Vec::new();
-    if vrai(r, "restauration") && texte(r, "dereverberation") != "forte" {
-        r.insert("dereverberation".into(), json!("forte"));
-        faits.push("Retirer l'écho de la voix → Forte (la reconstruction du timbre part de la voix débruitée à fond)".to_string());
+    // La voix de studio (Sidon) part du son d'origine et retire elle-même la pièce et le bruit : ni séchage avant, ni
+    // réduction du bruit.
+    if vrai(r, "restauration") && texte(r, "dereverberation") != "non" {
+        r.insert("dereverberation".into(), json!("non"));
+        faits.push("Retirer l'écho de la voix → Non (la voix de studio retire déjà la pièce et le bruit)".to_string());
+    }
+    if vrai(r, "restauration") && texte(r, "debruitage") != "non" {
+        r.insert("debruitage".into(), json!("non"));
+        faits.push("Réduction du bruit → Non (la voix de studio retire déjà le bruit)".to_string());
     }
     if texte(r, "dereverberation") != "non" && texte(r, "debruitage") != "non" {
         r.insert("debruitage".into(), json!("non"));

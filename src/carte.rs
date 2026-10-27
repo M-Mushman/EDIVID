@@ -20,10 +20,10 @@ pub const VRAM_NETTETE_MO: u64 = 3_000;
 /// Débruiteur IA de la voix : pointe mesurée à 2,2 Go sur la carte (1,5 Go alloués) pour un rush de 11 min.
 /// Reconstruction du timbre (VoiceFixer) : pointe mesurée à 4,7 Go sur la carte (2,9 Go alloués), rush de 11 min.
 pub const VRAM_RESTAURATION_MO: u64 = 5_500;
-/// Voix séchée par MossFormer2 (ClearerVoice) : 254 Mo mesurés sur un rush de 11 min (2026-10-27).
-pub const VRAM_SECHAGE_MO: u64 = 1_000;
 /// Voix séchée par TF-GridNet, par blocs de 4 s : 3,4 Go mesurés (2026-10-27).
 pub const VRAM_GRIDNET_MO: u64 = 4_000;
+/// Voix refaite par Sidon : 2,4 Go mesurés (2026-10-27).
+pub const VRAM_SIDON_MO: u64 = 3_000;
 pub const VRAM_ENCODAGE_MO: u64 = 1_500;
 const INACTIVITE_LLM: Duration = Duration::from_secs(300);
 /// Un bail expire de lui-même à la fin de la durée annoncée : celui du LLM est renouvelé avant.
