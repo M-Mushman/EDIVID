@@ -128,7 +128,8 @@ async function api(methode, chemin, corps) {
   try {
     r = await fetch(chemin, {
       method: methode,
-      headers: corps !== undefined ? { 'Content-Type': 'application/json' } : {},
+      // X-EDIVID : exigé par le serveur sur toute requête qui modifie (protection contre les requêtes forgées).
+      headers: { 'X-EDIVID': '1', ...(corps !== undefined ? { 'Content-Type': 'application/json' } : {}) },
       body: corps !== undefined ? JSON.stringify(corps) : undefined,
       credentials: 'same-origin',
       signal: arret.signal,
@@ -669,6 +670,7 @@ function televerser(fichiers, genre) {
     fileTeleversement = fileTeleversement.then(() => new Promise((fini) => {
       const x = new XMLHttpRequest();
       x.open('PUT', `/api/projets/${E.projetId}/${genre}?nom=${encodeURIComponent(f.name)}`);
+      x.setRequestHeader('X-EDIVID', '1');
       x.upload.onprogress = (e) => {
         if (e.lengthComputable) { E.televersements.get(cle).pct = (100 * e.loaded) / e.total; dessinerTeleversements(); }
       };
@@ -934,7 +936,7 @@ async function majSonDirect(forcer = false) {
     // Le gain final se mesure sur tout l'aperçu (quelques secondes la première fois) : le son change d'abord, le
     // niveau suit.
     if (cleNiveau !== sonNiveau.cle) {
-      const r = await api('GET', `/api/projets/${E.projetId}/son/niveau`);
+      const r = await api('POST', `/api/projets/${E.projetId}/son/niveau`);
       sonNiveau = { cle: cleNiveau, gain: r.gain };
       if (sonDirectCle === cle) await n.son.regler({ gainDb: r.gain });
     }
@@ -1018,7 +1020,7 @@ async function voirQualiteFinale() {
   E.qualiteEnCours = true;
   dessinerOutilsLecteur();
   let r;
-  try { r = await api('GET', `/api/projets/${E.projetId}/plan/qualite?t=${t.toFixed(3)}`); } catch (e) { toast(`Qualité finale : ${e.message}`, 'erreur'); return; } finally {
+  try { r = await api('POST', `/api/projets/${E.projetId}/plan/qualite?t=${t.toFixed(3)}`); } catch (e) { toast(`Qualité finale : ${e.message}`, 'erreur'); return; } finally {
     E.qualiteEnCours = false;
     dessinerOutilsLecteur();
   }
@@ -2037,7 +2039,7 @@ function chargerMedia(accepte, rappel, remplacer = null) {
     if (!f) return;
     try {
       const chemin = remplacer ? `/api/projets/${E.projetId}/medias/${remplacer}` : `/api/projets/${E.projetId}/medias`;
-      const r = await fetch(`${chemin}?nom=${encodeURIComponent(f.name)}`, { method: 'PUT', body: f });
+      const r = await fetch(`${chemin}?nom=${encodeURIComponent(f.name)}`, { method: 'PUT', body: f, headers: { 'X-EDIVID': '1' } });
       const j = await r.json();
       if (!r.ok) throw new Error(j.erreur || `erreur ${r.status}`);
       E.aMettreAJour = true;
@@ -2348,13 +2350,18 @@ function ecouter(cle, bouton) {
   ecoute.cle = cle;
   ecoute.attente = cle;
   if (bouton) { bouton.disabled = true; bouton.lastChild.textContent = 'Préparation…'; }
-  const a = new Audio(`/api/projets/${E.projetId}/son/essai${cle === 'actuel' ? '' : `?ambiance=${encodeURIComponent(cle)}`}`);
+  // L'écoute est calculée à la demande : POST (jamais un simple lien), puis lue depuis la mémoire du navigateur.
+  const a = new Audio();
   ecoute.audio = a;
+  fetch(`/api/projets/${E.projetId}/son/essai${cle === 'actuel' ? '' : `?ambiance=${encodeURIComponent(cle)}`}`,
+    { method: 'POST', headers: { 'X-EDIVID': '1' }, credentials: 'same-origin' })
+    .then((r) => { if (!r.ok) throw new Error(`erreur ${r.status}`); return r.blob(); })
+    .then((b) => { if (ecoute.audio !== a) return; a.src = URL.createObjectURL(b); a.play().catch(() => {}); })
+    .catch(() => { if (ecoute.audio === a) { ecoute.attente = null; toast('Écoute impossible : le rush est-il analysé ?', 'erreur'); dessinerPanneau(); } });
   a.addEventListener('playing', () => { ecoute.attente = null; dessinerPanneau(); });
   a.addEventListener('pause', () => dessinerPanneau());
   a.addEventListener('ended', () => dessinerPanneau());
-  a.addEventListener('error', () => { ecoute.attente = null; toast('Écoute impossible : le rush est-il analysé ?', 'erreur'); dessinerPanneau(); });
-  a.play().catch(() => {});
+  a.addEventListener('error', () => { if (!a.src) return; ecoute.attente = null; toast('Écoute impossible : le rush est-il analysé ?', 'erreur'); dessinerPanneau(); });
 }
 
 function boutonEcoute(cle, libelle) {

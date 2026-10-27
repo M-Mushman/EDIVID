@@ -195,7 +195,9 @@ fn charger_registre(etat: &EtatPartage) -> Registre {
 }
 
 fn enregistrer_registre(etat: &EtatPartage, r: &Registre) {
-    let _ = std::fs::write(etat.cfg.donnees.join("drive.json"), serde_json::to_vec_pretty(r).unwrap_or_default());
+    if let Err(e) = crate::fichiers::ecrire(&etat.cfg.donnees.join("drive.json"), &serde_json::to_vec_pretty(r).unwrap_or_default(), false) {
+        tracing::warn!("registre du Drive non enregistré : {e}");
+    }
 }
 
 /// Les Drive à surveiller : celui de chaque compte relié qui l'a demandé, et le Drive réglé à la main.

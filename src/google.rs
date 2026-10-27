@@ -218,17 +218,54 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
     Ok((email, cible.to_string()))
 }
 
+/// Compte rclone du Drive, écrit directement dans le fichier de configuration de rclone (droits 600). Passés à
+/// `rclone config create`, le secret du client et le jeton apparaissaient dans la liste des processus.
 async fn relier_rclone(nom: &str, client_id: &str, client_secret: &str, jeton: &str) -> Result<()> {
-    let rclone = drive::rclone();
-    let _ = Command::new(&rclone).args(["config", "delete", nom]).output().await;
-    let sortie = Command::new(&rclone)
-        .args(["config", "create", nom, "drive", &format!("client_id={client_id}"), &format!("client_secret={client_secret}"),
-               "scope=drive", &format!("token={jeton}"), "--non-interactive"])
-        .output()
-        .await
-        .context("rclone introuvable")?;
-    if !sortie.status.success() {
-        bail!("liaison du Drive refusée par rclone : {}", String::from_utf8_lossy(&sortie.stderr).trim());
+    let sortie = Command::new(drive::rclone()).args(["config", "file"]).output().await.context("rclone introuvable")?;
+    let fichier = String::from_utf8_lossy(&sortie.stdout).lines().last().map(|l| l.trim().to_string())
+        .filter(|l| l.starts_with('/')).ok_or_else(|| anyhow::anyhow!("fichier de configuration de rclone introuvable"))?;
+    let fichier = std::path::PathBuf::from(fichier);
+    if let Some(d) = fichier.parent() {
+        tokio::fs::create_dir_all(d).await?;
     }
-    Ok(())
+    let ancien = tokio::fs::read_to_string(&fichier).await.unwrap_or_default();
+    let texte = remplacer_section(&ancien, nom, &[("type", "drive"), ("client_id", client_id), ("client_secret", client_secret),
+                                                  ("scope", "drive"), ("token", jeton)]);
+    crate::fichiers::ecrire(&fichier, texte.as_bytes(), true)
+}
+
+/// Remplace (ou ajoute) la section `[nom]` d'un fichier INI de rclone, sans toucher aux autres.
+fn remplacer_section(ancien: &str, nom: &str, cles: &[(&str, &str)]) -> String {
+    let mut sortie = String::new();
+    let mut dans = false;
+    for ligne in ancien.lines() {
+        let t = ligne.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            dans = &t[1..t.len() - 1] == nom;
+        }
+        if !dans {
+            sortie.push_str(ligne);
+            sortie.push('\n');
+        }
+    }
+    if !sortie.is_empty() && !sortie.ends_with("\n\n") {
+        sortie.push('\n');
+    }
+    sortie.push_str(&format!("[{nom}]\n"));
+    for (k, v) in cles {
+        sortie.push_str(&format!("{k} = {v}\n"));
+    }
+    sortie
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn section_rclone() {
+        let ancien = "[a]\ntype = drive\ntoken = x\n\n[edivid_lea]\ntype = drive\ntoken = vieux\n[b]\ntype = local\n";
+        let t = super::remplacer_section(ancien, "edivid_lea", &[("type", "drive"), ("token", "neuf")]);
+        assert!(t.contains("[a]\ntype = drive\ntoken = x") && t.contains("[b]\ntype = local"));
+        assert!(t.contains("[edivid_lea]\ntype = drive\ntoken = neuf") && !t.contains("vieux"));
+        assert_eq!(t.matches("[edivid_lea]").count(), 1);
+    }
 }

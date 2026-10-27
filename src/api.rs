@@ -61,7 +61,7 @@ pub fn routes(etat: EtatPartage) -> Router {
     let televersement = Router::new()
         .route("/api/projets/{id}/rushs", put(televerser_rush))
         .route("/api/projets/{id}/medias", put(televerser_media))
-        .layer(DefaultBodyLimit::disable());
+        .layer(DefaultBodyLimit::max(TELEVERSEMENT_MAX as usize));
     Router::new()
         .route("/api/session", get(acces::voir_session))
         .route("/api/connexion", post(acces::connexion))
@@ -108,9 +108,10 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/son/ambiances", get(ambiances))
         .route("/api/son/lieu/{nom}", get(lieu_son))
         .route("/api/projets/{id}/son/direct", get(son_direct))
-        .route("/api/projets/{id}/son/niveau", get(son_niveau))
-        .route("/api/projets/{id}/son/essai", get(essai_son))
-        .route("/api/projets/{id}/plan/qualite", get(plan_qualite))
+        // Elles lancent un calcul (processeur ou carte) : POST, jamais un simple lien qu'une page tierce suivrait.
+        .route("/api/projets/{id}/son/niveau", post(son_niveau))
+        .route("/api/projets/{id}/son/essai", post(essai_son))
+        .route("/api/projets/{id}/plan/qualite", post(plan_qualite))
         .route("/api/projets/{id}/postprod", post(changer_postprod))
         .route("/api/projets/{id}/postprod/image", get(image_postprod))
         .route("/api/projets/{id}/correction", post(corriger_phrase))
@@ -261,14 +262,34 @@ fn extension(nom: &str) -> String {
 }
 
 /// Écrit le corps de la requête dans un fichier, au fil de l'eau.
+/// Plus gros fichier accepté (une heure de rush iPhone 4K pèse environ 45 Go).
+const TELEVERSEMENT_MAX: u64 = 64 << 30;
+/// Place à laisser libre sur le disque des données : le fichier de travail et les rendus en ont besoin.
+const RESERVE_DISQUE: u64 = 50 << 30;
+
+/// Octets libres sur le disque qui porte `dossier` (df).
+async fn place_libre(dossier: &std::path::Path) -> Option<u64> {
+    let sortie = tokio::process::Command::new("df").args(["-B1", "--output=avail"]).arg(dossier).output().await.ok()?;
+    String::from_utf8_lossy(&sortie.stdout).lines().nth(1)?.trim().parse().ok()
+}
+
 async fn ecrire_corps(corps: Body, chemin: &std::path::Path) -> anyhow::Result<u64> {
-    tokio::fs::create_dir_all(chemin.parent().unwrap()).await?;
+    let dossier = chemin.parent().unwrap();
+    tokio::fs::create_dir_all(dossier).await?;
+    let libre = place_libre(dossier).await.unwrap_or(u64::MAX);
+    if libre < RESERVE_DISQUE {
+        anyhow::bail!("disque presque plein ({} Go libres) : libérez de la place (fichiers de travail, anciens rendus)", libre >> 30);
+    }
+    let plafond = TELEVERSEMENT_MAX.min(libre - RESERVE_DISQUE);
     let mut f = tokio::fs::File::create(chemin).await?;
     let mut flux = corps.into_data_stream();
     let mut taille = 0u64;
     while let Some(morceau) = flux.next().await {
         let morceau = morceau.map_err(|e| anyhow!("téléversement interrompu : {e}"))?;
         taille += morceau.len() as u64;
+        if taille > plafond {
+            anyhow::bail!("fichier trop gros pour la place disponible (plafond {} Go)", plafond >> 30);
+        }
         f.write_all(&morceau).await?;
     }
     f.flush().await?;
@@ -1160,6 +1181,11 @@ async fn programme(State(etat): State<EtatPartage>, Path(id): Path<String>) -> R
 
 async fn video_origine(State(etat): State<EtatPartage>, Path((id, rid)): Path<(String, String)>, requete: Request)
                        -> Result<Response, Erreur> {
+    // Le projet et son rush doivent exister : l'adresse ne désigne jamais un autre dossier.
+    let p = etat.projet(&id).await?;
+    if !p.rushs.iter().any(|r| r.id == rid) {
+        return Err(Erreur(StatusCode::NOT_FOUND, "rush introuvable".into()));
+    }
     let chemin = etat.dossier_travail(&id, &rid).join("proxy.mp4");
     if !chemin.exists() {
         return Err(Erreur(StatusCode::NOT_FOUND, "version d'origine en préparation".into()));
@@ -1169,9 +1195,10 @@ async fn video_origine(State(etat): State<EtatPartage>, Path((id, rid)): Path<(S
 
 async fn fichier_sortie(State(etat): State<EtatPartage>, Path((id, nom)): Path<(String, String)>, requete: Request)
                         -> Result<Response, Erreur> {
-    if nom.contains('/') || nom.contains("..") {
+    if nom.contains('/') || nom.contains('\\') || nom.starts_with('.') {
         return Err(refus("nom invalide"));
     }
+    etat.projet(&id).await?;
     let chemin = etat.dossier_projet(&id).join("sorties").join(&nom);
     if !chemin.exists() {
         return Err(Erreur(StatusCode::NOT_FOUND, "fichier introuvable".into()));

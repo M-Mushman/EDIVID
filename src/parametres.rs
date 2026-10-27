@@ -1,7 +1,6 @@
 //! Paramètres de l'instance : courriel et Google Drive. Gardés dans `<donnees>/parametres.json`
 //! (droits 600) ; le mot de passe SMTP ne repart jamais vers le navigateur.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use anyhow::Result;
@@ -125,12 +124,7 @@ pub fn charger(dossier: &Path) -> Parametres {
 }
 
 pub fn enregistrer(dossier: &Path, p: &Parametres) -> Result<()> {
-    let chemin = dossier.join("parametres.json");
-    let tmp = dossier.join("parametres.json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(p)?)?;
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    std::fs::rename(tmp, chemin)?;
-    Ok(())
+    crate::fichiers::ecrire(&dossier.join("parametres.json"), &serde_json::to_vec_pretty(p)?, true)
 }
 
 /// Vue envoyée au navigateur : sans le mot de passe.
@@ -144,25 +138,50 @@ pub fn vue(p: &Parametres) -> Value {
     v
 }
 
-/// Applique ce que le navigateur renvoie ; un mot de passe vide garde l'ancien.
+/// Adresse publique admise : HTTPS, sur un nom du tailnet (…​.ts.net), sans chemin ni identifiants.
+pub fn url_publique_admise(u: &str) -> bool {
+    let Some(reste) = u.strip_prefix("https://") else { return false };
+    let hote = reste.split(['/', '?', '#']).next().unwrap_or("");
+    !hote.contains('@') && reste.len() == hote.len() && {
+        let nom = hote.split(':').next().unwrap_or("");
+        nom.ends_with(".ts.net") && nom.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+    }
+}
+
+/// Applique ce que le navigateur renvoie ; un mot de passe vide garde l'ancien (même serveur, même compte).
 pub fn fusionner(actuels: &Parametres, recu: &Value) -> Result<Parametres> {
     let mut nouveau = actuels.clone();
     if let Some(u) = recu.get("url_publique").and_then(Value::as_str) {
-        nouveau.url_publique = u.trim().trim_end_matches('/').to_string();
+        let u = u.trim().trim_end_matches('/').to_string();
+        // Elle sert d'adresse de retour à Google et de cible à la redirection vers HTTPS : une adresse quelconque
+        // enverrait tous les visiteurs ailleurs. Seule une adresse HTTPS du tailnet est admise.
+        if !u.is_empty() && !url_publique_admise(&u) {
+            anyhow::bail!("adresse publique refusée : une adresse https://….ts.net du tailnet est attendue");
+        }
+        nouveau.url_publique = u;
     }
     if let Some(c) = recu.get("courriel") {
         let mut c: Courriel = serde_json::from_value(c.clone())?;
-        if c.mot_de_passe.is_empty() {
+        // Un mot de passe vide garde l'ancien — pour le même serveur seulement : sinon, changer le seul serveur
+        // enverrait le mot de passe gardé à ce nouveau serveur.
+        if c.mot_de_passe.is_empty() && c.serveur.trim().eq_ignore_ascii_case(actuels.courriel.serveur.trim())
+            && c.identifiant == actuels.courriel.identifiant {
             c.mot_de_passe = actuels.courriel.mot_de_passe.clone();
+        }
+        if !c.mot_de_passe.is_empty() && c.securite == "aucune" {
+            anyhow::bail!("un mot de passe ne part jamais en clair : choisissez une connexion chiffrée (TLS ou STARTTLS)");
         }
         c.destinataires = c.destinataires.iter().map(|d| d.trim().to_string()).filter(|d| d.contains('@')).collect();
         nouveau.courriel = c;
     }
     if let Some(d) = recu.get("drive") {
         let mut d: Drive = serde_json::from_value(d.clone())?;
-        if !d.distant.is_empty() && !d.distant.ends_with(':') && !d.distant.starts_with('/') {
-            d.distant.push(':');
+        // Un nom de compte rclone seulement : un chemin local (« /… ») laissait parcourir et importer le disque.
+        let nom = d.distant.trim().trim_end_matches(':');
+        if !nom.is_empty() && !crate::fichiers::identifiant_sur(nom) {
+            anyhow::bail!("compte Drive invalide : un nom rclone (lettres, chiffres, _ et -) est attendu");
         }
+        d.distant = if nom.is_empty() { String::new() } else { format!("{nom}:") };
         d.entree = d.entree.trim().trim_matches('/').to_string();
         d.sortie = d.sortie.trim().trim_matches('/').to_string();
         d.intervalle_s = d.intervalle_s.clamp(30, 3600);

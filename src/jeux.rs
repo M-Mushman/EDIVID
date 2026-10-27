@@ -38,7 +38,7 @@ pub fn liste(donnees: &Path) -> Vec<Jeu> {
 }
 
 fn enregistrer(donnees: &Path, jeux: &[Jeu]) -> Result<()> {
-    std::fs::write(donnees.join("jeux.json"), serde_json::to_vec_pretty(jeux)?)?;
+    crate::fichiers::ecrire(&donnees.join("jeux.json"), &serde_json::to_vec_pretty(jeux)?, false)?;
     Ok(())
 }
 
@@ -103,6 +103,10 @@ pub async fn ajouter(donnees: &Path, nom: &str, p: &Projet, dossier_medias: &Pat
 }
 
 pub fn retirer(donnees: &Path, id: &str) -> Result<()> {
+    // L'identifiant vient de l'adresse : « .. » y effaçait tout le dossier des données (audit du 2026-10-26).
+    if !crate::fichiers::identifiant_sur(id) {
+        anyhow::bail!("identifiant de jeu invalide");
+    }
     let mut jeux = liste(donnees);
     jeux.retain(|j| j.id != id);
     let _ = std::fs::remove_dir_all(dossier(donnees, id));

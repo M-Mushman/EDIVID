@@ -9,6 +9,7 @@ mod courriel;
 mod decoupe;
 mod drive;
 mod etat;
+mod fichiers;
 mod google;
 mod jeux;
 mod llm;
@@ -30,6 +31,7 @@ async fn main() -> Result<()> {
         .init();
     let cfg = config::Config::charger()?;
     let adresses = cfg.ecoute.clone();
+    let relais = cfg.ecoute_relais;
     let nvenc = rendu::nvenc_disponible().await;
     tracing::info!("encodeur matériel NVENC : {}", if nvenc { "disponible" } else { "absent, x264 utilisé" });
     let etat = etat::Etat::nouveau(cfg, nvenc).await?;
@@ -43,7 +45,7 @@ async fn main() -> Result<()> {
         match tokio::net::TcpListener::bind(adresse).await {
             Ok(ecoute) => {
                 tracing::info!("EDIVID écoute sur http://{adresse}");
-                let app = app.clone();
+                let app = app.clone().layer(axum::Extension(acces::Ecoute { relais: Some(adresse) == relais }));
                 // L'adresse du client sert au garde d'accès (identité Tailscale crue seulement en local).
                 serveurs.push(tokio::spawn(async move {
                     axum::serve(ecoute, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await

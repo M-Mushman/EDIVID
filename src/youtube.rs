@@ -2,7 +2,6 @@
 //! Google sont gardés sur azoth (`<donnees>/comptes.json`, droits 600).
 
 use std::collections::HashMap;
-use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -36,10 +35,7 @@ pub fn charger(etat: &EtatPartage) -> HashMap<String, Jetons> {
 pub fn garder(etat: &EtatPartage, email: &str, jetons: Jetons) -> Result<()> {
     let mut tous = charger(etat);
     tous.insert(email.to_lowercase(), jetons);
-    let f = chemin(etat);
-    std::fs::write(&f, serde_json::to_vec_pretty(&tous)?)?;
-    std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600))?;
-    Ok(())
+    crate::fichiers::ecrire(&chemin(etat), &serde_json::to_vec_pretty(&tous)?, true)
 }
 
 /// Accès accordés par Google pour ce compte (vide s'il n'est pas relié).
@@ -50,7 +46,9 @@ pub fn portees(etat: &EtatPartage, email: &str) -> String {
 pub fn oublier(etat: &EtatPartage, email: &str) {
     let mut tous = charger(etat);
     if tous.remove(&email.to_lowercase()).is_some() {
-        let _ = std::fs::write(chemin(etat), serde_json::to_vec_pretty(&tous).unwrap_or_default());
+        if let Err(e) = crate::fichiers::ecrire(&chemin(etat), &serde_json::to_vec_pretty(&tous).unwrap_or_default(), true) {
+            tracing::warn!("jetons Google non effacés du disque : {e}");
+        }
     }
 }
 

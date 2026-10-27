@@ -15,6 +15,8 @@ pub struct Config {
     /// Projets, médias, rendus.
     pub donnees: PathBuf,
     pub ecoute: Vec<SocketAddr>,
+    /// Écoute réservée au relais HTTPS du tailnet (`tailscale serve`) : la seule où l'identité Tailscale fait foi.
+    pub ecoute_relais: Option<SocketAddr>,
     pub ollama: String,
     pub modele_llm: String,
     /// azothd, pour les baux de carte graphique.
@@ -56,9 +58,22 @@ impl Config {
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.trim().parse().with_context(|| format!("adresse d'écoute invalide : {s}")))
             .collect::<Result<Vec<_>>>()?;
+        let ecoute_relais: Option<SocketAddr> = match env("EDIVID_ECOUTE_RELAIS", "127.0.0.1:8031").trim() {
+            "" => None,
+            a => Some(a.parse().with_context(|| format!("adresse du relais invalide : {a}"))?),
+        };
+        let mut ecoute = ecoute;
+        if let Some(r) = ecoute_relais.filter(|r| !ecoute.contains(r)) {
+            ecoute.push(r);
+        }
         let chemin_acces = donnees.join("acces.json");
         let acces: Acces = match std::fs::read_to_string(&chemin_acces) {
-            Ok(t) => serde_json::from_str(&t)?,
+            Ok(t) => {
+                // Créé avant les écritures réservées (droits 664) : ramené à 600.
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&chemin_acces, std::fs::Permissions::from_mode(0o600));
+                serde_json::from_str(&t)?
+            }
             Err(_) => {
                 // Sans lettres ni chiffres qui se confondent (O/0, I/1/l).
                 let alphabet = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -66,7 +81,7 @@ impl Config {
                     code: format!("{}-{}", tirer(alphabet, 4), tirer(alphabet, 4)),
                     sel: tirer(b"abcdefghijklmnopqrstuvwxyz0123456789", 32),
                 };
-                std::fs::write(&chemin_acces, serde_json::to_string_pretty(&a)?)?;
+                crate::fichiers::ecrire(&chemin_acces, serde_json::to_string_pretty(&a)?.as_bytes(), true)?;
                 a
             }
         };
@@ -78,6 +93,7 @@ impl Config {
             racine,
             donnees,
             ecoute,
+            ecoute_relais,
             ollama: env("EDIVID_OLLAMA", "http://127.0.0.1:11434"),
             modele_llm: env("EDIVID_LLM", "qwen3.5:35b-a3b-q4_K_M"),
             azothd: env("EDIVID_AZOTHD", "http://127.0.0.1:8016"),

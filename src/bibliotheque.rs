@@ -31,7 +31,7 @@ pub fn perso(donnees: &Path) -> Vec<Demande> {
 }
 
 fn enregistrer(donnees: &Path, d: &[Demande]) -> Result<()> {
-    std::fs::write(donnees.join("bibliotheque.json"), serde_json::to_vec_pretty(d)?)?;
+    crate::fichiers::ecrire(&donnees.join("bibliotheque.json"), &serde_json::to_vec_pretty(d)?, false)?;
     Ok(())
 }
 
