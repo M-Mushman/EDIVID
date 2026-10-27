@@ -2563,6 +2563,7 @@ mod tests_capteur {
             "debruite.py" => &etat.cfg.python_deepfilter,
             "seche_gridnet.py" => &etat.cfg.racine.join(".venv-gridnet/bin/python"),
             "seche_sgmse.py" => &etat.cfg.racine.join(".venv-sgmse/bin/python"),
+            "restaure_sidon.py" => &etat.cfg.racine.join(".venv-sidon/bin/python"),
             _ => &etat.cfg.python,
         };
         let r = Command::new(python)
