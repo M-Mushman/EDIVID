@@ -19,3 +19,4 @@ __pycache__/
 /outils/sgmse-amont
 /.venv-sgmse
 /.venv-gridnet
+/modeles/sgmse

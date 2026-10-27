@@ -2512,6 +2512,7 @@ mod tests_capteur {
             "seche_ia.py" => &etat.cfg.python_clearvoice,
             "debruite.py" => &etat.cfg.python_deepfilter,
             "seche_gridnet.py" => &etat.cfg.racine.join(".venv-gridnet/bin/python"),
+            "seche_sgmse.py" => &etat.cfg.racine.join(".venv-sgmse/bin/python"),
             _ => &etat.cfg.python,
         };
         let r = Command::new(python)
