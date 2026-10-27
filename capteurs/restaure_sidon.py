@@ -5,7 +5,7 @@ Usage : python restaure_sidon.py <entree> <sortie.wav> [<fichier_bilan.json>]
 
 Comme VoiceFixer, il recrée le son ; contrairement à lui, il part d'une représentation de la parole elle-même, ce qui
 devrait garder les mots (à vérifier par Whisper). Méthode de la démo officielle (sarulab-speech/sidon_demo_beta) :
-entrée normalisée à 0,9, passe-haut 50 Hz, 16 kHz, blocs de 96 s raccordés par la dernière trame de caractéristiques.
+entrée normalisée à 0,9, passe-haut 50 Hz, 16 kHz, blocs de 30 s (96 s dans la démo) raccordés par la dernière trame de caractéristiques.
 Sortie recalée sur l'entrée (décalage mesuré sur l'enveloppe, corrigé au-delà de 3 ms), 48 kHz stéréo, durée exacte, ramenée au
 niveau de l'entrée. Environnement à part (.venv-sidon) ; poids dans le cache de Hugging Face (téléchargés une fois).
 Progression : {"etape": "restauration", "pct": ...}.
@@ -69,7 +69,8 @@ def main() -> None:
     wav16 = torchaudio.functional.resample(wav, SR, 16000)
     wav16 = torch.nn.functional.pad(wav16, (0, 24000))
     morceaux, cache = [], None
-    blocs = list(wav16.view(-1).split(16000 * 96))
+    # Blocs de 30 s : ceux de 96 s de la démo montaient à 9,5 Go de carte sur un rush de 11 min.
+    blocs = list(wav16.view(-1).split(16000 * 30))
     with torch.inference_mode():
         for i, bloc in enumerate(blocs):
             entrees = pre(torch.nn.functional.pad(bloc, (160, 160)), sampling_rate=16000, return_tensors="pt")
