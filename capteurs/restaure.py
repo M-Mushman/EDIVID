@@ -1,6 +1,6 @@
 """EDIVID — timbre de la voix reconstruit par IA (VoiceFixer, licence MIT, mode 0), sur la carte graphique.
 
-Usage : python restaure.py <voix_debruitee.wav> <sortie.wav>
+Usage : python restaure.py <voix_debruitee.wav> <sortie.wav> [<mode 0|1|2 = 0>]
 
 L'entrée est la voix déjà débruitée (rehausse.py) : partir d'une voix propre limite ce que le modèle invente (sur
 épisode 0, 56 mots sur 58 conservés, contre 51 sur 58 à partir du rush brut). VoiceFixer resynthétise la voix : il
@@ -32,6 +32,7 @@ def signaler(pct: float) -> None:
 
 def main() -> None:
     entree, sortie = sys.argv[1], sys.argv[2]
+    mode = int(sys.argv[3]) if len(sys.argv) > 3 else 0
     if not torch.cuda.is_available():
         raise SystemExit("carte graphique indisponible")
     from voicefixer import VoiceFixer
@@ -44,7 +45,7 @@ def main() -> None:
         complete = Path(tmp) / "entree.wav"
         sf.write(complete, np.pad(x, ((0, reste), (0, 0))), sr_e, subtype="PCM_16")
         brut = Path(tmp) / "brut.wav"
-        VoiceFixer().restore(input=str(complete), output=str(brut), cuda=True, mode=0)
+        VoiceFixer().restore(input=str(complete), output=str(brut), cuda=True, mode=mode)
         signaler(90)
         donnees = subprocess.run(["ffmpeg", "-v", "error", "-i", str(brut), "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"],
                                  capture_output=True, check=True).stdout

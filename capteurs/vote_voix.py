@@ -12,7 +12,7 @@ phrases qu'aucun candidat ne rend juste.
 Les tranches sont des groupes de mots de la référence de 1 à 4 s, coupés dans les silences d'au moins 0,15 s. Pour
 chacune, on prend le premier candidat dont les mots (lettres et chiffres seulement) sont exactement ceux d'une des deux
 références ; sinon le repli. Les
-raccords tombent au milieu des silences entre phrases, avec un fondu de 40 ms : jamais dans un mot (les raccords mot à
+raccords tombent au milieu des silences entre phrases, avec un fondu de 80 ms : jamais dans un mot (les raccords mot à
 mot faisaient changer le timbre toutes les 7 s, écoute du 2026-10-26). Tous les fichiers ont la même durée et sont
 calés à l'échantillon (restaure.py compense l'avance de VoiceFixer).
 Sortie : WAV 48 kHz stéréo ; bilan JSON {phrases, par_source, phrases_repli: [[t0, t1, référence, brut, candidats…]]}.
@@ -35,7 +35,7 @@ SR = 48000
 PAUSE = 0.15        # s : silence où l'on peut couper
 TRANCHE_MIN = 1.0   # s
 TRANCHE_MAX = 4.0   # s
-FONDU = 0.04
+FONDU = 0.08
 
 
 def signaler(pct: float) -> None:
@@ -77,6 +77,38 @@ def phrases(mots: list) -> list:
     return groupes
 
 
+def egaliser_tranche(x: np.ndarray, cible: np.ndarray) -> np.ndarray:
+    """`x` (n, 2) ramené au spectre moyen de `cible` (même passage) : gain par bande de 1/3 d'octave, lissé, borné à
+    ±24 dB, appliqué par TFCT (fenêtres de 2048, pas de 512)."""
+    N, PAS_T = 2048, 512
+    fen = np.hanning(N + 1)[:-1]
+    def spectre(v):
+        m = v.mean(axis=1)
+        nf = max(1, (len(m) - N) // PAS_T + 1)
+        idx = np.arange(N)[None, :] + np.arange(nf)[:, None] * PAS_T
+        return (np.abs(np.fft.rfft(m[idx] * fen, axis=1)) ** 2).mean(axis=0)
+    px, pc = spectre(x), spectre(cible)
+    freqs = np.fft.rfftfreq(N, 1 / SR)
+    centres = [1000 * 2 ** (k / 3) for k in range(-12, 13)]  # 63 Hz à 16 kHz
+    gains = []
+    for fc in centres:
+        sel = (freqs >= fc / 2 ** (1 / 6)) & (freqs < fc * 2 ** (1 / 6))
+        gains.append(10 * np.log10((pc[sel].sum() + 1e-12) / (px[sel].sum() + 1e-12)) if sel.any() else 0.0)
+    gains = np.convolve(np.pad(np.array(gains), 1, mode="edge"), [0.25, 0.5, 0.25], mode="valid")
+    gains = np.clip(gains, -24, 24)
+    courbe = 10 ** (np.interp(np.log2(np.maximum(freqs, 20)), np.log2(centres), gains) / 20)
+    sortie = np.zeros_like(x)
+    norme = np.zeros(len(x))
+    for d in range(0, max(1, len(x) - N + 1), PAS_T):
+        for c in range(x.shape[1]):
+            sortie[d:d + N, c] += np.fft.irfft(np.fft.rfft(x[d:d + N, c] * fen) * courbe, n=N) * fen
+        norme[d:d + N] += fen ** 2
+    reste = norme < 1e-3
+    sortie[~reste] /= norme[~reste][:, None]
+    sortie[reste] = x[reste] * courbe.mean()
+    return sortie.astype(np.float32)
+
+
 def main() -> None:
     reference, repli, sortie, fichier_bilan, analyse = sys.argv[1:6]
     debut = float(sys.argv[6])
@@ -109,6 +141,18 @@ def main() -> None:
             repli_detail.append([round(t0, 2), round(t1, 2), " ".join(m for _, _, m in dans(mots_ref)), " ".join(m for _, _, m in dans(mots_brut))]
                                 + [" ".join(m for _, _, m in dans(tr)) for tr in transcriptions])
         choix.append(retenu)
+    # Repli : chaque tranche prend le niveau et la couleur de la version VoiceFixer de cette même tranche (ses mots
+    # sont faux, son niveau et son timbre sont justes). Spectre moyen de la tranche seulement, par bandes de 1/3 d'octave :
+    # rien du déroulé des formants (donc des mots) de VoiceFixer ne passe. Sans cela, le repli était 7 à 15 dB plus
+    # faible et sonnait autrement (écoute du 2026-10-27 : « raccords catastrophiques »).
+    marge = int(0.1 * SR)
+    for k, src in enumerate(choix):
+        if src != len(candidats):
+            continue
+        i0, i1 = max(0, int(bornes[k] * SR) - marge), min(n, int(bornes[k + 1] * SR) + marge)
+        if i1 - i0 < 4096:
+            continue
+        sons[-1][i0:i1] = egaliser_tranche(sons[-1][i0:i1], sons[0][i0:i1])
     # Poids de chaque source, avec un fondu à chaque changement.
     poids = np.zeros((len(sons), n), dtype=np.float32)
     f = int(FONDU * SR)
