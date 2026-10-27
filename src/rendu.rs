@@ -336,6 +336,9 @@ pub async fn capteur(etat: &EtatPartage, projet: &str, script: &str, args: &[Str
     let python = match script {
         "rehausse.py" => &etat.cfg.python_rehaussement,
         "restaure.py" => &etat.cfg.python_voicefixer,
+        "separe.py" | "qualite_son.py" | "egaliseur.py" => &etat.cfg.python_son,
+        "seche_ia.py" => &etat.cfg.python_clearvoice,
+        "debruite.py" => &etat.cfg.python_deepfilter,
         _ => &etat.cfg.python,
     };
     let mut enfant = Command::new(python)
@@ -367,6 +370,11 @@ pub async fn capteur(etat: &EtatPartage, projet: &str, script: &str, args: &[Str
             "rehaussement" => "Retrait de l'écho et du bruit (IA)",
             "restauration" => "Reconstruction du timbre (IA)",
             "verification" => "Vérification des mots de la voix reconstruite",
+            "separation" => "Retrait de la réverbération (IA, séparation)",
+            "sechage" => "Voix séchée : pièce et bruit retirés (IA)",
+            "debruitage" => "Bruit de fond retiré (IA)",
+            "egalisation" => "Égaliseur de timbre",
+            "qualite" => "Mesure de la qualité du son",
             _ => continue,
         };
         if dernier.elapsed().as_millis() > 400 {
@@ -2339,7 +2347,14 @@ mod tests_capteur {
         let bail = etat.carte.prendre(&etat, "essai", "other:essai", carte::VRAM_RESTAURATION_MO, 600).await.unwrap();
         // Lancé à la main (même environnement que `capteur`) pour voir toute sa sortie, mémoire de la carte comprise.
         let script = std::env::var("EDIVID_SCRIPT").unwrap();
-        let python = if script == "restaure.py" { &etat.cfg.python_voicefixer } else if script == "rehausse.py" { &etat.cfg.python_rehaussement } else { &etat.cfg.python };
+        let python = match script.as_str() {
+            "restaure.py" => &etat.cfg.python_voicefixer,
+            "rehausse.py" => &etat.cfg.python_rehaussement,
+            "separe.py" | "qualite_son.py" | "egaliseur.py" => &etat.cfg.python_son,
+            "seche_ia.py" => &etat.cfg.python_clearvoice,
+            "debruite.py" => &etat.cfg.python_deepfilter,
+            _ => &etat.cfg.python,
+        };
         let r = Command::new(python)
             .arg(etat.cfg.racine.join("capteurs").join(&script))
             .args(std::env::var("EDIVID_ARGS").unwrap().split('|'))

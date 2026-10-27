@@ -11,3 +11,8 @@ __pycache__/
 # Essais : un dossier par campagne (AAAA-MM-JJ-sujet), jetable ; seul le mode d'emploi est suivi.
 /essais/*
 !/essais/LISEZMOI.md
+/modeles/dnsmos/*.onnx
+/.venv-son
+/modeles/separation
+/.venv-deepfilter
+/.venv-clearvoice

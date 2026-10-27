@@ -37,8 +37,14 @@ def main() -> None:
     from voicefixer import VoiceFixer
     signaler(0)
     with tempfile.TemporaryDirectory() as tmp:
+        # Entrée complétée de silence jusqu'à une demi-seconde entière : sur certaines longueurs (30,00006 s), le
+        # découpage interne de VoiceFixer laissait un dernier morceau de trois échantillons et s'arrêtait en erreur.
+        x, sr_e = sf.read(entree, dtype="float32", always_2d=True)
+        reste = (-len(x)) % (sr_e // 2)
+        complete = Path(tmp) / "entree.wav"
+        sf.write(complete, np.pad(x, ((0, reste), (0, 0))), sr_e, subtype="PCM_16")
         brut = Path(tmp) / "brut.wav"
-        VoiceFixer().restore(input=entree, output=str(brut), cuda=True, mode=0)
+        VoiceFixer().restore(input=str(complete), output=str(brut), cuda=True, mode=0)
         signaler(90)
         donnees = subprocess.run(["ffmpeg", "-v", "error", "-i", str(brut), "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"],
                                  capture_output=True, check=True).stdout

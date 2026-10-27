@@ -26,6 +26,12 @@ pub struct Config {
     pub python_rehaussement: PathBuf,
     /// Python de la reconstruction du timbre (VoiceFixer, environnement à part).
     pub python_voicefixer: PathBuf,
+    /// Python de la boîte à outils du son (séparation voix/réverbération, DNSMOS, égaliseur ; `.venv-son`).
+    pub python_son: PathBuf,
+    /// Python de la voix séchée par IA (MossFormer2, ClearerVoice ; `.venv-clearvoice`).
+    pub python_clearvoice: PathBuf,
+    /// Python du débruiteur DeepFilterNet3 (`.venv-deepfilter`, torch pour le processeur).
+    pub python_deepfilter: PathBuf,
     pub code_acces: String,
     /// Valeur du témoin de session, dérivée du code.
     pub jeton: String,
@@ -90,6 +96,9 @@ impl Config {
             python: racine.join(".venv/bin/python"),
             python_rehaussement: racine.join(".venv-rehaussement/bin/python"),
             python_voicefixer: racine.join(".venv-voicefixer/bin/python"),
+            python_son: racine.join(".venv-son/bin/python"),
+            python_clearvoice: racine.join(".venv-clearvoice/bin/python"),
+            python_deepfilter: racine.join(".venv-deepfilter/bin/python"),
             racine,
             donnees,
             ecoute,
