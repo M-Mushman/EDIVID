@@ -856,7 +856,15 @@ function dessinerLecteur() {
   } else {
     vide?.remove();
     n.video.classList.remove('cache');
-    if (n.video.dataset.url !== url) { n.video.dataset.url = url; n.video.src = url; }
+    if (n.video.dataset.url !== url) {
+      n.video.dataset.url = url;
+      n.video.src = url;
+      // Rendu final en HEVC 10 bits : certains navigateurs ne le lisent pas (le fichier, lui, est bon).
+      const s = sortieAffichee();
+      if (E.lecteur === 'rendu' && s?.rapport?.codec === 'hevc' && !n.video.canPlayType('video/mp4; codecs="hvc1.2.4.L153.B0"')) {
+        toast('Ce navigateur ne lit pas le HEVC 10 bits du rendu final : téléchargez-le (iPhone, Mac, VLC, YouTube le lisent), ou choisissez H.264 dans Réglages › Image › Format du rendu final.', 'erreur');
+      }
+    }
     n.ecran.classList.toggle('vertical', vertical);
   }
   dessinerOutilsLecteur();
@@ -3416,9 +3424,9 @@ function comparer() {
 // ------------------------------------------------------------------ export et YouTube
 
 const PRESETS_EXPORT = [
-  ['youtube', 'YouTube', 'Recommandé. Réglages conseillés par YouTube : débit élevé, image fixe à 30 i/s, son AAC 384 kb/s. La meilleure qualité une fois en ligne.'],
-  ['leger', 'Léger', 'Pour l’iPhone, WhatsApp ou un courriel : 720p, fichier environ quatre fois plus petit.'],
-  ['max', 'Qualité maximale', 'Pour l’archive ou une retouche ailleurs : fichier lourd, aucune perte visible.'],
+  ['youtube', 'YouTube', 'Recommandé. Le rendu final tel quel, sans nouvelle compression : YouTube réencode tout envoi, et part ainsi de la meilleure image.'],
+  ['leger', 'Léger', 'Pour l’iPhone, WhatsApp ou un courriel : 720p, 30 i/s, H.264, fichier beaucoup plus petit.'],
+  ['max', 'Archive', 'Le rendu final tel quel, à garder ou à retoucher ailleurs.'],
 ];
 
 async function afficherExport() {

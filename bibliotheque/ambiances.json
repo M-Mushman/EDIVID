@@ -13,7 +13,7 @@
     "timbre_voix": "chaud",
     "deesseur": true,
     "espace": "aucun",
-    "restauration": true
+    "restauration": false
    }
   },
   {
@@ -29,7 +29,7 @@
     "timbre_voix": "proche",
     "deesseur": true,
     "espace": "chambre",
-    "restauration": true
+    "restauration": false
    }
   },
   {
@@ -45,7 +45,7 @@
     "timbre_voix": "podcast",
     "deesseur": false,
     "espace": "aucun",
-    "restauration": true
+    "restauration": false
    }
   },
   {
@@ -61,7 +61,7 @@
     "timbre_voix": "chaud",
     "deesseur": true,
     "espace": "aucun",
-    "restauration": true
+    "restauration": false
    }
   },
   {

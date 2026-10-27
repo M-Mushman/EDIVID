@@ -25,8 +25,46 @@ const BT709: &str = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=
 /// Latence fixe du filtre de réduction du bruit afftdn, en échantillons à 48 kHz.
 const LATENCE_AFFTDN: u32 = 1200;
 const ZOOM_TRANSITION: f64 = 1.4;
-/// 48 000 échantillons par seconde, 30 images par seconde.
-const ECHANTILLONS_PAR_IMAGE: u64 = 1_600;
+/// Une passe de rendu. L'aperçu reste léger (30 i/s, 8 bits). Le rendu final garde la cadence et les 10 bits du
+/// fichier de travail jusqu'au seul encodage avec perte : sur épisode 0, la chaîne 8 bits à 30 i/s et ses quatre
+/// compressions donnaient une image moins propre que le rush iPhone (constat du 2026-10-26).
+#[derive(Clone, Copy, Debug)]
+pub struct Passe {
+    pub ips: f64,
+    pub dix_bits: bool,
+}
+
+impl Passe {
+    pub const APERCU: Passe = Passe { ips: 30.0, dix_bits: false };
+
+    /// Échantillons de son par image, à 48 kHz.
+    fn echantillons_par_image(&self) -> u64 {
+        (48_000.0 / self.ips).round() as u64
+    }
+
+    fn format(&self) -> &'static str {
+        if self.dix_bits { "yuv420p10le" } else { "yuv420p" }
+    }
+
+    /// Option de format des incrustations (overlay), qui sinon repasse l'image en 8 bits.
+    fn format_overlay(&self) -> &'static str {
+        if self.dix_bits { ":format=yuv420p10" } else { "" }
+    }
+}
+
+/// Fondu depuis ou vers le blanc entre [entree] et [sortie], sans quitter la profondeur de l'image (le fondu en
+/// couleur de ffmpeg repasse en RVB 8 bits). `k` : part du blanc, expression du temps T de l'image.
+fn fondu_blanc(entree: &str, sortie: &str, etiquette: &str, k: &str) -> String {
+    format!(
+        "[{entree}]split[{etiquette}a][{etiquette}b];[{etiquette}b]lutyuv=y=maxval:u=(maxval+minval)/2:v=(maxval+minval)/2[{etiquette}w];\
+         [{etiquette}a][{etiquette}w]blend=all_expr='A+(B-A)*({k})'[{sortie}]"
+    )
+}
+
+/// Cadence du fichier de travail d'un rush : 60 i/s pour un rush à 50 i/s ou plus, 30 sinon.
+fn cadence_travail(ips_source: f64) -> u32 {
+    if ips_source >= 45.0 { 60 } else { 30 }
+}
 /// Part de l'image reconstruite par l'IA, le reste venant de l'image d'origine agrandie : seule, l'IA
 /// donne une peau « peinte » ; mélangée, elle garde le grain naturel (comparé le 2026-10-18).
 const MELANGE_IA: f64 = 0.6;
@@ -93,15 +131,20 @@ pub async fn nvenc_disponible() -> bool {
 /// Options d'encodage vidéo : NVENC si on l'a, sinon x264.
 fn encodeur(nvenc: bool, usage: &str) -> Vec<String> {
     let v: &[&str] = match (nvenc, usage) {
-        (true, "plan_apercu") => &["-c:v", "h264_nvenc", "-preset", "p2", "-rc", "vbr", "-cq", "26", "-b:v", "0"],
-        (true, "plan") => &["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "13", "-b:v", "0"],
-        (true, "assemblage_apercu") => &["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "24", "-b:v", "0"],
-        (true, _) => &["-c:v", "h264_nvenc", "-preset", "p7", "-tune", "hq", "-rc", "vbr", "-cq", "17", "-b:v", "0",
-                       "-spatial-aq", "1", "-temporal-aq", "1", "-profile:v", "high"],
-        (false, "plan_apercu") => &["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"],
-        (false, "plan") => &["-c:v", "libx264", "-preset", "veryfast", "-crf", "12"],
-        (false, "assemblage_apercu") => &["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"],
-        (false, _) => &["-c:v", "libx264", "-preset", "slow", "-crf", "17"],
+        (true, "plan_apercu") => &["-c:v", "h264_nvenc", "-preset", "p2", "-rc", "vbr", "-cq", "26", "-b:v", "0", "-pix_fmt", "yuv420p"],
+        // Plans du rendu final : intermédiaires quasi sans perte, en 10 bits, sur le processeur (encodés en parallèle).
+        (_, "plan") => &["-c:v", "libx264", "-profile:v", "high10", "-preset", "veryfast", "-crf", "6", "-pix_fmt", "yuv420p10le"],
+        (true, "assemblage_apercu") => &["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "24", "-b:v", "0", "-pix_fmt", "yuv420p"],
+        // Le seul encodage avec perte du rendu final.
+        (true, "final_hevc") => &["-c:v", "hevc_nvenc", "-profile:v", "main10", "-pix_fmt", "p010le", "-preset", "p7", "-tune", "hq",
+                                  "-rc", "vbr", "-cq", "16", "-b:v", "0", "-spatial-aq", "1", "-temporal-aq", "1", "-tag:v", "hvc1"],
+        (false, "final_hevc") => &["-c:v", "libx265", "-profile:v", "main10", "-pix_fmt", "yuv420p10le", "-preset", "medium", "-crf", "16",
+                                   "-tag:v", "hvc1", "-x265-params", "log-level=error"],
+        (true, _) => &["-c:v", "h264_nvenc", "-preset", "p7", "-tune", "hq", "-rc", "vbr", "-cq", "16", "-b:v", "0",
+                       "-spatial-aq", "1", "-temporal-aq", "1", "-profile:v", "high", "-pix_fmt", "yuv420p"],
+        (false, "plan_apercu") => &["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p"],
+        (false, "assemblage_apercu") => &["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"],
+        (false, _) => &["-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p"],
     };
     v.iter().map(|x| x.to_string()).collect()
 }
@@ -158,7 +201,9 @@ pub async fn sonder_rush(fichier: &Path) -> Result<InfosSource> {
     })
 }
 
-/// Fichier de travail : rotation appliquée, HDR converti en SDR Rec.709, 30 i/s fixes, son PCM.
+/// Fichier de travail : rotation appliquée, HDR converti en SDR Rec.709 en virgule flottante, 10 bits, cadence du
+/// rush (60 ou 30 i/s), son PCM. Conversion « mobius » : elle garde le contraste des tons moyens et le détail des
+/// fenêtres, là où « hable » délavait toute l'image (comparé sur épisode 0, 2026-10-26).
 pub async fn preparer(etat: &EtatPartage, projet: &str, source: &Path, infos: &InfosSource, mezz: &Path) -> Result<()> {
     let d = ffprobe(source).await?;
     let a_son = d["streams"].as_array().into_iter().flatten().any(|s| s["codec_type"] == "audio");
@@ -168,13 +213,14 @@ pub async fn preparer(etat: &EtatPartage, projet: &str, source: &Path, infos: &I
             let (tin, npl) = if hdr == "HLG" { ("arib-std-b67", 203) } else { ("smpte2084", 100) };
             vf.push(format!(
                 "zscale=tin={tin}:min=bt2020nc:pin=bt2020:rin=tv:t=linear:npl={npl},format=gbrpf32le,zscale=p=bt709,\
-                 tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
+                 tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv"
             ));
         }
         None => {}
     }
-    vf.push(format!("fps={IPS}"));
-    vf.push("format=yuv420p".into());
+    let ips = cadence_travail(infos.ips);
+    vf.push(format!("fps={ips}"));
+    vf.push("format=yuv420p10le".into());
     vf.push(BT709.into());
     let mut args: Vec<String> = vec!["-i".into(), source.to_string_lossy().into()];
     if !a_son {
@@ -183,8 +229,8 @@ pub async fn preparer(etat: &EtatPartage, projet: &str, source: &Path, infos: &I
     args.extend(["-map".into(), "0:v:0".into(), "-map".into(), if a_son { "0:a:0".into() } else { "1:a".into() }]);
     args.extend([
         "-vf".into(), vf.join(","),
-        "-c:v".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "16".into(),
-        "-g".into(), "30".into(), "-pix_fmt".into(), "yuv420p".into(),
+        "-c:v".into(), "libx264".into(), "-profile:v".into(), "high10".into(), "-preset".into(), "veryfast".into(),
+        "-crf".into(), "10".into(), "-g".into(), format!("{ips}"), "-pix_fmt".into(), "yuv420p10le".into(),
         "-colorspace".into(), "bt709".into(), "-color_primaries".into(), "bt709".into(), "-color_trc".into(), "bt709".into(),
         "-c:a".into(), "pcm_s16le".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
     ]);
@@ -200,7 +246,7 @@ pub async fn proxy(etat: &EtatPartage, projet: &str, mezz: &Path, sortie: &Path,
     let tmp = sortie.with_extension("tmp.mp4");
     let args: Vec<String> = vec![
         "-i".into(), mezz.to_string_lossy().into(),
-        "-vf".into(), "scale='if(gt(iw,ih),-2,540)':'if(gt(iw,ih),540,-2)'".into(),
+        "-vf".into(), "fps=30,scale='if(gt(iw,ih),-2,540)':'if(gt(iw,ih),540,-2)'".into(),
         "-c:v".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "26".into(),
         "-g".into(), "30".into(), "-pix_fmt".into(), "yuv420p".into(),
         "-c:a".into(), "aac".into(), "-b:a".into(), "96k".into(), "-movflags".into(), "+faststart".into(),
@@ -324,30 +370,35 @@ fn largeur_nette(p: &Plan, largeur_zone: u32, largeur_sortie: u32) -> u32 {
 }
 
 /// Filtre vidéo d'un plan, à partir de l'image de la zone (ou de sa version nette).
-fn filtre_plan(p: &Plan, largeur_entree: u32, sortie: (u32, u32), nette: bool) -> String {
+///
+/// Le zoom agrandit l'image à chaque trame (lanczos) puis la pose, décalée, sur un cadre à la taille de la sortie :
+/// zoompan, qu'on employait avant, ne travaille qu'en 8 bits.
+fn filtre_plan(p: &Plan, sortie: (u32, u32), nette: bool, passe: Passe) -> String {
     let (wo, ho) = sortie;
-    let n = (p.duree * IPS).round().max(1.0);
+    let ips = passe.ips;
+    let n = (p.duree * ips).round().max(1.0);
     let z_trans = if p.transition.as_deref() == Some("zoom") { ZOOM_TRANSITION } else { 1.0 };
-    let mut f: Vec<String> = Vec::new();
+    let mut f: Vec<String> = vec![format!("fps={ips}")];
     if p.z_fin <= 1.0 + 1e-6 && z_trans == 1.0 {
         f.push(format!("scale={wo}:{ho}:flags=lanczos"));
     } else {
-        let pre = ((2.0 * wo as f64) / largeur_entree as f64).ceil().clamp(1.0, 4.0) as u32;
-        if pre > 1 {
-            f.push(format!("scale=iw*{pre}:ih*{pre}:flags=lanczos"));
-        }
         let zm = p.z_fin * z_trans;
-        let progres = if zm > 1.0 + 1e-6 { format!("min(1,max(0,(zoom-1)/{:.5}))", zm - 1.0) } else { "0".into() };
         let (cx, cy) = p.centre_serre;
-        let nt = 0.25 * IPS;
+        let nt = 0.25 * ips;
         // Une poussée répartie sur plusieurs plans avance régulièrement ; seule, elle ralentit en fin de plan.
-        let avance = if p.lineaire { format!("min(on/{n},1)") } else { format!("(1-pow(1-min(on/{n},1),2))") };
+        let avance = if p.lineaire { format!("min(n/{n},1)") } else { format!("(1-pow(1-min(n/{n},1),2))") };
+        let z = format!("(1+{:.5}*{avance})*(1+{:.3}*pow(max(0,1-n/{nt}),2))", p.z_fin - 1.0, z_trans - 1.0);
+        // Part du recentrage vers le visage : nulle à l'image entière, pleine au cadre le plus serré.
+        let progres = |taille: &str, cadre: u32| {
+            if zm > 1.0 + 1e-6 { format!("min(1,max(0,({taille}/{cadre}-1)/{:.5}))", zm - 1.0) } else { "0".into() }
+        };
+        let (pw, ph) = (progres("overlay_w", wo), progres("overlay_h", ho));
         f.push(format!(
-            "zoompan=z='(1+{:.5}*{avance})*(1+{:.3}*pow(max(0,1-on/{nt}),2))':\
-             x='max(0,min(iw-iw/zoom,(0.5+({cx:.5}-0.5)*{progres})*iw-iw/zoom/2))':\
-             y='max(0,min(ih-ih/zoom,(0.5+({cy:.5}-0.5)*{progres})*ih-ih/zoom/2))':d=1:s={wo}x{ho}:fps={IPS}",
-            p.z_fin - 1.0,
-            z_trans - 1.0
+            "scale=w='ceil({wo}*{z}/2)*2':h='ceil({ho}*{z}/2)*2':eval=frame:flags=lanczos[zz];\
+             color=c=black:s={wo}x{ho}:r={ips}[zc];\
+             [zc][zz]overlay=x='-clip((0.5+({cx:.5}-0.5)*{pw})*overlay_w-{wo}/2,0,overlay_w-{wo})':\
+             y='-clip((0.5+({cy:.5}-0.5)*{ph})*overlay_h-{ho}/2,0,overlay_h-{ho})':eval=frame:shortest=1{}",
+            passe.format_overlay()
         ));
     }
     // Zoom sans IA : un peu de netteté adaptative (CAS, luminance) compense la douceur de l'agrandissement, sans
@@ -357,11 +408,20 @@ fn filtre_plan(p: &Plan, largeur_entree: u32, sortie: (u32, u32), nette: bool) -
     }
     let echelle = wo as f64 / 1080.0;
     let flou = |taille: f64| ((taille * echelle).round() as u32).max(2);
+    let mut chaine = f.join(",");
+    let ajouter = |c: &mut String, filtre: String| {
+        c.push(',');
+        c.push_str(&filtre);
+    };
     match p.transition.as_deref() {
-        Some("flash") => f.push("fade=t=in:st=0:d=0.15:color=white".into()),
-        Some("fondu") => f.push("fade=t=in:st=0:d=0.25".into()),
-        Some("glitch") => f.push("rgbashift=rh=-14:bh=14:enable='lt(t,0.2)',noise=alls=35:allf=t:enable='lt(t,0.2)'".into()),
-        Some("glisse") => f.push(format!(
+        Some("flash") => {
+            chaine.push_str("[fl0];");
+            chaine.push_str(&fondu_blanc("fl0", "fl1", "flb", "clip(1-T/0.15,0,1)"));
+            chaine.push_str(";[fl1]null");
+        }
+        Some("fondu") => ajouter(&mut chaine, "fade=t=in:st=0:d=0.25".into()),
+        Some("glitch") => ajouter(&mut chaine, "rgbashift=rh=-14:bh=14:enable='lt(t,0.2)',noise=alls=35:allf=t:enable='lt(t,0.2)'".into()),
+        Some("glisse") => ajouter(&mut chaine, format!(
             "avgblur=sizeX={}:sizeY=1:enable='lt(t,0.05)',avgblur=sizeX={}:sizeY=1:enable='between(t,0.05,0.1)',\
              avgblur=sizeX={}:sizeY=1:enable='between(t,0.1,0.15)'",
             flou(60.0), flou(30.0), flou(12.0)
@@ -369,31 +429,31 @@ fn filtre_plan(p: &Plan, largeur_entree: u32, sortie: (u32, u32), nette: bool) -
         _ => {}
     }
     match p.sortie.as_deref() {
-        Some("fondu") => f.push(format!("fade=t=out:st={:.3}:d=0.12", (p.duree - 0.12).max(0.0))),
-        Some("glisse") => f.push(format!("avgblur=sizeX={}:sizeY=1:enable='gte(t,{:.3})'", flou(40.0), (p.duree - 0.08).max(0.0))),
+        Some("fondu") => ajouter(&mut chaine, format!("fade=t=out:st={:.3}:d=0.12", (p.duree - 0.12).max(0.0))),
+        Some("glisse") => ajouter(&mut chaine, format!("avgblur=sizeX={}:sizeY=1:enable='gte(t,{:.3})'", flou(40.0), (p.duree - 0.08).max(0.0))),
         _ => {}
     }
-    f.push("setsar=1".into());
-    f.push("format=yuv420p".into());
-    f.join(",")
+    ajouter(&mut chaine, "setsar=1".into());
+    ajouter(&mut chaine, format!("format={}", passe.format()));
+    chaine
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, voix: Option<&Path>, source: (u32, u32),
-                     sortie: (u32, u32), fichier: &Path, apercu: bool, nvenc: bool) -> Result<()> {
+                     sortie: (u32, u32), fichier: &Path, passe: Passe, nvenc: bool) -> Result<()> {
     let zone = zone_entiere(p, source);
-    let n = (p.duree * IPS).round().max(1.0) as u32;
-    // Image et son de durée exacte : n images et n × 1 600 échantillons. Avec « -frames:v », ffmpeg coupait
+    let n = (p.duree * passe.ips).round().max(1.0) as u32;
+    // Image et son de durée exacte : n images et n × 1 600 échantillons (à 30 i/s). Avec « -frames:v », ffmpeg coupait
     // le son au dernier bloc entier : jusqu'à 20 ms perdus par plan, près d'une seconde d'avance de la voix
     // sur 200 plans (mesuré le 2026-10-18).
-    let echantillons = n as u64 * ECHANTILLONS_PAR_IMAGE;
+    let echantillons = n as u64 * passe.echantillons_par_image();
     let mut args: Vec<String> = Vec::new();
     let vf = match nette {
         Some(f) => {
             args.extend(["-t".into(), format!("{:.3}", p.duree), "-i".into(), f.to_string_lossy().into()]);
-            filtre_plan(p, largeur_nette(p, zone.w, sortie.0), sortie, true)
+            filtre_plan(p, sortie, true, passe)
         }
-        None => format!("crop={}:{}:{}:{},{}", zone.w, zone.h, zone.x, zone.y, filtre_plan(p, zone.w, sortie, false)),
+        None => format!("crop={}:{}:{}:{},{}", zone.w, zone.h, zone.x, zone.y, filtre_plan(p, sortie, false, passe)),
     };
     args.extend([
         "-ss".into(), format!("{:.3}", p.t0), "-t".into(), format!("{:.3}", p.duree), "-i".into(), mezz.to_string_lossy().into(),
@@ -410,7 +470,7 @@ async fn rendre_plan(p: &Plan, mezz: &Path, nette: Option<&Path>, voix: Option<&
         "-af".into(), format!("aresample=48000,apad=whole_len={echantillons},atrim=end_sample={echantillons},\
                                afade=t=in:d=0.01,afade=t=out:st={:.3}:d=0.01", (p.duree - 0.01).max(0.0)),
     ]);
-    args.extend(encodeur(nvenc, if apercu { "plan_apercu" } else { "plan" }));
+    args.extend(encodeur(nvenc, if passe.dix_bits { "plan" } else { "plan_apercu" }));
     args.extend([
         "-c:a".into(), "pcm_s16le".into(), "-ac".into(), "2".into(),
         fichier.to_string_lossy().into(),
@@ -665,7 +725,10 @@ fn textes(prog: &Programme, l: &mut Vec<String>) {
 /// Logo de l'habillage posé sur [base] → [sortie] : son halo lumineux (copie blanche floutée), son ombre portée
 /// (copie noire floutée, décalée vers le bas à droite), puis le logo. Les trois sont agrandis d'une bordure
 /// transparente où le flou s'étale ; la position est corrigée de cette bordure.
-fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, hab: &crate::modele::Habillage, marge: u32) -> Vec<String> {
+#[allow(clippy::too_many_arguments)]
+fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, hab: &crate::modele::Habillage, marge: u32,
+               passe: Passe) -> Vec<String> {
+    let (ips, fmt) = (passe.ips, passe.format_overlay());
     let (x, y) = position_habillage(&hab.position, marge);
     let l = largeur as f64;
     let flou_ombre = (0.025 * l).max(1.0);
@@ -679,7 +742,7 @@ fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, h
     let corriger = |e: &str| format!("({})-{bord}", e.replace('w', &format!("(w-{})", 2 * bord)).replace('h', &format!("(h-{})", 2 * bord)));
     let (x, y) = (corriger(&x), corriger(&y));
     let mut fc = vec![format!(
-        "[{entree}]fps={IPS},scale={largeur}:-2,format=rgba,colorchannelmixer=aa={:.2},pad=iw+{}:ih+{}:{bord}:{bord}:color=black@0[hl{j}]",
+        "[{entree}]fps={ips},scale={largeur}:-2,format=rgba,colorchannelmixer=aa={:.2},pad=iw+{}:ih+{}:{bord}:{bord}:color=black@0[hl{j}]",
         hab.opacite, 2 * bord, 2 * bord
     )];
     let mut sur = base.to_string();
@@ -696,7 +759,7 @@ fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, h
             "[hhalo{j}]lutrgb=r={teinte}:g={teinte}:b={teinte},gblur=sigma={flou_halo:.1},lutrgb=a='min(255,val*{:.3})'[hhb{j}]",
             3.0 * hab.halo
         ));
-        fc.push(format!("[{sur}][hhb{j}]overlay=x='{x}':y='{y}':eof_action=pass[hvh{j}]"));
+        fc.push(format!("[{sur}][hhb{j}]overlay=x='{x}':y='{y}':eof_action=pass{fmt}[hvh{j}]"));
         sur = format!("hvh{j}");
     }
     if hab.ombre > 0.0 {
@@ -704,10 +767,10 @@ fn graphe_logo(entree: &str, base: &str, sortie: &str, j: usize, largeur: u32, h
             "[hombre{j}]lutrgb=r=0:g=0:b=0,gblur=sigma={flou_ombre:.1},lutrgb=a='val*{:.2}'[hob{j}]",
             0.9 * hab.ombre
         ));
-        fc.push(format!("[{sur}][hob{j}]overlay=x='{x}+{decalage}':y='{y}+{decalage}':eof_action=pass[hvo{j}]"));
+        fc.push(format!("[{sur}][hob{j}]overlay=x='{x}+{decalage}':y='{y}+{decalage}':eof_action=pass{fmt}[hvo{j}]"));
         sur = format!("hvo{j}");
     }
-    fc.push(format!("[{sur}][hlo{j}]overlay=x='{x}':y='{y}':eof_action=pass[{sortie}]"));
+    fc.push(format!("[{sur}][hlo{j}]overlay=x='{x}':y='{y}':eof_action=pass{fmt}[{sortie}]"));
     fc
 }
 
@@ -758,12 +821,13 @@ fn couper_lignes(texte: &str, max: usize) -> Vec<String> {
 /// choisie, ou sur un fond sombre ; silencieux.
 #[allow(clippy::too_many_arguments)]
 fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: usize, (wo, ho): (u32, u32),
-                      args: &mut Vec<String>, fc: &mut Vec<String>, entree: &mut usize, tmp: &Path) -> Result<()> {
+                      args: &mut Vec<String>, fc: &mut Vec<String>, entree: &mut usize, tmp: &Path, passe: Passe) -> Result<()> {
+    let ips = passe.ips;
     let medias = etat.dossier_projet(&p.id).join("medias");
     let media = p.medias.iter().find(|m| m.id == s.media);
     let fondu = format!("fade=t=in:st=0:d=0.35,fade=t=out:st={:.3}:d=0.35", (d - 0.35).max(0.0));
     let afondu = format!("afade=t=in:st=0:d=0.3,afade=t=out:st={:.3}:d=0.35", (d - 0.35).max(0.0));
-    let finir = format!("trim=0:{d:.3},setpts=PTS-STARTPTS,fps={IPS},setsar=1,format=yuv420p,{BT709},{fondu}");
+    let finir = format!("trim=0:{d:.3},setpts=PTS-STARTPTS,fps={ips},setsar=1,format={},{BT709},{fondu}", passe.format());
     let silence = |args: &mut Vec<String>, fc: &mut Vec<String>, entree: &mut usize| {
         args.extend(["-f".into(), "lavfi".into(), "-t".into(), format!("{d:.3}"), "-i".into(), "anullsrc=r=48000:cl=stereo".into()]);
         fc.push(format!("[{}:a]aresample=48000,asetpts=PTS-STARTPTS[ga{k}]", *entree));
@@ -775,7 +839,7 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
         let i = *entree;
         *entree += 1;
         fc.push(format!(
-            "[{i}:v]fps={IPS},split[gs{k}a][gs{k}b];\
+            "[{i}:v]fps={ips},split[gs{k}a][gs{k}b];\
              [gs{k}b]scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho},gblur=sigma=30[gs{k}c];\
              [gs{k}a]scale={wo}:{ho}:force_original_aspect_ratio=decrease[gs{k}d];\
              [gs{k}c][gs{k}d]overlay=(W-w)/2:(H-h)/2,{finir}[gv{k}]"
@@ -804,7 +868,7 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
             fc.push(format!("[{i}:v]scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho}{assombrir}[gc{k}]"));
         }
         None => {
-            args.extend(["-f".into(), "lavfi".into(), "-t".into(), format!("{d:.3}"), "-i".into(), format!("color=c=0x101014:s={wo}x{ho}:r={IPS}")]);
+            args.extend(["-f".into(), "lavfi".into(), "-t".into(), format!("{d:.3}"), "-i".into(), format!("color=c=0x101014:s={wo}x{ho}:r={ips}")]);
             fc.push(format!("[{i}:v]null[gc{k}]"));
         }
     }
@@ -1063,7 +1127,8 @@ async fn debruiter(etat: &EtatPartage, projet: &str, entree: &Path, sortie: &Pat
 /// Timbre reconstruit par IA à partir d'une voix débruitée (restaure.py), puis vérifié mot à mot (verifie_voix.py) :
 /// là où un mot a changé, la voix débruitée reste. Chaque étape sous son bail. `debut` : instant du rush où
 /// commencent les fichiers (écoute d'essai).
-async fn reconstruire(etat: &EtatPartage, projet: &str, debruitee: &Path, analyse: &Path, sortie: &Path, debut: f64, duree_s: f64) -> Result<()> {
+async fn reconstruire(etat: &EtatPartage, projet: &str, debruitee: &Path, analyse: &Path, sortie: &Path, debut: f64, duree_s: f64,
+                      bilan: &Path) -> Result<()> {
     let brute = sortie.with_extension("brute.wav");
     let bail = etat.carte.prendre(etat, projet, "other:restauration", carte::VRAM_RESTAURATION_MO, (duree_s / 40.0 + 60.0) as u64).await?;
     let res = capteur(etat, projet, "restaure.py", &[debruitee.to_string_lossy().into(), brute.to_string_lossy().into()]).await;
@@ -1071,23 +1136,35 @@ async fn reconstruire(etat: &EtatPartage, projet: &str, debruitee: &Path, analys
     res?;
     let bail = etat.carte.prendre(etat, projet, "other:transcription", carte::VRAM_TRANSCRIPTION_MO, (duree_s / 6.0 + 120.0) as u64).await?;
     let res = capteur(etat, projet, "verifie_voix.py", &[brute.to_string_lossy().into(), debruitee.to_string_lossy().into(),
-                                                         analyse.to_string_lossy().into(), sortie.to_string_lossy().into(), format!("{debut}")]).await;
+                                                         analyse.to_string_lossy().into(), sortie.to_string_lossy().into(), format!("{debut}"),
+                                                         bilan.to_string_lossy().into()]).await;
     etat.carte.rendre(bail).await;
     let _ = tokio::fs::remove_file(&brute).await;
     res
 }
 
-/// Voix au timbre reconstruit d'un rush (sur la voix débruitée à fond), calculée une fois puis gardée.
+/// Voix au timbre reconstruit d'un rush (sur la voix débruitée à fond), calculée une fois puis gardée, avec son
+/// bilan (`voix_reconstruite.json` : voix gardée, part des mots identiques). Une voix d'avant ce bilan était
+/// raccordée mot à mot à la voix débruitée : elle est refaite.
 async fn voix_reconstruite(etat: &EtatPartage, projet: &str, rush: &str, duree_s: f64) -> Result<PathBuf> {
     let base = voix_sans_echo(etat, projet, rush, "forte", duree_s).await?.ok_or_else(|| anyhow!("voix débruitée indisponible"))?;
     let dossier = etat.dossier_travail(projet, rush);
     let f = dossier.join("voix_reconstruite.wav");
-    if !f.exists() {
+    let bilan = dossier.join("voix_reconstruite.json");
+    if !f.exists() || !bilan.exists() {
         let provisoire = dossier.join("voix_reconstruite.en-cours.wav");
-        reconstruire(etat, projet, &base, &dossier.join("analyse.json"), &provisoire, 0.0, duree_s).await?;
+        reconstruire(etat, projet, &base, &dossier.join("analyse.json"), &provisoire, 0.0, duree_s, &bilan).await?;
         tokio::fs::rename(&provisoire, &f).await?;
     }
     Ok(f)
+}
+
+/// Bilan de la voix reconstruite des rushs du projet (voix gardée, accord des mots), pour le rapport.
+fn bilans_voix(etat: &EtatPartage, p: &Projet) -> Value {
+    json!(p.rushs.iter().filter_map(|r| {
+        let t = std::fs::read_to_string(etat.dossier_travail(&p.id, &r.id).join("voix_reconstruite.json")).ok()?;
+        serde_json::from_str::<Value>(&t).ok()
+    }).collect::<Vec<_>>())
 }
 
 /// Son du rush sans l'écho ni le bruit de la pièce (débruiteur IA), calculé une fois par rush et par dosage.
@@ -1129,7 +1206,8 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
         let sans = dossier.join(format!("{empreinte}-sans-echo.wav"));
         debruiter(etat, projet, &extrait, &sans, 1.0, duree).await?;
         let refaite = dossier.join(format!("{empreinte}-reconstruite.wav"));
-        reconstruire(etat, projet, &sans, &etat.dossier_travail(projet, rush).join("analyse.json"), &refaite, debut, duree).await?;
+        reconstruire(etat, projet, &sans, &etat.dossier_travail(projet, rush).join("analyse.json"), &refaite, debut, duree,
+                     &dossier.join(format!("{empreinte}-bilan.json"))).await?;
         let _ = tokio::fs::remove_file(&sans).await;
         source = refaite;
     } else if let Some(part) = part_ia(&texte(r, "dereverberation")) {
@@ -1226,7 +1304,8 @@ pub fn empreinte(p: &Projet) -> String {
     // textes et images posés (sauf le fond vert et le son d'une vidéo, inscrits dans l'aperçu), habillage.
     let mut reglages = p.reglages.clone();
     for c in REGLAGES_SON_DIRECT.iter().chain(&["sous_titres", "style_sous_titres", "position_sous_titres", "titres_chapitres",
-                                                 "fondu_ouverture", "fondu_fin", "duree_fondus"]) {
+                                                 "fondu_ouverture", "fondu_fin", "duree_fondus",
+                                                 "cadence", "codec_final", "nettete_ia"]) {
         reglages.remove(*c);
     }
     let decisions = p.montage.as_ref().map(|m| m.phrases.iter().map(|d| {
@@ -1259,7 +1338,9 @@ pub fn resume_son(r: &crate::reglages::Reglages) -> String {
 
 #[allow(clippy::too_many_arguments)]
 async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Path, ass: &Path, sortie: &Path,
-                   apercu: bool, nvenc: bool) -> Result<()> {
+                   passe: Passe, nvenc: bool) -> Result<()> {
+    let apercu = !passe.dix_bits;
+    let (ips, fmt) = (passe.ips, passe.format_overlay());
     let r = &p.reglages;
     let (wo, ho) = (prog.largeur, prog.hauteur);
     let total = prog.duree;
@@ -1268,10 +1349,17 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     let mut fc: Vec<String> = Vec::new();
 
     // Image : cadence fixe, puis PostProd (couleur, teint, diffusion, netteté, grain…), puis les effets ponctuels.
-    fc.push(format!("[0:v]setpts=N/({IPS}*TB)[ppe]"));
+    fc.push(format!("[0:v]setpts=N/({ips}*TB)[ppe]"));
     // L'aperçu sort sans PostProd : le navigateur l'applique en direct, chaque réglage se voit aussitôt. Le rendu
     // final, lui, l'inscrit dans l'image.
-    fc.push(if apercu { "[ppe]null[pps]".to_string() } else { p.postprod.filtre("ppe", "pps", wo, ho) });
+    // Au rendu final, la couleur passe par sa table en 16 bits (la même que l'aperçu en direct) : les filtres de
+    // couleur de ffmpeg (eq, curves, colorbalance…) ne travaillent qu'en 8 bits.
+    fc.push(if apercu {
+        "[ppe]null[pps]".to_string()
+    } else {
+        let table = table_couleurs_cube(etat, &p.postprod).await?;
+        p.postprod.filtre_avec_table("ppe", "pps", wo, ho, table.as_deref())
+    });
     let mut v = vec![];
     let effets = |nom: &str| prog.incrustations.iter().filter(|i| i.effet == nom).map(|i| (i.debut, i.fin)).collect::<Vec<_>>();
     let secousses = effets("secousse");
@@ -1328,7 +1416,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
             format!(",fade=t=out:st={:.3}:d=0.15:alpha=1", (d - 0.15).max(0.0))
         };
         if !direct {
-            fc.push(format!("[{entree}:v]fps=30,{echelle},format=yuva420p{cle}{fondu},setpts=PTS-STARTPTS+{:.3}/TB[inc{k}]", inc.debut));
+            fc.push(format!("[{entree}:v]fps={ips},{echelle},format=yuva420p{cle}{fondu},setpts=PTS-STARTPTS+{:.3}/TB[inc{k}]", inc.debut));
         }
         let (mut x, mut y) = match (inc.x, inc.y) {
             _ if plein => ("0".to_string(), "0".to_string()),
@@ -1361,7 +1449,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         // Entre apostrophes : les formules des arrivées (glissés, secousse) contiennent des virgules, que le graphe
         // prendrait sinon pour des séparateurs de filtres.
         if !direct {
-            fc.push(format!("[{base}][inc{k}]overlay=x='{x}':y='{y}':enable='between(t,{:.3},{:.3})':eof_action=pass[vi{k}]",
+            fc.push(format!("[{base}][inc{k}]overlay=x='{x}':y='{y}':enable='between(t,{:.3},{:.3})':eof_action=pass{fmt}[vi{k}]",
                             inc.debut, inc.fin));
             base = format!("vi{k}");
         }
@@ -1383,7 +1471,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         }
         args.extend(["-t".into(), format!("{total:.3}"), "-i".into(), fichier.to_string_lossy().into()]);
         let largeur = ((wo as f64 * hab.taille) as u32 / 2 * 2).max(16);
-        fc.extend(graphe_logo(&format!("{entree}:v"), &base, &format!("vh{j}"), j, largeur, hab, marge));
+        fc.extend(graphe_logo(&format!("{entree}:v"), &base, &format!("vh{j}"), j, largeur, hab, marge, passe));
         base = format!("vh{j}");
         entree += 1;
     }
@@ -1426,7 +1514,7 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     }
     let (avant, apres) = durees_generique(p);
     if apercu {
-        return assembler_apercu(etat, p, sortie, liste, args, fc, entree, melange, total, (avant, apres), (wo, ho), ass, nvenc).await;
+        return assembler_apercu(etat, p, sortie, liste, args, fc, entree, melange, total, (avant, apres), (wo, ho), ass, nvenc, passe).await;
     }
     let mix = if melange.len() > 1 {
         fc.push(format!("{}amix=inputs={}:duration=first:normalize=0[mix]",
@@ -1435,27 +1523,29 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     } else {
         melange[0].clone()
     };
-    fc.push(format!("[{mix}]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]"));
+    // Le niveau final (−14 LUFS) se règle après coup, d'un gain fixe mesuré sur tout le rendu (normaliser_son) :
+    // loudnorm en une passe est dynamique et faisait « pomper » la voix.
+    fc.push(format!("[{mix}]aresample=48000[a]"));
 
     // Générique : une séquence avant le montage, une après, au même format, enchaînées en fondu.
-    let (mut v_final, mut a_final) = ("v", "a");
+    let (mut v_final, mut a_final) = ("v".to_string(), "a".to_string());
     if avant > 0.0 || apres > 0.0 {
         let tmp = ass.parent().unwrap_or(Path::new("."));
         let mut suite = String::new();
         let mut n = 1;
         if let (Some(s), true) = (&p.generique.debut, avant > 0.0) {
-            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp)?;
+            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe)?;
             suite.push_str("[gv0][ga0]");
             n += 1;
         }
         suite.push_str("[v][a]");
         if let (Some(s), true) = (&p.generique.fin, apres > 0.0) {
-            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp)?;
+            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe)?;
             suite.push_str("[gv1][ga1]");
             n += 1;
         }
         fc.push(format!("{suite}concat=n={n}:v=1:a=1[vg][ag]"));
-        (v_final, a_final) = ("vg", "ag");
+        (v_final, a_final) = ("vg".to_string(), "ag".to_string());
     }
     let total = avant + total + apres;
     // Fondus d'ouverture et de fin, sur toute la vidéo (générique compris) : image et son ensemble. L'aperçu ne les
@@ -1463,18 +1553,26 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     let (ouverture, fin) = (texte(r, "fondu_ouverture"), texte(r, "fondu_fin"));
     if ouverture != "aucun" || fin != "aucun" {
         let d = nombre(r, "duree_fondus").clamp(0.2, 3.0).min(total / 2.0);
-        let (mut vf, mut af) = (Vec::new(), Vec::new());
-        if ouverture != "aucun" {
-            vf.push(format!("fade=t=in:st=0:d={d:.3}:color={}", if ouverture == "blanc" { "white" } else { "black" }));
-            af.push(format!("afade=t=in:st=0:d={d:.3}"));
+        // Vers le noir : fade, qui garde les 10 bits ; vers le blanc : fondu_blanc (le fade en couleur repasse en 8 bits).
+        let mut af = Vec::new();
+        let mut v = v_final.clone();
+        for (genre, entrant) in [(ouverture.as_str(), true), (fin.as_str(), false)] {
+            if genre == "aucun" {
+                continue;
+            }
+            let suite = format!("vfd{}", if entrant { 0 } else { 1 });
+            let st = if entrant { 0.0 } else { total - d };
+            if genre == "blanc" {
+                let k = if entrant { format!("clip(1-T/{d:.3},0,1)") } else { format!("clip((T-{st:.3})/{d:.3},0,1)") };
+                fc.push(fondu_blanc(&v, &suite, &format!("fb{}", if entrant { 0 } else { 1 }), &k));
+            } else {
+                fc.push(format!("[{v}]fade=t={}:st={st:.3}:d={d:.3}[{suite}]", if entrant { "in" } else { "out" }));
+            }
+            af.push(format!("afade=t={}:st={st:.3}:d={d:.3}", if entrant { "in" } else { "out" }));
+            v = suite;
         }
-        if fin != "aucun" {
-            vf.push(format!("fade=t=out:st={:.3}:d={d:.3}:color={}", total - d, if fin == "blanc" { "white" } else { "black" }));
-            af.push(format!("afade=t=out:st={:.3}:d={d:.3}", total - d));
-        }
-        fc.push(format!("[{v_final}]{}[vfd]", vf.join(",")));
         fc.push(format!("[{a_final}]{}[afd]", af.join(",")));
-        (v_final, a_final) = ("vfd", "afd");
+        (v_final, a_final) = (v, "afd".to_string());
     }
 
     args.extend([
@@ -1482,16 +1580,57 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
         "-map".into(), format!("[{v_final}]"), "-map".into(), format!("[{a_final}]"),
         "-t".into(), format!("{total:.3}"),
     ]);
-    args.extend(encodeur(nvenc, "assemblage"));
-    args.extend(sortie_video(sortie));
-    lancer_assemblage(etat, p, &args, liste, total).await
+    let hevc = texte(r, "codec_final") != "h264";
+    args.extend(encodeur(nvenc, if hevc { "final_hevc" } else { "assemblage" }));
+    let brut = sortie.with_extension("brut.mkv");
+    args.extend([
+        "-r".into(), format!("{}", passe.ips), "-fps_mode".into(), "cfr".into(),
+        "-colorspace".into(), "bt709".into(), "-color_primaries".into(), "bt709".into(), "-color_trc".into(), "bt709".into(),
+        "-c:a".into(), "pcm_s24le".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
+        brut.to_string_lossy().into(),
+    ]);
+    lancer_assemblage(etat, p, &args, liste, total).await?;
+    let res = normaliser_son(etat, &p.id, &brut, sortie, total, hevc).await;
+    let _ = tokio::fs::remove_file(&brut).await;
+    res
+}
+
+/// Niveau final du rendu : la sonie intégrée de tout le son est mesurée, puis portée à −14 LUFS d'un gain fixe ;
+/// un limiteur ne retient que les crêtes au-dessus de −2 dBFS. L'image est recopiée telle quelle.
+async fn normaliser_son(etat: &EtatPartage, projet: &str, brut: &Path, sortie: &Path, duree: f64, hevc: bool) -> Result<()> {
+    etat.signaler(projet, "Mesure du niveau du son", 0.0);
+    let mesure = Command::new("ffmpeg")
+        .args(["-hide_banner", "-nostats", "-i"]).arg(brut)
+        .args(["-vn", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .context("ffmpeg introuvable")?;
+    let texte = String::from_utf8_lossy(&mesure.stderr);
+    // Le bilan de loudnorm est le dernier bloc entre accolades ; d'autres lignes peuvent le suivre.
+    let json = texte.rfind('{').and_then(|i| texte[i..].find('}').map(|j| &texte[i..=i + j]))
+        .and_then(|t| serde_json::from_str::<Value>(t).ok())
+        .ok_or_else(|| anyhow!("mesure du niveau du son illisible"))?;
+    let lire = |cle: &str| json[cle].as_str().and_then(|v| v.parse::<f64>().ok());
+    let integre = lire("input_i").filter(|v| v.is_finite()).unwrap_or(-14.0);
+    let gain = (-14.0 - integre).clamp(-20.0, 30.0);
+    let mut args: Vec<String> = vec!["-i".into(), brut.to_string_lossy().into(), "-map".into(), "0:v".into(), "-map".into(), "0:a".into(),
+                                     "-c:v".into(), "copy".into()];
+    if hevc {
+        args.extend(["-tag:v".into(), "hvc1".into()]);
+    }
+    args.extend([
+        "-af".into(), format!("volume={gain:.2}dB,alimiter=limit={:.4}:attack=5:release=50:level=false,aresample=48000", 10f64.powf(-2.0 / 20.0)),
+        "-c:a".into(), "aac".into(), "-b:a".into(), "256k".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
+        "-movflags".into(), "+faststart".into(), sortie.to_string_lossy().into(),
+    ]);
+    ffmpeg(etat, projet, "Niveau du son et finition", &args, duree).await
 }
 
 /// Réglages de sortie de la vidéo assemblée (image et son).
-fn sortie_video(sortie: &Path) -> Vec<String> {
+fn sortie_video(sortie: &Path, passe: Passe) -> Vec<String> {
     vec![
-        "-pix_fmt".into(), "yuv420p".into(),
-        "-r".into(), format!("{IPS}"), "-fps_mode".into(), "cfr".into(),
+        "-r".into(), format!("{}", passe.ips), "-fps_mode".into(), "cfr".into(),
         "-colorspace".into(), "bt709".into(), "-color_primaries".into(), "bt709".into(), "-color_trc".into(), "bt709".into(),
         "-c:a".into(), "aac".into(), "-b:a".into(), "256k".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(),
         "-movflags".into(), "+faststart".into(),
@@ -1518,7 +1657,7 @@ pub fn pistes_apercu(video: &str) -> (String, String) {
 #[allow(clippy::too_many_arguments)]
 async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: &Path, mut args: Vec<String>, mut fc: Vec<String>,
                           mut entree: usize, melange: Vec<String>, total: f64, (avant, apres): (f64, f64), (wo, ho): (u32, u32),
-                          ass: &Path, nvenc: bool) -> Result<()> {
+                          ass: &Path, nvenc: bool, passe: Passe) -> Result<()> {
     const FORMAT: &str = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo";
     let silence = |d: f64, nom: &str| format!("aevalsrc=0|0:c=stereo:s=48000:d={d:.3},{FORMAT}[{nom}]");
     fc.push(format!("[{}]{FORMAT}[vx]", melange[0]));
@@ -1542,7 +1681,7 @@ async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: 
             gens.push_str(&format!("[gq{k}]"));
         };
         if let (Some(s), true) = (&p.generique.debut, avant > 0.0) {
-            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp)?;
+            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe)?;
             images.push_str("[gv0]");
             morceau(0, avant, &mut fc, &mut voixs, &mut fonds, &mut gens);
             n += 1;
@@ -1559,7 +1698,7 @@ async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: 
         gens.push_str("[gm]");
         let mut fin_gen = String::new();
         if let (Some(s), true) = (&p.generique.fin, apres > 0.0) {
-            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp)?;
+            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe)?;
             images.push_str("[gv1]");
             morceau(1, apres, &mut fc, &mut voixs, &mut fonds, &mut fin_gen);
             n += 1;
@@ -1577,7 +1716,7 @@ async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: 
     args.extend(["-filter_complex".into(), fc.join(";"),
                  "-map".into(), format!("[{v_final}]"), "-map".into(), format!("[{voix}]"), "-t".into(), format!("{total:.3}")]);
     args.extend(encodeur(nvenc, "assemblage_apercu"));
-    args.extend(sortie_video(sortie));
+    args.extend(sortie_video(sortie, passe));
     let nom = sortie.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let (f_fond, f_gen) = pistes_apercu(&nom);
     let piste = |etiquette: &str, fichier: &str| -> Vec<String> {
@@ -1597,7 +1736,7 @@ async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: 
 /// Netteté IA (Real-ESRGAN, sous bail de la carte), en une passe, sur ceux des plans `indices` qui la demandent :
 /// fichiers nets par indice de plan.
 async fn nettete_ia(etat: &EtatPartage, p: &Projet, prog: &Programme, indices: &[usize],
-                    sources: &std::collections::HashMap<String, (u32, u32)>, tmp: &Path)
+                    sources: &std::collections::HashMap<String, (u32, u32)>, tmp: &Path, passe: Passe)
                     -> Result<std::collections::HashMap<usize, PathBuf>> {
     let projet = p.id.as_str();
     let mut nettes = std::collections::HashMap::new();
@@ -1612,7 +1751,7 @@ async fn nettete_ia(etat: &EtatPartage, p: &Projet, prog: &Programme, indices: &
         let f = tmp.join(format!("net{i:04}.mkv"));
         travaux.push(json!({"entree": etat.dossier_travail(projet, &pl.rush).join("mezz.mkv"), "debut": pl.t0, "duree": pl.duree,
                             "crop": [z.x, z.y, z.w, z.h], "sortie": f, "visage": visage, "melange": MELANGE_IA,
-                            "largeur_max": largeur_nette(pl, z.w, prog.largeur)}));
+                            "largeur_max": largeur_nette(pl, z.w, prog.largeur), "ips": passe.ips}));
         nettes.insert(*i, f);
     }
     let fichier = tmp.join("nettete.json");
@@ -1659,13 +1798,15 @@ pub async fn plan_qualite(etat: &EtatPartage, projet: &str, t: f64) -> Result<Va
     tokio::fs::create_dir_all(&tmp).await?;
     let sources: std::collections::HashMap<String, (u32, u32)> =
         analyses.iter().map(|(id, a)| (id.clone(), (a.largeur, a.hauteur))).collect();
-    let nettes = nettete_ia(etat, &p, &prog, &indices, &sources, &tmp).await?;
+    mettre_a_jour_travail(etat, &p).await?;
+    let passe = passe_finale(etat, &p, &analyses).await?;
+    let nettes = nettete_ia(etat, &p, &prog, &indices, &sources, &tmp, passe).await?;
     let mut liste = String::new();
     for &i in &indices {
         let pl = &prog.plans[i];
         let f = tmp.join(format!("plan{i:04}.mkv"));
         let mezz = etat.dossier_travail(projet, &pl.rush).join("mezz.mkv");
-        rendre_plan(pl, &mezz, nettes.get(&i).map(|x| x.as_path()), None, sources[&pl.rush], (prog.largeur, prog.hauteur), &f, false, false).await?;
+        rendre_plan(pl, &mezz, nettes.get(&i).map(|x| x.as_path()), None, sources[&pl.rush], (prog.largeur, prog.hauteur), &f, passe, false).await?;
         liste.push_str(&format!("file '{}'\n", f.to_string_lossy()));
     }
     tokio::fs::write(tmp.join("liste.txt"), liste).await?;
@@ -1680,7 +1821,8 @@ pub async fn plan_qualite(etat: &EtatPartage, projet: &str, t: f64) -> Result<Va
     let nom = format!("qualite-{}.mp4", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
     let mut args: Vec<String> = ["-f", "concat", "-safe", "0", "-i"].iter().map(|x| x.to_string()).collect();
     args.push(tmp.join("liste.txt").to_string_lossy().into());
-    args.extend(["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p",
+    // Le navigateur ne lit le H.264 qu'en 8 bits : l'extrait l'est, à très haut débit (il sert à juger la netteté).
+    args.extend(["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p",
                  "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-movflags", "+faststart"]
         .iter().map(|x| x.to_string()));
     args.push(sorties.join(&nom).to_string_lossy().into());
@@ -1694,6 +1836,41 @@ pub async fn plan_qualite(etat: &EtatPartage, projet: &str, t: f64) -> Result<Va
     }))
 }
 
+/// Passe du rendu final : la cadence du fichier de travail (ou 30 i/s si on l'a choisi), en 10 bits.
+async fn passe_finale(etat: &EtatPartage, p: &Projet, analyses: &[(String, std::sync::Arc<crate::modele::Analyse>)]) -> Result<Passe> {
+    let mut ips: f64 = 30.0;
+    if texte(&p.reglages, "cadence") != "30" {
+        for (rush, _) in analyses {
+            let d = ffprobe(&etat.dossier_travail(&p.id, rush).join("mezz.mkv")).await?;
+            let v = d["streams"].as_array().and_then(|s| s.iter().find(|s| s["codec_type"] == "video")).cloned().unwrap_or_default();
+            ips = ips.max(ratio(v["r_frame_rate"].as_str().unwrap_or("30/1")).round());
+        }
+    }
+    Ok(Passe { ips: ips.min(60.0), dix_bits: true })
+}
+
+/// Fichier de travail d'avant la chaîne 10 bits (8 bits, 30 i/s) : refait depuis le rush avant un rendu final.
+/// Les temps ne changent pas : analyse, proxy et voix traitées restent valables.
+async fn mettre_a_jour_travail(etat: &EtatPartage, p: &Projet) -> Result<()> {
+    for r in &p.rushs {
+        let mezz = etat.dossier_travail(&p.id, &r.id).join("mezz.mkv");
+        let Ok(d) = ffprobe(&mezz).await else { continue };
+        let v = d["streams"].as_array().and_then(|s| s.iter().find(|s| s["codec_type"] == "video")).cloned().unwrap_or_default();
+        if v["pix_fmt"].as_str() == Some("yuv420p10le") {
+            continue;
+        }
+        let source = etat.dossier_projet(&p.id).join("rushs").join(&r.fichier);
+        if !source.exists() {
+            continue;
+        }
+        let infos = sonder_rush(&source).await?;
+        let provisoire = mezz.with_file_name("mezz.en-cours.mkv");
+        preparer(etat, &p.id, &source, &infos, &provisoire).await?;
+        tokio::fs::rename(&provisoire, &mezz).await?;
+    }
+    Ok(())
+}
+
 /// Aperçu (demi-définition, sans netteté IA) ou rendu final.
 pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<Sortie> {
     let debut = Instant::now();
@@ -1702,6 +1879,10 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     if analyses.is_empty() {
         bail!("aucun rush analysé");
     }
+    if !apercu {
+        mettre_a_jour_travail(etat, &p).await?;
+    }
+    let passe = if apercu { Passe::APERCU } else { passe_finale(etat, &p, &analyses).await? };
     let ps = decoupe::phrases_projet(&p, &analyses);
     let prog = decoupe::programme(&p, &analyses, &ps, apercu);
     if prog.plans.is_empty() {
@@ -1716,12 +1897,16 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
 
     // Netteté IA, en une passe pour tous les plans concernés.
     let tous: Vec<usize> = (0..prog.plans.len()).collect();
-    let nettes = nettete_ia(etat, &p, &prog, &tous, &sources, &tmp).await?;
+    let avant_nettete = Instant::now();
+    let nettes = nettete_ia(etat, &p, &prog, &tous, &sources, &tmp, passe).await?;
+    if !nettes.is_empty() {
+        tracing::info!("netteté IA de {projet} : {} plans, {} s", nettes.len(), avant_nettete.elapsed().as_secs());
+    }
 
     // Encodage matériel seulement si la carte nous fait une petite place ; sinon x264.
     let bail_nvenc = if etat.nvenc { etat.carte.essayer("other:encodage", carte::VRAM_ENCODAGE_MO, 1800).await } else { None };
     let nvenc = bail_nvenc.is_some();
-    let resultat = rendre_plans_et_assembler(etat, &p, &prog, &analyses, &tmp, &dossier, &nettes, apercu, nvenc).await;
+    let resultat = rendre_plans_et_assembler(etat, &p, &prog, &analyses, &tmp, &dossier, &nettes, passe, nvenc).await;
     if let Some(b) = bail_nvenc {
         etat.carte.rendre(b).await;
     }
@@ -1742,12 +1927,16 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     rapport["largeur"] = json!(prog.largeur);
     rapport["hauteur"] = json!(prog.hauteur);
     rapport["duree_rendu_s"] = json!(debut.elapsed().as_secs());
-    rapport["encodeur"] = json!(if nvenc { "NVENC" } else { "x264" });
+    rapport["encodeur"] = json!(if nvenc { "NVENC" } else { "processeur" });
+    rapport["codec"] = json!(if apercu || texte(&p.reglages, "codec_final") == "h264" { "h264" } else { "hevc" });
+    rapport["ips"] = json!(passe.ips);
+    rapport["bits"] = json!(if passe.dix_bits { 10 } else { 8 });
     rapport["son"] = json!(resume_son(&p.reglages));
     // Ce que l'aperçu a dans son son (le reste se joue en direct) : l'interface prévient s'il ne suit plus les réglages.
     rapport["son_inscrit"] = json!({"debruitage": texte(&p.reglages, "debruitage"), "dereverberation": texte(&p.reglages, "dereverberation"),
                                     "restauration": vrai(&p.reglages, "restauration"),
-                                    "calage_son": nombre(&p.reglages, "calage_son")});
+                                    "calage_son": nombre(&p.reglages, "calage_son"),
+                                    "voix_ia": if vrai(&p.reglages, "restauration") { bilans_voix(etat, &p) } else { json!([]) }});
     // Aperçu sans PostProd : l'interface l'applique en direct (un ancien aperçu l'a déjà dans son image).
     rapport["postprod_direct"] = json!(apercu);
     rapport["habillage_direct"] = json!(apercu);
@@ -1784,12 +1973,15 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
 #[allow(clippy::too_many_arguments)]
 async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Programme,
                                    analyses: &[(String, std::sync::Arc<crate::modele::Analyse>)], tmp: &Path,
-                                   dossier: &Path, nettes: &std::collections::HashMap<usize, PathBuf>, apercu: bool,
+                                   dossier: &Path, nettes: &std::collections::HashMap<usize, PathBuf>, passe: Passe,
                                    nvenc: bool) -> Result<String> {
     let projet = p.id.as_str();
+    let apercu = !passe.dix_bits;
     let sources: std::collections::HashMap<String, (u32, u32)> =
         analyses.iter().map(|(id, a)| (id.clone(), (a.largeur, a.hauteur))).collect();
     let mezz = |rush: &str| etat.dossier_travail(projet, rush).join("mezz.mkv");
+    // Durée de chaque étape, au journal : un rendu final 4K à 60 i/s a pris 2 h 25 le 2026-10-27 sans qu'on sache où.
+    let chrono = Instant::now();
     let mut voix: std::collections::HashMap<String, PathBuf> = Default::default();
     for (rush, a) in analyses {
         if vrai(&p.reglages, "restauration") {
@@ -1798,6 +1990,7 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
             voix.insert(rush.clone(), f);
         }
     }
+    let duree_voix = chrono.elapsed().as_secs();
     // Plans.
     let sortie_dims = (prog.largeur, prog.hauteur);
     let total = prog.plans.len();
@@ -1814,7 +2007,7 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
             let f = fichiers[i].clone();
             let src = sources[&pl.rush];
             let v = voix.get(&pl.rush).cloned();
-            async move { rendre_plan(&pl, &m, nette.as_deref(), v.as_deref(), src, sortie_dims, &f, apercu, nvenc).await }
+            async move { rendre_plan(&pl, &m, nette.as_deref(), v.as_deref(), src, sortie_dims, &f, passe, nvenc).await }
         })
         .collect();
     let mut flux = stream::iter(taches).buffer_unordered(PLANS_EN_PARALLELE);
@@ -1825,6 +2018,7 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
     }
     drop(flux);
 
+    let duree_plans = chrono.elapsed().as_secs() - duree_voix;
     let liste = tmp.join("liste.txt");
     tokio::fs::write(&liste, fichiers.iter().map(|f| format!("file '{}'\n", f.to_string_lossy())).collect::<String>()).await?;
     let ass = tmp.join("sous_titres.ass");
@@ -1832,7 +2026,10 @@ async fn rendre_plans_et_assembler(etat: &EtatPartage, p: &Projet, prog: &Progra
     let sorties = dossier.join("sorties");
     tokio::fs::create_dir_all(&sorties).await?;
     let nom = format!("{}-{}.mp4", if apercu { "apercu" } else { "rendu" }, chrono::Utc::now().format("%Y%m%d-%H%M%S"));
-    assembler(etat, p, prog, &liste, &ass, &sorties.join(&nom), apercu, nvenc).await?;
+    assembler(etat, p, prog, &liste, &ass, &sorties.join(&nom), passe, nvenc).await?;
+    tracing::info!("{} de {projet} : voix {duree_voix} s, plans {duree_plans} s, assemblage {} s ({} i/s, {} bits)",
+                   if apercu { "aperçu" } else { "rendu final" }, chrono.elapsed().as_secs() - duree_voix - duree_plans,
+                   passe.ips, if passe.dix_bits { 10 } else { 8 });
     Ok(nom)
 }
 
@@ -1856,6 +2053,46 @@ pub async fn table_couleurs(etat: &EtatPartage, pp: &crate::postprod::PostProd) 
                        "-vf".into(), format!("format=yuv444p,{chaine},format=rgb24"), f.to_string_lossy().into()])
         .await?;
     Ok(tokio::fs::read(&f).await?)
+}
+
+/// Partie couleur de la PostProd en table 3D (.cube, 64 niveaux, valeurs 16 bits), pour le rendu final : la même
+/// table que l'aperçu en direct, appliquée sans repasser en 8 bits. Aucune : la couleur est neutre.
+async fn table_couleurs_cube(etat: &EtatPartage, pp: &crate::postprod::PostProd) -> Result<Option<PathBuf>> {
+    let filtres = pp.filtres_couleur();
+    if filtres.is_empty() {
+        return Ok(None);
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    filtres.join(",").hash(&mut h);
+    let f = etat.cfg.donnees.join("luts").join(format!("{:016x}.cube", h.finish()));
+    if f.exists() {
+        return Ok(Some(f));
+    }
+    tokio::fs::create_dir_all(f.parent().unwrap()).await?;
+    let sortie = Command::new("ffmpeg")
+        .args(["-hide_banner", "-v", "error", "-f", "lavfi", "-i", "haldclutsrc=level=8", "-frames:v", "1", "-vf",
+               &format!("format=yuv444p,{},format=rgb48le", filtres.join(",")), "-f", "rawvideo", "-"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .context("ffmpeg introuvable")?;
+    if !sortie.status.success() {
+        bail!("table de couleurs : {}", String::from_utf8_lossy(&sortie.stderr).trim());
+    }
+    // Image Hald de niveau 8 : 64³ pixels, rouge le plus rapide, puis vert, puis bleu (l'ordre du format .cube).
+    let n = 64usize;
+    if sortie.stdout.len() != n * n * n * 6 {
+        bail!("table de couleurs : taille inattendue ({} octets)", sortie.stdout.len());
+    }
+    let mut texte = format!("LUT_3D_SIZE {n}\n");
+    for px in sortie.stdout.chunks_exact(6) {
+        let c = |i: usize| u16::from_le_bytes([px[i], px[i + 1]]) as f64 / 65535.0;
+        texte.push_str(&format!("{:.6} {:.6} {:.6}\n", c(0), c(2), c(4)));
+    }
+    let provisoire = f.with_extension("en-cours.cube");
+    tokio::fs::write(&provisoire, texte).await?;
+    tokio::fs::rename(&provisoire, &f).await?;
+    Ok(Some(f))
 }
 
 pub async fn image_postprod(mezz: &Path, t: f64, pp: &crate::postprod::PostProd, avec: bool) -> Result<Vec<u8>> {
@@ -1884,12 +2121,25 @@ pub async fn image_postprod(mezz: &Path, t: f64, pp: &crate::postprod::PostProd,
 /// Préréglages d'export : (clé, libellé).
 pub const PRESETS: &[(&str, &str)] = &[("youtube", "YouTube"), ("leger", "Léger"), ("max", "Qualité maximale")];
 
-/// Version exportée du rendu final : YouTube (débits recommandés), léger (iPhone, messagerie) ou archive.
+/// Version exportée du rendu final. YouTube et archive : le rendu final lui-même (lien, sans réencodage) — il
+/// dépasse déjà ce que YouTube recommande, et YouTube réencode tout envoi : chaque compression de plus ôtait de la
+/// précision. Léger (iPhone, messagerie) : réencodé en 720p.
 pub async fn exporter(etat: &EtatPartage, projet: &str, preset: &str) -> Result<crate::modele::Export> {
     let p = etat.projet(projet).await?;
     let rendu = p.rendu.as_ref().ok_or_else(|| anyhow!("lancez d'abord le rendu final"))?;
     let source = etat.dossier_projet(projet).join("sorties").join(&rendu.fichier);
     let (l, h) = (rendu.rapport["largeur"].as_u64().unwrap_or(1080) as u32, rendu.rapport["hauteur"].as_u64().unwrap_or(1920) as u32);
+    if preset != "leger" {
+        let dossier = etat.dossier_projet(projet).join("sorties");
+        let nom = format!("export-{preset}-{}.mp4", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+        let cible = dossier.join(&nom);
+        if tokio::fs::hard_link(&source, &cible).await.is_err() {
+            tokio::fs::copy(&source, &cible).await?;
+        }
+        let taille = tokio::fs::metadata(&cible).await.map(|m| m.len()).unwrap_or(0);
+        return Ok(crate::modele::Export { id: crate::modele::nouvel_id(), preset: preset.into(), fichier: nom, cree: maintenant(),
+                                          taille, largeur: l, hauteur: h, youtube: None });
+    }
     let duree = rendu.rapport["duree_montage"].as_f64().unwrap_or(0.0);
     let petit = l.min(h);
     // Le léger descend à 720 au petit côté ; les autres gardent la définition du rendu.
@@ -1914,7 +2164,7 @@ pub async fn exporter(etat: &EtatPartage, projet: &str, preset: &str) -> Result<
     args.extend(["-vf".into(), format!("{echelle}{BT709}")]);
     args.extend(video);
     args.extend([
-        "-pix_fmt", "yuv420p", "-r", "30", "-fps_mode", "cfr",
+        "-pix_fmt", "yuv420p", "-r", "30", "-fps_mode", "cfr", "-tag:v", "avc1",
         "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
         "-c:a", "aac", "-b:a", audio, "-ar", "48000", "-ac", "2", "-movflags", "+faststart",
     ].map(String::from));
@@ -1965,7 +2215,7 @@ mod tests_logo {
         for (nom, halo, couleur) in [("faible", 0.01, "blanc"), ("moyen", 0.3, "blanc"), ("noir", 0.3, "noir")] {
             let hab = crate::modele::Habillage { genre: "logo".into(), position: "haut_gauche".into(), taille: 0.16, opacite: 0.9,
                                                  ombre: 0.7, halo, halo_couleur: couleur.into(), ..Default::default() };
-            std::fs::write(dossier.join(format!("logo_{nom}.graphe")), graphe_logo("1:v", "0:v", "v", 0, 154, &hab, 38).join(";")).unwrap();
+            std::fs::write(dossier.join(format!("logo_{nom}.graphe")), graphe_logo("1:v", "0:v", "v", 0, 154, &hab, 38, Passe::APERCU).join(";")).unwrap();
         }
     }
 }
@@ -1991,17 +2241,19 @@ mod tests_qualite {
 mod tests_capteur {
     use super::*;
 
-    /// Un capteur sous bail de la carte : `EDIVID_SCRIPT=nettete.py EDIVID_ARGS=<travaux.json> cargo test capteur -- --ignored`.
+    /// Un capteur sous bail de la carte : `EDIVID_SCRIPT=nettete.py EDIVID_ARGS=<arg1>|<arg2> cargo test capteur -- --ignored`.
     #[tokio::test]
     #[ignore]
     async fn capteur_sous_bail() {
         let cfg = crate::config::Config::charger().unwrap();
         let etat = crate::etat::Etat::nouveau(cfg, false).await.unwrap();
-        let bail = etat.carte.prendre(&etat, "essai", "other:nettete", carte::VRAM_NETTETE_MO, 600).await.unwrap();
+        let bail = etat.carte.prendre(&etat, "essai", "other:essai", carte::VRAM_RESTAURATION_MO, 600).await.unwrap();
         // Lancé à la main (même environnement que `capteur`) pour voir toute sa sortie, mémoire de la carte comprise.
-        let r = Command::new(&etat.cfg.python)
-            .arg(etat.cfg.racine.join("capteurs").join(std::env::var("EDIVID_SCRIPT").unwrap()))
-            .arg(std::env::var("EDIVID_ARGS").unwrap())
+        let script = std::env::var("EDIVID_SCRIPT").unwrap();
+        let python = if script == "restaure.py" { &etat.cfg.python_voicefixer } else if script == "rehausse.py" { &etat.cfg.python_rehaussement } else { &etat.cfg.python };
+        let r = Command::new(python)
+            .arg(etat.cfg.racine.join("capteurs").join(&script))
+            .args(std::env::var("EDIVID_ARGS").unwrap().split('|'))
             .env("HF_HUB_OFFLINE", "1")
             .env("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
             .output()
@@ -2010,5 +2262,22 @@ mod tests_capteur {
         let r = r.unwrap();
         println!("{}", String::from_utf8_lossy(&r.stdout).lines().filter(|l| !l.contains("\"pct\"")).collect::<Vec<_>>().join("\n"));
         assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    }
+}
+
+#[cfg(test)]
+mod tests_rendu_final {
+    use super::*;
+
+    /// Rendu final complet, sur une copie des données (EDIVID_DONNEES) : il remplace l'ancien rendu de la copie.
+    /// `EDIVID_DONNEES=<copie> EDIVID_PROJET=<id> [EDIVID_APERCU=1] cargo test rendu_final_complet -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn rendu_final_complet() {
+        let cfg = crate::config::Config::charger().unwrap();
+        let etat = crate::etat::Etat::nouveau(cfg, crate::rendu::nvenc_disponible().await).await.unwrap();
+        let apercu = std::env::var("EDIVID_APERCU").is_ok();
+        let s = rendre(&etat, &std::env::var("EDIVID_PROJET").unwrap(), apercu).await.unwrap();
+        println!("{}", serde_json::to_string_pretty(&json!({"fichier": s.fichier, "rapport": s.rapport})).unwrap());
     }
 }

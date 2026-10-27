@@ -234,6 +234,22 @@ pub const CATALOGUE: &[Reglage] = &[
     },
     Reglage {
         section: "Image",
+        cle: "cadence",
+        titre: "Cadence du rendu final",
+        aide: "Comme le rush : 60 images par seconde pour un iPhone réglé en 60, mouvement fluide. 30 i/s : fichier plus léger.",
+        genre: Genre::Choix(&[("source", "Comme le rush"), ("30", "30 i/s")]),
+        defaut: || json!("source"),
+    },
+    Reglage {
+        section: "Image",
+        cle: "codec_final",
+        titre: "Format du rendu final",
+        aide: "HEVC 10 bits : un seul encodage, dégradés sans marches, lu par l'iPhone, le Mac et YouTube ; certains navigateurs ne le lisent pas. H.264 : lu partout, en 8 bits.",
+        genre: Genre::Choix(&[("hevc", "HEVC 10 bits"), ("h264", "H.264")]),
+        defaut: || json!("hevc"),
+    },
+    Reglage {
+        section: "Image",
         cle: "definition",
         titre: "Définition du rendu final",
         aide: "1080p convient à presque tout, et laisse aux zooms les vrais pixels d'un rush 4K jusqu'à ×2. En 4K, chaque zoom agrandit l'image du rush : les zooms sont alors limités à ×1,5. Le rendu 4K est plus long et plus lourd.",

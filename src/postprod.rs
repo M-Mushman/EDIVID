@@ -109,8 +109,17 @@ impl PostProd {
 
     /// Chaîne de filtres ffmpeg, entre [entree] et [sortie] ; largeur et hauteur de l'image traitée.
     pub fn filtre(&self, entree: &str, sortie: &str, largeur: u32, hauteur: u32) -> String {
+        self.filtre_avec_table(entree, sortie, largeur, hauteur, None)
+    }
+
+    /// Même chaîne ; avec `table` (fichier .cube de la partie couleur), la couleur passe par lut3d, qui garde la
+    /// profondeur de l'image (10 bits), là où les filtres de couleur de ffmpeg ne travaillent qu'en 8 bits.
+    pub fn filtre_avec_table(&self, entree: &str, sortie: &str, largeur: u32, hauteur: u32, table: Option<&std::path::Path>) -> String {
         let echelle = largeur.min(hauteur) as f64 / 1080.0;
-        let etapes = self.filtres_couleur();
+        let etapes = match table {
+            Some(t) => vec![format!("lut3d=file='{}':interp=tetrahedral", t.to_string_lossy())],
+            None => self.filtres_couleur(),
+        };
         let mut chaine = format!("[{entree}]{}", if etapes.is_empty() { "null".to_string() } else { etapes.join(",") });
         let mut n = 0;
         let mut etiquette = |chaine: &mut String, suite: String| {

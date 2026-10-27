@@ -90,10 +90,11 @@ class Restaurateur:
 
 def traiter(travail: dict, agrandisseur, restaurateur, avance) -> None:
     x, y, w, h = (int(v) for v in travail["crop"])
+    ips = travail.get("ips", IPS)
     w, h = w - w % 2, h - h % 2
     lecteur = subprocess.Popen(
         ["ffmpeg", "-v", "error", "-ss", f"{travail['debut']:.3f}", "-i", travail["entree"], "-t", f"{travail['duree']:.3f}",
-         "-vf", f"crop={w}:{h}:{x}:{y},fps={IPS}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+         "-vf", f"crop={w}:{h}:{x}:{y},fps={ips}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
         stdout=subprocess.PIPE)
     W, H = w * ECHELLE, h * ECHELLE
     largeur_max = int(travail.get("largeur_max") or W)
@@ -101,13 +102,13 @@ def traiter(travail: dict, agrandisseur, restaurateur, avance) -> None:
         H = max(2, round(H * largeur_max / W / 2) * 2)
         W = max(2, largeur_max // 2 * 2)
     ecrivain = subprocess.Popen(
-        ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(IPS),
+        ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(ips),
          "-i", "-", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv420p", travail["sortie"]],
         stdin=subprocess.PIPE)
     taille = w * h * 3
     par_lot = max(1, min(LOT, PIXELS_PAR_LOT // (w * h)))
     melange = min(1.0, max(0.0, float(travail.get("melange", 1.0))))
-    total = max(1, round(travail["duree"] * IPS))
+    total = max(1, round(travail["duree"] * ips))
     faites = 0
     while True:
         lot = []

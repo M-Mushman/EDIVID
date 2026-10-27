@@ -1,14 +1,15 @@
 """EDIVID — garde-fou de la voix reconstruite : elle doit dire les mêmes mots que le rush.
 
-Usage : python verifie_voix.py <reconstruite.wav> <debruitee.wav> <analyse.json> <sortie.wav> [<debut_s>]
+Usage : python verifie_voix.py <reconstruite.wav> <debruitee.wav> <analyse.json> <sortie.wav> [<debut_s> [<bilan.json>]]
 
 La voix reconstruite (restaure.py) et la voix débruitée sont transcrites avec le modèle et les réglages de l'analyse
 du rush (Whisper large-v3, analyse.py), puis comparées mot à mot ; les longues plages qui diffèrent sont réécoutées
-à part. Partout où un mot diffère encore (changé, manquant ou ajouté), la sortie prend la voix débruitée, raccordée
-par des fondus de 30 ms ; ailleurs, la voix reconstruite. <debut_s> : instant du rush où commencent les fichiers
-(écoute d'essai ; 0 sinon). <analyse.json> n'est plus lu (gardé pour l'appel). Un écart peut aussi venir de Whisper
-lui-même : on garde alors la voix débruitée, ce qui reste sûr.
-Écrit le WAV de sortie (48 kHz stéréo, durée des entrées) et, sur la sortie standard, le bilan en JSON.
+à part. Whisper juge l'ensemble : si au moins SEUIL des mots sont identiques, la sortie est toute la voix
+reconstruite ; sinon, toute la voix débruitée. Jamais de mélange des deux : raccordées mot à mot (fondus de 30 ms),
+elles faisaient changer le timbre toutes les 7 s en moyenne sur épisode 0 (93 bascules en 11 min, 2026-10-26).
+<debut_s> : instant du rush où commencent les fichiers (écoute d'essai ; 0 sinon). <analyse.json> n'est plus lu
+(gardé pour l'appel). Écrit le WAV de sortie (48 kHz stéréo, durée des entrées) et le bilan en JSON (sortie standard
+et <bilan.json> s'il est donné).
 """
 import json
 import re
@@ -25,6 +26,7 @@ from analyse import precharger_cuda  # noqa: E402
 
 MARGE = 0.12    # s, autour d'un mot changé
 FONDU = 0.03    # s
+SEUIL = 0.99    # part des mots identiques pour garder la voix reconstruite
 
 
 def signaler(pct: float) -> None:
@@ -74,6 +76,7 @@ def fusionner(plages: list) -> list:
 def main() -> None:
     reconstruite, debruitee, _analyse, sortie = sys.argv[1:5]
     debut = float(sys.argv[5]) if len(sys.argv) > 5 else 0.0
+    fichier_bilan = sys.argv[6] if len(sys.argv) > 6 else None
     r, sr = sf.read(reconstruite, dtype="float32", always_2d=True)
     d, _ = sf.read(debruitee, dtype="float32", always_2d=True)
     n = min(len(r), len(d))
@@ -109,21 +112,19 @@ def main() -> None:
     a = jetons(td)
     b = jetons(tr)
     identiques = sum(i2 - i1 for op, i1, i2, _, _ in SequenceMatcher(a=[x[0] for x in a], b=[x[0] for x in b], autojunk=False).get_opcodes() if op == "equal")
-    # Poids de la voix débruitée : 1 dans les plages, 0 ailleurs, fondus de 30 ms aux bords.
-    w = np.zeros(n, dtype=np.float32)
-    f = int(FONDU * sr)
-    for t0, t1 in fusion:
-        i0, i1 = int((t0 - debut) * sr), int((t1 - debut) * sr)
-        w[max(0, i0):min(n, i1)] = 1
-        if i0 - f >= 0:
-            w[i0 - f:i0] = np.maximum(w[i0 - f:i0], np.linspace(0, 1, f, dtype=np.float32))
-        if i1 + f <= n:
-            w[i1:i1 + f] = np.maximum(w[i1:i1 + f], np.linspace(1, 0, f, dtype=np.float32))
-    sf.write(sortie, np.clip(r * (1 - w[:, None]) + d * w[:, None], -1, 1), sr, subtype="PCM_16")
+    # Mots de la voix débruitée qui tombent dans une plage où les deux voix diffèrent encore après la réécoute.
+    changes = sum(1 for _, t0, t1 in a if any(p0 <= (t0 + t1) / 2 <= p1 for p0, p1 in fusion))
+    accord = 1.0 - changes / max(1, len(a))
+    reconstruite_gardee = accord >= SEUIL
+    sf.write(sortie, np.clip(r if reconstruite_gardee else d, -1, 1), sr, subtype="PCM_16")
     signaler(100)
-    print(json.dumps({"mots": len(a), "mots_identiques_premiere_ecoute": identiques,
-                      "plages_gardees_debruitees": [[round(x, 2), round(y, 2)] for x, y in fusion],
-                      "secondes_debruitees": round(sum(y - x for x, y in fusion), 1)}, ensure_ascii=False), flush=True)
+    bilan = {"voix": "reconstruite" if reconstruite_gardee else "debruitee", "accord": round(accord, 4), "seuil": SEUIL,
+             "mots": len(a), "mots_changes": changes, "mots_identiques_premiere_ecoute": identiques,
+             "plages_differentes": [[round(x, 2), round(y, 2)] for x, y in fusion],
+             "secondes_differentes": round(sum(y - x for x, y in fusion), 1)}
+    if fichier_bilan:
+        Path(fichier_bilan).write_text(json.dumps(bilan, ensure_ascii=False))
+    print(json.dumps(bilan, ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":
