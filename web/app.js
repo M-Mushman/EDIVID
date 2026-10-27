@@ -2445,7 +2445,7 @@ function blocsSon(corps) {
   const niveau = NIVEAUX_ECHO.find(([, , porte, wpe]) => porte === r.reverberation && wpe === r.dereverberation);
   const echo = h('div', { class: 'segments', role: 'radiogroup', 'aria-label': 'Retirer l’écho de la pièce' }, NIVEAUX_ECHO.map(([cle, l, porte, wpe]) =>
     h('button', { class: niveau?.[0] === cle ? 'actif' : '', role: 'radio', 'aria-checked': niveau?.[0] === cle ? 'true' : 'false',
-      disabled: r.restauration && wpe !== 'forte', title: r.restauration && wpe !== 'forte' ? 'Indisponible avec « Reconstruire le timbre », qui demande l’écho retiré à fond' : '',
+      disabled: r.restauration && wpe !== 'forte', title: r.restauration && wpe !== 'forte' ? 'Indisponible avec « Voix de studio (IA) », qui demande l’écho retiré à fond' : '',
       onclick: () => reglerSon({ reverberation: porte, dereverberation: wpe }) }, l)));
   // Le débruiteur IA retire déjà le bruit : la réduction du bruit classique est éteinte, et le dit.
   const ia = r.dereverberation !== 'non';
@@ -2462,7 +2462,7 @@ function blocsSon(corps) {
     inscrit.dereverberation !== r.dereverberation ? `l’écho retiré par l’IA (« ${libelle('dereverberation', inscrit.dereverberation)} » au lieu de « ${libelle('dereverberation', r.dereverberation)} »)` : null,
     inscrit.debruitage !== r.debruitage ? `la réduction du bruit (« ${libelle('debruitage', inscrit.debruitage)} » au lieu de « ${libelle('debruitage', r.debruitage)} »)` : null,
     inscrit.calage_son !== r.calage_son ? 'le calage son/image' : null,
-    !!inscrit.restauration !== !!r.restauration ? (r.restauration ? 'le timbre reconstruit par l’IA' : 'la voix sans timbre reconstruit') : null,
+    !!inscrit.restauration !== !!r.restauration ? (r.restauration ? 'la voix de studio refaite par l’IA' : 'la voix sans reconstruction') : null,
   ].filter(Boolean) : [];
   if (ecarts.length) {
     corps.append(h('div', { class: 'aide', style: { background: 'var(--alerte-doux)', marginBottom: '10px' } }, icone('alerte'),

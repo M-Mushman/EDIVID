@@ -305,8 +305,8 @@ pub const CATALOGUE: &[Reglage] = &[
         cle: "dereverberation",
         titre: "Retirer l'écho de la voix",
         aide: "Sèche la voix par IA : la pièce (réverbération) et le bruit retirés, pendant que la voix parle comme entre les phrases, sans \
-               changer les mots (MossFormer2, un masque, pas une reconstruction ; quinze secondes par rush sur la carte graphique, la première \
-               fois). Douce : en partie, le son garde de l'air.",
+               changer les mots (TF-GridNet, qui estime la voix sèche sans la recréer ; une à deux minutes par rush sur la carte graphique, la \
+               première fois). Douce : en partie, le son garde de l'air.",
         genre: Genre::Choix(&[("non", "Non"), ("douce", "Douce"), ("forte", "Forte")]),
         defaut: || json!("non"),
     },
@@ -348,10 +348,11 @@ pub const CATALOGUE: &[Reglage] = &[
     Reglage {
         section: "Son",
         cle: "restauration",
-        titre: "Reconstruire le timbre (IA)",
-        aide: "Après le retrait de l'écho et du bruit, une IA reconstruit le timbre d'une voix de studio (VoiceFixer). Elle peut \
-               se tromper sur un mot : EDIVID retranscrit le résultat et garde, à ces endroits, la voix seulement débruitée. Un \
-               peu moins de deux minutes par dizaine de minutes de rush, la première fois.",
+        titre: "Voix de studio (IA)",
+        aide: "La voix est séchée (TF-GridNet), puis refaite en qualité studio par VoiceFixer, à partir de deux voix séchées différentes. \
+               Whisper vérifie chaque tranche de 1 à 4 s : on garde une version dont les mots sont ceux du rush ; s'il n'y en a pas (un nom \
+               propre déformé, un « et » avalé), la tranche garde la voix séchée, égalisée vers le même timbre. Quelques minutes par rush sur \
+               la carte graphique, la première fois.",
         genre: Genre::Interrupteur,
         defaut: || json!(false),
     },

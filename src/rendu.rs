@@ -339,6 +339,7 @@ pub async fn capteur(etat: &EtatPartage, projet: &str, script: &str, args: &[Str
         "separe.py" | "qualite_son.py" | "egaliseur.py" => &etat.cfg.python_son,
         "seche_ia.py" => &etat.cfg.python_clearvoice,
         "debruite.py" => &etat.cfg.python_deepfilter,
+        "seche_gridnet.py" => &etat.cfg.python_gridnet,
         _ => &etat.cfg.python,
     };
     let mut enfant = Command::new(python)
@@ -1185,12 +1186,35 @@ fn part_ia(force: &str) -> Option<f64> {
 /// Voix séchée par IA (capteurs/seche_ia.py, MossFormer2 : pièce et bruit retirés par masque, aucun mot inventé),
 /// sous bail de la carte graphique. A remplacé le débruiteur de Resemble (rehausse.py), qui ne retirait pas la
 /// réverbération (banc du 2026-10-27 : RT60 apparent 360 → 130 ms contre 345 ms).
+///
+/// Depuis le 2026-10-27 au soir, le moteur est TF-GridNet (seche_gridnet.py, URGENT 2025) : MossFormer2 laissait une
+/// traîne entre 2 et 4 kHz (239 ms contre 138), entendue par le porteur du projet.
 async fn secher(etat: &EtatPartage, projet: &str, entree: &Path, sortie: &Path, part: f64, duree_s: f64) -> Result<()> {
+    let bail = etat
+        .carte
+        .prendre(etat, projet, "other:sechage", carte::VRAM_GRIDNET_MO, (duree_s / 6.0 + 90.0) as u64)
+        .await?;
+    let res = capteur(etat, projet, "seche_gridnet.py", &[entree.to_string_lossy().into(), sortie.to_string_lossy().into(), format!("{part}")]).await;
+    etat.carte.rendre(bail).await;
+    res
+}
+
+/// Voix séchée par MossFormer2 (seche_ia.py) : second candidat du vote de la reconstruction (ses erreurs ne tombent pas
+/// aux mêmes endroits que celles tirées de TF-GridNet).
+async fn secher_mossformer(etat: &EtatPartage, projet: &str, entree: &Path, sortie: &Path, duree_s: f64) -> Result<()> {
     let bail = etat
         .carte
         .prendre(etat, projet, "other:sechage", carte::VRAM_SECHAGE_MO, (duree_s / 20.0 + 90.0) as u64)
         .await?;
-    let res = capteur(etat, projet, "seche_ia.py", &[entree.to_string_lossy().into(), sortie.to_string_lossy().into(), format!("{part}")]).await;
+    let res = capteur(etat, projet, "seche_ia.py", &[entree.to_string_lossy().into(), sortie.to_string_lossy().into(), "1".into()]).await;
+    etat.carte.rendre(bail).await;
+    res
+}
+
+/// VoiceFixer (restaure.py) sur un fichier, sous bail.
+async fn voicefixer(etat: &EtatPartage, projet: &str, entree: &Path, sortie: &Path, duree_s: f64) -> Result<()> {
+    let bail = etat.carte.prendre(etat, projet, "other:restauration", carte::VRAM_RESTAURATION_MO, (duree_s / 40.0 + 60.0) as u64).await?;
+    let res = capteur(etat, projet, "restaure.py", &[entree.to_string_lossy().into(), sortie.to_string_lossy().into()]).await;
     etat.carte.rendre(bail).await;
     res
 }
@@ -1198,19 +1222,42 @@ async fn secher(etat: &EtatPartage, projet: &str, entree: &Path, sortie: &Path, 
 /// Timbre reconstruit par IA à partir d'une voix débruitée (restaure.py), puis vérifié mot à mot (verifie_voix.py) :
 /// là où un mot a changé, la voix débruitée reste. Chaque étape sous son bail. `debut` : instant du rush où
 /// commencent les fichiers (écoute d'essai).
-async fn reconstruire(etat: &EtatPartage, projet: &str, debruitee: &Path, analyse: &Path, sortie: &Path, debut: f64, duree_s: f64,
-                      bilan: &Path) -> Result<()> {
-    let brute = sortie.with_extension("brute.wav");
-    let bail = etat.carte.prendre(etat, projet, "other:restauration", carte::VRAM_RESTAURATION_MO, (duree_s / 40.0 + 60.0) as u64).await?;
-    let res = capteur(etat, projet, "restaure.py", &[debruitee.to_string_lossy().into(), brute.to_string_lossy().into()]).await;
-    etat.carte.rendre(bail).await;
-    res?;
-    let bail = etat.carte.prendre(etat, projet, "other:transcription", carte::VRAM_TRANSCRIPTION_MO, (duree_s / 6.0 + 120.0) as u64).await?;
-    let res = capteur(etat, projet, "verifie_voix.py", &[brute.to_string_lossy().into(), debruitee.to_string_lossy().into(),
-                                                         analyse.to_string_lossy().into(), sortie.to_string_lossy().into(), format!("{debut}"),
-                                                         bilan.to_string_lossy().into()]).await;
-    etat.carte.rendre(bail).await;
-    let _ = tokio::fs::remove_file(&brute).await;
+///
+/// Vote (capteurs/vote_voix.py, écoute du 2026-10-27 : « VoiceFixer depuis TF-GridNet » retenu) : VoiceFixer sur la voix
+/// séchée par TF-GridNet (`seche`, déjà calculée) et sur celle de MossFormer2 ; par tranches de 1 à 4 s, la première
+/// version dont Whisper confirme les mots (ceux de TF-GridNet ou du rush brut) ; sinon la voix TF-GridNet égalisée vers
+/// le timbre de VoiceFixer. `entree` : le son d'origine (rush ou extrait), `debut` : son instant dans le rush.
+#[allow(clippy::too_many_arguments)]
+async fn reconstruire(etat: &EtatPartage, projet: &str, entree: &Path, seche: &Path, analyse: &Path, sortie: &Path, debut: f64,
+                      duree_s: f64, bilan: &Path) -> Result<()> {
+    let base = sortie.with_extension("");
+    let f = |suffixe: &str| PathBuf::from(format!("{}.{suffixe}", base.to_string_lossy()));
+    let (mossformer, vf_g, vf_m, repli) = (f("mossformer.wav"), f("vf_gridnet.wav"), f("vf_mossformer.wav"), f("repli.wav"));
+    let (sp_g, sp_vf, courbe) = (f("spectre_gridnet.json"), f("spectre_vf.json"), f("courbe_repli.json"));
+    let res = async {
+        secher_mossformer(etat, projet, entree, &mossformer, duree_s).await?;
+        voicefixer(etat, projet, seche, &vf_g, duree_s).await?;
+        voicefixer(etat, projet, &mossformer, &vf_m, duree_s).await?;
+        // Repli : TF-GridNet égalisé vers le spectre de VoiceFixer (aigus jusqu'à +4 dB), pour que la bascule s'entende peu.
+        spectre_voix(etat, projet, seche, &sp_g, Some(analyse), debut).await?;
+        spectre_voix(etat, projet, &vf_g, &sp_vf, Some(analyse), debut).await?;
+        capteur(etat, projet, "egaliseur.py", &["courbe".into(), sp_g.to_string_lossy().into(), sp_vf.to_string_lossy().into(), "1".into(),
+                                                  courbe.to_string_lossy().into(), "4".into(), "0".into()]).await?;
+        let v: Value = serde_json::from_str(&tokio::fs::read_to_string(&courbe).await?)?;
+        let filtres: Vec<String> = v["filtres"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
+        ffmpeg_simple(vec!["-i".into(), seche.to_string_lossy().into(), "-af".into(),
+                           if filtres.is_empty() { "anull".into() } else { filtres.join(",") },
+                           "-c:a".into(), "pcm_s24le".into(), repli.to_string_lossy().into()]).await?;
+        let bail = etat.carte.prendre(etat, projet, "other:transcription", carte::VRAM_TRANSCRIPTION_MO, (duree_s / 4.0 + 120.0) as u64).await?;
+        let r = capteur(etat, projet, "vote_voix.py", &[seche.to_string_lossy().into(), repli.to_string_lossy().into(), sortie.to_string_lossy().into(),
+                                                        bilan.to_string_lossy().into(), analyse.to_string_lossy().into(), format!("{debut}"),
+                                                        vf_g.to_string_lossy().into(), vf_m.to_string_lossy().into()]).await;
+        etat.carte.rendre(bail).await;
+        r
+    }.await;
+    for x in [&mossformer, &vf_g, &vf_m, &repli, &sp_g, &sp_vf, &courbe] {
+        let _ = tokio::fs::remove_file(x).await;
+    }
     res
 }
 
@@ -1218,13 +1265,16 @@ async fn reconstruire(etat: &EtatPartage, projet: &str, debruitee: &Path, analys
 /// bilan (`voix_reconstruite.json` : voix gardée, part des mots identiques). Une voix d'avant ce bilan était
 /// raccordée mot à mot à la voix débruitée : elle est refaite.
 async fn voix_reconstruite(etat: &EtatPartage, projet: &str, rush: &str, duree_s: f64) -> Result<PathBuf> {
-    let base = voix_sans_echo(etat, projet, rush, "forte", duree_s).await?.ok_or_else(|| anyhow!("voix débruitée indisponible"))?;
+    let seche = voix_sans_echo(etat, projet, rush, "forte", duree_s).await?.ok_or_else(|| anyhow!("voix séchée indisponible"))?;
     let dossier = etat.dossier_travail(projet, rush);
     let f = dossier.join("voix_reconstruite.wav");
     let bilan = dossier.join("voix_reconstruite.json");
-    if !f.exists() || !bilan.exists() {
+    // Une voix d'avant le vote (bilan sans « methode ») est refaite.
+    let a_jour = tokio::fs::read_to_string(&bilan).await.ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .is_some_and(|v| v["methode"] == "vote");
+    if !f.exists() || !a_jour {
         let provisoire = dossier.join("voix_reconstruite.en-cours.wav");
-        reconstruire(etat, projet, &base, &dossier.join("analyse.json"), &provisoire, 0.0, duree_s, &bilan).await?;
+        reconstruire(etat, projet, &dossier.join("mezz.mkv"), &seche, &dossier.join("analyse.json"), &provisoire, 0.0, duree_s, &bilan).await?;
         tokio::fs::rename(&provisoire, &f).await?;
     }
     Ok(f)
@@ -1242,9 +1292,9 @@ fn bilans_voix(etat: &EtatPartage, p: &Projet) -> Value {
 async fn voix_sans_echo(etat: &EtatPartage, projet: &str, rush: &str, force: &str, duree_s: f64) -> Result<Option<PathBuf>> {
     let Some(part) = part_ia(force) else { return Ok(None) };
     let dossier = etat.dossier_travail(projet, rush);
-    let f = dossier.join(format!("voix_seche_{force}.wav"));
+    let f = dossier.join(format!("voix_gridnet_{force}.wav"));
     if !f.exists() {
-        let provisoire = dossier.join(format!("voix_seche_{force}.en-cours.wav"));
+        let provisoire = dossier.join(format!("voix_gridnet_{force}.en-cours.wav"));
         secher(etat, projet, &dossier.join("mezz.mkv"), &provisoire, part, duree_s).await?;
         tokio::fs::rename(&provisoire, &f).await?;
     }
@@ -1256,7 +1306,7 @@ async fn voix_sans_echo(etat: &EtatPartage, projet: &str, rush: &str, force: &st
 fn source_timbre(etat: &EtatPartage, projet: &str, rush: &str, r: &crate::reglages::Reglages) -> (PathBuf, String) {
     let dossier = etat.dossier_travail(projet, rush);
     let force = texte(r, "dereverberation");
-    let seche = dossier.join(format!("voix_seche_{force}.wav"));
+    let seche = dossier.join(format!("voix_gridnet_{force}.wav"));
     if part_ia(&force).is_some() && seche.exists() {
         (seche, format!("seche_{force}"))
     } else {
@@ -1383,7 +1433,7 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
     let timbre = filtres_timbre(etat, projet, r).await;
     let empreinte = {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        format!("v2-{debut:.2}-{duree:.2}-{}|{}", cles.iter().map(|c| r.get(*c).map(|v| v.to_string()).unwrap_or_default()).collect::<Vec<_>>().join("|"),
+        format!("v3-{debut:.2}-{duree:.2}-{}|{}", cles.iter().map(|c| r.get(*c).map(|v| v.to_string()).unwrap_or_default()).collect::<Vec<_>>().join("|"),
                 timbre.join(","))
             .hash(&mut h);
         format!("{:016x}", h.finish())
@@ -1404,7 +1454,7 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
         let sans = dossier.join(format!("{empreinte}-sans-echo.wav"));
         secher(etat, projet, &extrait, &sans, 1.0, duree).await?;
         let refaite = dossier.join(format!("{empreinte}-reconstruite.wav"));
-        reconstruire(etat, projet, &sans, &etat.dossier_travail(projet, rush).join("analyse.json"), &refaite, debut, duree,
+        reconstruire(etat, projet, &extrait, &sans, &etat.dossier_travail(projet, rush).join("analyse.json"), &refaite, debut, duree,
                      &dossier.join(format!("{empreinte}-bilan.json"))).await?;
         let _ = tokio::fs::remove_file(&sans).await;
         source = refaite;

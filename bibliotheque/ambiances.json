@@ -4,18 +4,19 @@
    "cle": "studio_feutre",
    "famille": "Voix",
    "nom": "Studio feutré",
-   "description": "Voix séchée par IA (pièce et bruit retirés, aucun mot changé), ramenée vers son propre timbre de studio, chaîne de studio chaleureuse et un soupçon de pièce courte : chaude, proche, enveloppante.",
+   "description": "La voix séchée puis refaite en qualité studio par l'IA, chaque tranche vérifiée mot à mot : pleine, proche, sans la pièce.",
    "reglages": {
     "debruitage": "non",
     "dereverberation": "forte",
     "reverberation": "non",
-    "voix": true,
+    "voix": false,
     "timbre_voix": "studio_chaud",
     "deesseur": false,
-    "espace": "studio",
-    "restauration": false,
-    "reference_timbre": "cette_voix",
-    "intensite_timbre": 60
+    "espace": "aucun",
+    "restauration": true,
+    "reference_timbre": "aucune",
+    "intensite_timbre": 60,
+    "harmoniques": "non"
    }
   },
   {
@@ -27,13 +28,14 @@
     "debruitage": "non",
     "dereverberation": "forte",
     "reverberation": "non",
-    "voix": true,
+    "voix": false,
     "timbre_voix": "studio_chaud",
     "deesseur": false,
     "espace": "chambre",
-    "restauration": false,
-    "reference_timbre": "cette_voix",
-    "intensite_timbre": 60
+    "restauration": true,
+    "reference_timbre": "aucune",
+    "intensite_timbre": 60,
+    "harmoniques": "non"
    }
   },
   {
@@ -46,12 +48,13 @@
     "dereverberation": "forte",
     "reverberation": "non",
     "voix": true,
-    "timbre_voix": "studio_chaud",
+    "timbre_voix": "naturel",
     "deesseur": false,
     "espace": "aucun",
-    "restauration": false,
-    "reference_timbre": "cette_voix",
-    "intensite_timbre": 60
+    "restauration": true,
+    "reference_timbre": "aucune",
+    "intensite_timbre": 60,
+    "harmoniques": "non"
    }
   },
   {
@@ -63,13 +66,14 @@
     "debruitage": "non",
     "dereverberation": "forte",
     "reverberation": "non",
-    "voix": true,
+    "voix": false,
     "timbre_voix": "studio_chaud",
     "deesseur": false,
     "espace": "aucun",
-    "restauration": false,
-    "reference_timbre": "cette_voix",
-    "intensite_timbre": 60
+    "restauration": true,
+    "reference_timbre": "aucune",
+    "intensite_timbre": 60,
+    "harmoniques": "non"
    }
   },
   {

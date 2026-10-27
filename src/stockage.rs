@@ -45,7 +45,7 @@ fn chemins(etat: &EtatPartage, p: &Projet, cle: &str) -> Vec<PathBuf> {
                 if let Ok(lus) = std::fs::read_dir(travail(&r.id)) {
                     v.extend(lus.flatten().map(|e| e.path()).filter(|f| {
                         let n = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                        n.starts_with("voix_ia_") || n.starts_with("voix_seche_") || n.starts_with("voix_reconstruite")
+                        n.starts_with("voix_ia_") || n.starts_with("voix_seche_") || n.starts_with("voix_gridnet_") || n.starts_with("voix_reconstruite")
                             || n.starts_with("spectre_") || n.starts_with("timbre_")
                     }));
                 }
