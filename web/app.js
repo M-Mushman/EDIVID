@@ -264,7 +264,8 @@ const SECTIONS_REGLAGES = {
   Zooms: ['cadre', 'zoom'],
   Transitions: ['cadre', 'fondu'],
   'Sous-titres': ['texte', 'texte'],
-  Image: ['image', 'image'],
+  'Cadrage et format': ['cadre', 'image'],
+  'Vidéo finale': ['image', 'film'],
   Son: ['son', 'onde'],
 };
 
@@ -493,6 +494,7 @@ function brancherFlux(source) {
       E.progression = JSON.parse(e.data).donnees;
       dessinerBarre();
       if (E.exportVue && /^Export/.test(E.progression?.etape || '')) E.exportVue.redessiner();
+      E.finaleVue?.();
       if (E.vue?.projet.rushs.some((r) => ['preparation', 'analyse'].includes(r.etat))) dessinerRushs();
     });
     source.addEventListener('projet', () => rafraichirBientot());
@@ -521,7 +523,7 @@ function brancherFlux(source) {
         rafraichir().then(() => { if (E.exportVue) { E.exportVue.etat = 'pret'; E.exportVue.redessiner(); } });
         return;
       }
-      if (d.genre === 'rendu') { E.lecteur = 'rendu'; toast('Le rendu final est prêt : vous pouvez le télécharger.', 'ok'); }
+      if (d.genre === 'rendu') { E.lecteur = 'rendu'; toast('La vidéo finale est prête : vous pouvez la télécharger ou l’exporter.', 'ok'); }
       else { E.lecteur = 'apercu'; E.aMettreAJour = false; toast('Nouvel aperçu prêt.', 'ok'); }
       rafraichir();
     });
@@ -551,6 +553,7 @@ async function rafraichir() {
     return;
   }
   dessinerTout();
+  E.finaleVue?.();
 }
 
 async function rafraichirEtat() {
@@ -558,6 +561,7 @@ async function rafraichirEtat() {
   const miens = (E.etat.file || []).filter((t) => t.projet === E.projetId);
   if (!miens.some((t) => t.en_cours)) E.progression = null;
   dessinerBarre();
+  E.finaleVue?.();
 }
 
 function construireProjet() {
@@ -836,7 +840,7 @@ function dessinerLecteur() {
   remplir(n.ongletsLecteur,
     h('button', { class: E.lecteur === 'origine' ? 'actif' : '', disabled: !E.vue.proxys?.length, title: E.vue.proxys?.length ? 'La vidéo telle que filmée' : 'Version d’origine en préparation', onclick: () => changerLecteur('origine') }, 'Origine'),
     h('button', { class: E.lecteur === 'apercu' ? 'actif' : '', disabled: !p.apercu, onclick: () => changerLecteur('apercu') }, 'Aperçu'),
-    h('button', { class: E.lecteur === 'rendu' ? 'actif' : '', disabled: !p.rendu, title: p.rendu ? '' : 'Pas encore de rendu final', onclick: () => changerLecteur('rendu') }, 'Rendu final'));
+    h('button', { class: E.lecteur === 'rendu' ? 'actif' : '', disabled: !p.rendu, title: p.rendu ? (E.vue.rendu_a_jour === false ? 'Faite avant vos derniers changements' : '') : 'Pas encore de vidéo finale', onclick: () => changerLecteur('rendu') }, 'Vidéo finale'));
   let url = null;
   let vertical = false;
   if (E.lecteur === 'origine') {
@@ -869,10 +873,10 @@ function dessinerLecteur() {
     if (n.video.dataset.url !== url) {
       n.video.dataset.url = url;
       n.video.src = url;
-      // Rendu final en HEVC 10 bits : certains navigateurs ne le lisent pas (le fichier, lui, est bon).
+      // Vidéo finale en HEVC 10 bits : certains navigateurs ne le lisent pas (le fichier, lui, est bon).
       const s = sortieAffichee();
       if (E.lecteur === 'rendu' && s?.rapport?.codec === 'hevc' && !n.video.canPlayType('video/mp4; codecs="hvc1.2.4.L153.B0"')) {
-        toast('Ce navigateur ne lit pas le HEVC 10 bits du rendu final : téléchargez-le (iPhone, Mac, VLC, YouTube le lisent), ou choisissez H.264 dans Réglages › Image › Format du rendu final.', 'erreur');
+        toast('Ce navigateur ne lit pas le HEVC 10 bits de la vidéo finale : téléchargez-la (iPhone, Mac, VLC, YouTube la lisent), ou choisissez H.264 dans « Fabriquer la vidéo finale » › Format du fichier.', 'erreur');
       }
     }
     n.ecran.classList.toggle('vertical', vertical);
@@ -1005,7 +1009,7 @@ function dessinerOutilsLecteur() {
     onclick: basculerPleinEcran }, icone('film'), document.fullscreenElement === n.ecran ? 'Quitter le plein écran' : 'Plein écran') : null;
   const qualite = E.lecteur === 'apercu' && p.apercu ? h('button', {
     class: 'btn petit', disabled: !enPause || E.qualiteEnCours,
-    title: enPause ? 'Calcule ce plan (et les suivants, quelques secondes) comme au rendu final — définition, netteté IA — pour le comparer à l’aperçu'
+    title: enPause ? 'Calcule ce plan (et les suivants, quelques secondes) comme dans la vidéo finale — définition, netteté IA — pour le comparer à l’aperçu'
       : 'Mettez la vidéo en pause sur le plan voulu',
     onclick: voirQualiteFinale,
   }, icone('zoom'), E.qualiteEnCours ? 'Calcul du plan…' : 'Ce plan en qualité finale') : null;
@@ -2325,8 +2329,8 @@ function dessinerReglages(corps) {
   sectionConsignes(corps);
   blocHabillage(corps);
   blocGenerique(corps);
-  // Le son se règle dans l'onglet PostProd, avec l'image.
-  for (const s of [...new Set(E.catalogue.map((r) => r.section))].filter((x) => x !== 'Son')) blocSection(corps, s);
+  // Le son se règle dans l'onglet PostProd, avec l'image ; la vidéo finale, dans sa fenêtre (« Fabriquer la vidéo finale »).
+  for (const s of [...new Set(E.catalogue.map((r) => r.section))].filter((x) => x !== 'Son' && x !== 'Vidéo finale')) blocSection(corps, s);
   blocFichiers(corps);
 }
 
@@ -2837,10 +2841,13 @@ function dessinerBarre() {
   } else if (E.aMettreAJour) {
     titre = 'Des changements attendent un nouvel aperçu';
   } else if (!p.rendu) {
-    titre = 'Ajustez, puis lancez le rendu final';
-    detail = 'Pleine définition, netteté IA sur les zooms, son normalisé pour YouTube.';
+    titre = 'Ajustez, puis fabriquez la vidéo finale';
+    detail = 'Pleine définition, image soignée, son prêt pour YouTube. C’est d’elle que partent les exports.';
+  } else if (E.vue.rendu_a_jour === false) {
+    titre = 'Vidéo finale à refaire';
+    detail = 'Elle date d’avant vos derniers changements : refaites-la avant d’exporter.';
   } else {
-    titre = 'Rendu final prêt';
+    titre = 'Vidéo finale prête';
     detail = `${p.rendu.rapport.largeur}×${p.rendu.rapport.hauteur} · ${minutes(p.rendu.rapport.duree_montage)}`;
   }
   const occupe = !!enCours;
@@ -2867,14 +2874,14 @@ function dessinerBarre() {
       onclick: async () => { try { await api('POST', `/api/projets/${E.projetId}/apercu`); } catch (e) { toast(e.message, 'erreur'); } },
     }, icone('relancer'), h('span', { class: 'long' }, 'Mettre à jour l’aperçu'), h('span', { class: 'court' }, 'Aperçu')),
     h('button', {
-      class: `btn ${p.montage && !E.aMettreAJour && !p.rendu ? 'primaire' : ''}`, disabled: !p.montage || occupe,
-      title: `En ${p.reglages.definition === '2160' ? '4K (2160p)' : '1080p'} (Réglages › Image › Définition du rendu final), netteté IA, son prêt pour YouTube`,
-      onclick: async () => { try { await api('POST', `/api/projets/${E.projetId}/rendu`); toast('Rendu final lancé. Vous pouvez continuer à travailler.'); } catch (e) { toast(e.message, 'erreur'); } },
-    }, icone('film'), h('span', { class: 'long' }, 'Rendu final'), h('span', { class: 'court' }, 'Rendu')),
+      class: `btn ${p.montage && !E.aMettreAJour && (!p.rendu || E.vue.rendu_a_jour === false) ? 'primaire' : ''}`, disabled: !p.montage,
+      title: 'La vidéo en pleine définition, d’où partent les exports : ses réglages (définition, cadence, format…) et son lancement',
+      onclick: afficherVideoFinale,
+    }, icone('film'), h('span', { class: 'long' }, 'Fabriquer la vidéo finale'), h('span', { class: 'court' }, 'Vidéo finale')),
     p.rendu ? h('a', { class: 'btn doux', href: `/api/projets/${E.projetId}/sorties/${p.rendu.fichier}`, download: `${p.nom}.mp4` }, icone('telecharger'), h('span', { class: 'long' }, 'Télécharger'), h('span', { class: 'court' }, 'Fichier')) : null,
     h('button', { class: 'btn doux', disabled: !p.rendu,
       title: p.rendu ? 'Versions prêtes pour YouTube, pour l’iPhone ou l’archive ; publication sur YouTube'
-        : 'Faites d’abord le rendu final : les exports partent de lui. Sa définition (1080p ou 4K) se choisit dans Réglages › Image.',
+        : 'Fabriquez d’abord la vidéo finale : les exports partent d’elle.',
       onclick: afficherExport },
       icone('televerser'), h('span', { class: 'long' }, 'Exporter'), h('span', { class: 'court' }, 'Export')),
     p.rendu && E.driveActif ? h('button', {
@@ -2891,13 +2898,13 @@ function afficherGuide() {
     ['Laissez analyser', 'EDIVID transcrit chaque mot, mesure les silences et suit le visage. La transcription apparaît dans « Le texte de la vidéo ».'],
     ['Proposez un montage', 'Le LLM coupe les redites et les silences, choisit pour chaque phrase un régime (impact, rafale, respiration) et un cadre (du plan large aux yeux), monte une accroche, puis relit son propre travail.'],
     ['Ajustez en discutant', 'Dites à l’assistant ce que vous voulez, avec vos mots. Ou changez une phrase d’un clic, un réglage dans l’onglet Réglages, posez un GIF avec la baguette.'],
-    ['Exportez', '« Rendu final » produit la vidéo en pleine définition, avec la netteté IA sur les zooms et un son prêt pour YouTube. Téléchargez-la ensuite.'],
+    ['Fabriquez la vidéo finale, puis exportez', '« Fabriquer la vidéo finale » produit la vidéo en pleine définition, image soignée et son prêt pour YouTube ; ses réglages (définition, cadence, format du fichier, HDR, netteté IA) sont dans cette fenêtre. « Exporter » en tire ensuite les versions YouTube, iPhone ou archive.'],
   ];
   fenetre('Comment ça marche', (fermer) => h('div', {},
     h('div', { class: 'guide-liste' }, etapes.map(([t, d], i) =>
       h('div', { class: 'guide-item' }, h('div', { class: 'num' }, i + 1), h('div', {}, h('h3', {}, t), h('p', { class: 'petit muet', style: { margin: '3px 0 0' } }, d))))),
     h('div', { class: 'aide', style: { marginTop: '14px' } }, icone('info'),
-      h('span', {}, 'L’aperçu est volontairement rapide (demi-définition, sans netteté IA) : servez-vous-en pour juger le rythme. Le rendu final, plus long, soigne l’image.')),
+      h('span', {}, 'L’aperçu est volontairement rapide (demi-définition, sans netteté IA) : servez-vous-en pour juger le rythme. La vidéo finale, plus longue à fabriquer, soigne l’image.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('discussion'),
       h('span', {}, 'Une retouche précise ? Mettez l’aperçu en pause et cliquez « Commenter ce moment » : le LLM reformule, propose une correction sur la bonne plage (surlignée sur les timelines), vous validez, corrigez ou annulez.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('baguette'),
@@ -2907,7 +2914,7 @@ function afficherGuide() {
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('etincelles'),
       h('span', {}, 'Onglet PostProd : un look en un clic (Beauté naturelle, Glow peau, Éditorial mode…), puis teint, lumière, grain à doser ; « Comparer » montre l’avant/après sur l’image affichée.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('televerser'),
-      h('span', {}, 'Après le rendu final, « Exporter » donne une version prête pour YouTube (ou légère pour l’iPhone) et la publie sur votre chaîne si votre compte Google l’autorise.')),
+      h('span', {}, 'Une fois la vidéo finale fabriquée, « Exporter » donne une version prête pour YouTube (ou légère pour l’iPhone) et la publie sur votre chaîne si votre compte Google l’autorise.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('livre'),
       h('span', {}, 'Le livre à côté de la saisie ouvre la bibliothèque : des demandes toutes prêtes, les vôtres, et les consignes exactes du LLM. L’étoile enregistre la demande que vous venez d’écrire.')),
     h('div', { class: 'aide', style: { marginTop: '8px' } }, icone('nuage'),
@@ -3100,7 +3107,7 @@ async function afficherParametres() {
       ligneInterrupteur('Envoyer des courriels', null, c.actif, (v) => { c.actif = v; }),
       champ('Destinataires', destinataires, 'Une ou plusieurs adresses, séparées par des virgules.'),
       ligneInterrupteur('Montage prêt', 'Après le premier aperçu d’un montage par le LLM.', c.montage, (v) => { c.montage = v; }),
-      ligneInterrupteur('Vidéo finale prête', 'Après le rendu final (et son dépôt sur le Drive, s’il est prévu).', c.rendu, (v) => { c.rendu = v; }),
+      ligneInterrupteur('Vidéo finale prête', 'Une fois la vidéo finale fabriquée (et déposée sur le Drive, si c’est prévu).', c.rendu, (v) => { c.rendu = v; }),
       ligneInterrupteur('Problème', 'Si une analyse, un montage ou un rendu échoue.', c.erreur, (v) => { c.erreur = v; }),
       h('details', { style: { marginTop: '12px' }, open: !c.serveur },
         h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, 'Serveur d’envoi'),
@@ -3131,7 +3138,7 @@ async function afficherParametres() {
       champ('Dossier d’entrée', entree(d, 'entree')),
       champ('Dossier de sortie', entree(d, 'sortie')),
       champ('Fréquence', intervalle),
-      ligneInterrupteur('Lancer le rendu final tout seul', 'Sinon, EDIVID s’arrête à l’aperçu et vous prévient : vous ajustez, puis lancez le rendu.', d.rendu_final, (v) => { d.rendu_final = v; }),
+      ligneInterrupteur('Fabriquer la vidéo finale tout seul', 'Sinon, EDIVID s’arrête à l’aperçu et vous prévient : vous ajustez, puis fabriquez la vidéo finale.', d.rendu_final, (v) => { d.rendu_final = v; }),
       ligneInterrupteur('Déposer la vidéo finale sur le Drive', null, d.deposer, (v) => { d.deposer = v; }),
       champ('Réglages des projets venus du Drive', modele, 'Un jeu de réglages enregistré, ou un projet dont vous aimez le montage (ses réglages, sa PostProd et ses consignes sont repris).'),
       h('div', { class: 'aide', style: { marginTop: '12px', background: etatDrive.erreur ? 'var(--erreur-doux)' : 'var(--accent-doux)' } }, icone(etatDrive.erreur ? 'alerte' : 'info'),
@@ -3484,10 +3491,76 @@ function comparer() {
 // ------------------------------------------------------------------ export et YouTube
 
 const PRESETS_EXPORT = [
-  ['youtube', 'YouTube', 'Recommandé. Le rendu final tel quel, sans nouvelle compression : YouTube réencode tout envoi, et part ainsi de la meilleure image.'],
+  ['youtube', 'YouTube', 'Recommandé. La vidéo finale telle quelle, sans nouvelle compression : YouTube réencode tout envoi, et part ainsi de la meilleure image.'],
   ['leger', 'Léger', 'Pour l’iPhone, WhatsApp ou un courriel : 720p, 30 i/s, H.264, fichier beaucoup plus petit.'],
-  ['max', 'Archive', 'Le rendu final tel quel, à garder ou à retoucher ailleurs.'],
+  ['max', 'Archive', 'La vidéo finale telle quelle, à garder ou à retoucher ailleurs.'],
 ];
+
+// Réglages de la fenêtre « Fabriquer la vidéo finale », dans l'ordre où on les choisit.
+const REGLAGES_FINALE = ['definition', 'cadence', 'codec_final', 'plage_dynamique', 'nettete_ia'];
+
+/** Fenêtre « Fabriquer la vidéo finale » : ses réglages (ils ne servent qu'à elle), son état, son lancement. */
+function afficherVideoFinale() {
+  fenetre('Fabriquer la vidéo finale', (fermer) => {
+    const etat = h('div');
+    const dessinerEtat = (initial) => {
+      if (!initial && !etat.isConnected) { if (E.finaleVue === dessinerEtat) E.finaleVue = null; return; }
+      const p = E.vue.projet;
+      const travail = (E.etat?.file || []).find((t) => t.projet === E.projetId && t.libelle === 'Vidéo finale');
+      const r = p.rendu?.rapport || {};
+      const description = p.rendu ? [`${r.largeur}×${r.hauteur}`, r.ips ? `${fr(r.ips, 0)} i/s` : null,
+        r.codec ? `${r.codec === 'hevc' ? 'HEVC' : 'H.264'}${r.bits ? ` ${r.bits} bits` : ''}` : null, r.hdr ? 'HDR' : null,
+        minutes(r.duree_montage)].filter(Boolean).join(' · ') : '';
+      let carte;
+      if (travail?.en_cours) {
+        const prog = E.progression;
+        carte = h('div', { class: 'carte suivi-export' },
+          h('div', { class: 'ligne' }, h('b', {}, 'Fabrication en cours'), h('span', { class: 'muet' }, prog?.pct != null ? `${fr(prog.pct, 0)} %` : '…')),
+          h('div', { class: `jauge${prog?.pct != null ? '' : ' indetermine'}` }, h('div', { style: prog?.pct != null ? { width: `${prog.pct}%` } : {} })),
+          prog?.etape ? h('span', { class: 'tres-petit muet' }, prog.etape) : null);
+      } else if (travail) {
+        carte = h('div', { class: 'carte suivi-export' }, h('b', {}, 'En file d’attente'), h('span', { class: 'tres-petit muet' }, ' : elle démarre après le travail en cours.'));
+      } else if (p.rendu && E.vue.rendu_a_jour !== false) {
+        carte = h('div', { class: 'carte suivi-export pret' },
+          h('div', { class: 'ligne' }, h('b', {}, 'Vidéo finale à jour'), h('span', { class: 'muet' }, description)),
+          h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' } },
+            h('a', { class: 'btn petit doux', href: `/api/projets/${E.projetId}/sorties/${p.rendu.fichier}`, download: `${p.nom}.mp4` }, icone('telecharger'), 'Télécharger'),
+            h('button', { class: 'btn petit primaire', onclick: () => { fermer(); afficherExport(); } }, icone('televerser'), 'Exporter')));
+      } else if (p.rendu) {
+        carte = h('div', { class: 'aide', style: { background: 'var(--alerte-doux)' } }, icone('alerte'),
+          h('span', {}, `La vidéo finale du ${new Date(p.rendu.cree).toLocaleString('fr-FR')} (${description}) date d’avant vos derniers changements : refaites-la pour qu’elle et ses exports les contiennent.`));
+      } else {
+        carte = h('p', { class: 'petit muet', style: { margin: 0 } }, 'Pas encore de vidéo finale.');
+      }
+      const aJour = p.rendu && E.vue.rendu_a_jour !== false;
+      remplir(etat, carte,
+        h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px' } },
+          h('button', { class: 'btn', onclick: fermer }, 'Fermer'),
+          h('button', { class: `btn ${aJour ? '' : 'primaire'}`, disabled: !p.montage || !!travail, onclick: async () => {
+            try {
+              await api('POST', `/api/projets/${E.projetId}/rendu`);
+              toast('Vidéo finale lancée. Vous pouvez continuer à travailler.');
+              await rafraichirEtat();
+            } catch (e) { toast(e.message, 'erreur'); }
+          } }, icone('film'), p.rendu ? 'Refaire la vidéo finale' : 'Fabriquer la vidéo finale')));
+    };
+    E.finaleVue = dessinerEtat;
+    const p = E.vue.projet;
+    const zone = h('div', {},
+      h('p', { class: 'petit muet', style: { marginTop: 0 } },
+        'La vidéo en pleine définition, image soignée et son prêt pour YouTube. C’est d’elle que partent les exports (YouTube, iPhone, archive). Les réglages ci-dessous ne servent qu’à elle : l’aperçu reste rapide.'),
+      REGLAGES_FINALE.map((cle) => E.catalogue.find((x) => x.cle === cle)).filter(Boolean).map((r) => {
+        const enLigne = r.genre === 'interrupteur';
+        return h('div', { class: 'reglage' },
+          h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, r.titre), enLigne ? controleReglage(r, p.reglages[r.cle]) : null),
+          h('div', { class: 'reglage-aide' }, r.aide),
+          enLigne ? null : controleReglage(r, p.reglages[r.cle]));
+      }),
+      h('div', { style: { marginTop: '14px' } }, etat));
+    dessinerEtat(true);
+    return zone;
+  }, { large: true });
+}
 
 async function afficherExport() {
   let P = null;
@@ -3521,7 +3594,10 @@ async function afficherExport() {
       const exports = [...(p.exports || [])].reverse();
       remplir(zone,
         suivi(),
-        h('p', { class: 'petit muet', style: { marginTop: 0 } }, `À partir du rendu final (${p.rendu.rapport.largeur}×${p.rendu.rapport.hauteur}, ${minutes(p.rendu.rapport.duree_montage)}).`),
+        E.vue.rendu_a_jour === false ? h('div', { class: 'aide', style: { background: 'var(--alerte-doux)', marginBottom: '12px' } }, icone('alerte'),
+          h('span', {}, `La vidéo finale (${new Date(p.rendu.cree).toLocaleString('fr-FR')}) date d’avant vos derniers changements : montage, réglages, PostProd ou textes. Les exports partent d’elle ; refaites-la d’abord pour qu’ils les contiennent.`),
+          h('button', { class: 'btn petit primaire', style: { marginLeft: 'auto', flexShrink: 0 }, onclick: () => { fermer(); afficherVideoFinale(); } }, 'Fabriquer la vidéo finale')) : null,
+        h('p', { class: 'petit muet', style: { marginTop: 0 } }, `À partir de la vidéo finale (${p.rendu.rapport.largeur}×${p.rendu.rapport.hauteur}, ${minutes(p.rendu.rapport.duree_montage)}).`),
         h('div', { class: 'grille-medias', style: { gridTemplateColumns: 'repeat(3, 1fr)' } }, PRESETS_EXPORT.map(([cle, nom, aide]) =>
           h('div', { class: `look ${cle === 'youtube' ? 'choisi' : ''}`, style: { cursor: 'default' } },
             h('b', {}, nom), h('span', {}, aide),

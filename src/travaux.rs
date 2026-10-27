@@ -38,7 +38,7 @@ impl Genre {
             Genre::Proxy(_) => "Vidéo d'origine pour le lecteur",
             Genre::Monter => "Montage par le LLM",
             Genre::Apercu => "Aperçu rapide",
-            Genre::Rendu => "Rendu final",
+            Genre::Rendu => "Vidéo finale",
             Genre::Export(_) => "Export",
         }
     }

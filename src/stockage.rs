@@ -28,7 +28,7 @@ const CATEGORIES: &[Categorie] = &[
     Categorie { cle: "ecoutes", titre: "Écoutes d'essai", aide: "Extraits de vingt secondes des réglages de son essayés.", supprimable: true },
     Categorie { cle: "extraits", titre: "Extraits en qualité finale", aide: "Plans calculés par « Ce plan en qualité finale ».", supprimable: true },
     Categorie { cle: "temporaires", titre: "Fichiers temporaires", aide: "Restes d'un aperçu ou d'un rendu interrompu.", supprimable: true },
-    Categorie { cle: "sorties", titre: "Aperçu, rendu final et exports", aide: "Les vidéos produites (un export se retire dans « Exporter »).", supprimable: false },
+    Categorie { cle: "sorties", titre: "Aperçu, vidéo finale et exports", aide: "Les vidéos produites (un export se retire dans « Exporter »).", supprimable: false },
     Categorie { cle: "lecteur", titre: "Analyses et versions pour le lecteur", aide: "Transcription, visages, version légère des rushs.", supprimable: false },
 ];
 

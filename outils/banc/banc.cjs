@@ -1,6 +1,7 @@
 // Banc d'essai de l'interface d'EDIVID : les vrais fichiers de web/, l'API remplacée par les données exportées
 // d'un projet (vue, programme, catalogue), dans Chromium. Capture d'écran et mesures des colonnes.
-// node outils/banc/banc.cjs <largeur> <hauteur> <capture.png> [onglet] ; QUALITE=1 : ouvre aussi « Ce plan en qualité finale ».
+// node outils/banc/banc.cjs <largeur> <hauteur> <capture.png> [onglet] ; QUALITE=1 : ouvre aussi « Ce plan en qualité finale » ;
+// CLIC=<texte> : clique un bouton (une fenêtre) avant la capture.
 // Playwright : EDIVID_PLAYWRIGHT=<chemin du paquet> (sinon cherché comme module installé).
 const { chromium } = require(process.env.EDIVID_PLAYWRIGHT || 'playwright');
 const fs = require('fs');
@@ -60,6 +61,12 @@ const fichier = (f) => ({ status: 200, contentType: types[path.extname(f)] || 'a
   await p.waitForSelector('.atelier', { timeout: 20000 });
   if (onglet) await p.evaluate((o) => { [...document.querySelectorAll('.onglets button')].find((x) => x.title === o)?.click(); }, onglet);
   await p.waitForTimeout(1500);
+  // CLIC=<texte> : clique le premier bouton portant ce texte, puis capture la fenêtre ouverte.
+  if (process.env.CLIC) {
+    await p.evaluate((t) => [...document.querySelectorAll('button')].find((x) => x.textContent.includes(t))?.click(), process.env.CLIC);
+    await p.waitForTimeout(800);
+    await p.screenshot({ path: capture }); await b.close(); return;
+  }
   if (process.env.QUALITE) {
     await p.evaluate(() => { const v = document.querySelector('video'); v.dataset.url = v.dataset.url || 'x'; v.dispatchEvent(new Event('pause')); });
     await p.waitForTimeout(500);

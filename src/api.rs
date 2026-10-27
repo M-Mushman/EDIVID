@@ -223,7 +223,7 @@ async fn voir_dossier(State(etat): State<EtatPartage>, Path(id): Path<String>) -
             }
             let Ok(m) = e.metadata().await else { continue };
             let genre = if nom.starts_with("rendu-") {
-                "Rendu final"
+                "Vidéo finale"
             } else if nom.starts_with("export-youtube") {
                 "Export YouTube"
             } else if nom.starts_with("export-leger") {
@@ -302,6 +302,8 @@ pub fn vue_projet(p: &Projet, analyses: &[(String, std::sync::Arc<crate::modele:
         "occupe": occupe,
         // Un aperçu fait avant le dernier changement n'est plus à jour (avant ce champ : null, inconnu).
         "apercu_a_jour": p.apercu.as_ref().and_then(|s| s.rapport["empreinte"].as_str()).map(|e| e == empreinte),
+        // Vidéo finale faite avant le dernier changement (ou avant ce champ) : à refaire avant d'exporter.
+        "rendu_a_jour": p.rendu.as_ref().map(|s| s.rapport["empreinte_finale"].as_str() == Some(crate::rendu::empreinte_finale(p).as_str())),
     })
 }
 
@@ -1301,7 +1303,7 @@ async fn coulisses(State(etat): State<EtatPartage>, Path(id): Path<String>) -> R
 async fn envoyer_drive(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
     let p = etat.projet(&id).await?;
     if p.rendu.is_none() {
-        return Err(refus("lancez d'abord le rendu final"));
+        return Err(refus("fabriquez d'abord la vidéo finale"));
     }
     let e = etat.clone();
     tokio::spawn(async move {
@@ -1951,7 +1953,7 @@ struct DemandeExport {
 async fn lancer_export(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(d): Json<DemandeExport>) -> Reponse {
     let p = etat.projet(&id).await?;
     if p.rendu.is_none() {
-        return Err(refus("lancez d'abord le rendu final"));
+        return Err(refus("fabriquez d'abord la vidéo finale"));
     }
     if !rendu::PRESETS.iter().any(|(k, _)| *k == d.preset) {
         return Err(refus("préréglage inconnu"));

@@ -70,7 +70,7 @@ pub async fn prevenir(etat: &EtatPartage, genre: &str, p: &Projet, detail: &str)
                 .unwrap_or_default();
             (format!("EDIVID — le montage de « {} » est prêt", p.nom),
              format!("Bonjour,\n\nLe LLM a monté « {} »{chiffres}. Un aperçu vous attend : regardez-le, puis ajustez en \
-                      discutant avec l'assistant ou lancez le rendu final.\n\n{url}\n\n— EDIVID", p.nom))
+                      discutant avec l'assistant ou fabriquez la vidéo finale.\n\n{url}\n\n— EDIVID", p.nom))
         }
         "rendu" => {
             let r = p.rendu.as_ref().map(|s| &s.rapport);

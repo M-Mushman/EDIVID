@@ -1513,6 +1513,16 @@ async fn gain_voix(etat: &EtatPartage, p: &Projet, prog: &Programme) -> f64 {
 
 /// Empreinte de tout ce qui change une vidéo rendue : un aperçu dont l'empreinte diffère de celle du projet
 /// n'est plus à jour (l'interface le dit, même après un rechargement de la page).
+/// Empreinte de tout ce que la vidéo finale contient : réglages (son, sous-titres et vidéo finale compris), montage,
+/// textes et images posés, PostProd, habillage, générique. Une vidéo finale dont l'empreinte diffère est périmée.
+pub fn empreinte_finale(p: &Projet) -> String {
+    let v = json!([p.reglages, p.montage, p.incrustations, p.postprod, p.habillage, p.generique, p.corrections, p.fusions,
+                   p.medias.iter().map(|m| [&m.id, &m.fichier]).collect::<Vec<_>>(), p.rushs.iter().map(|r| &r.id).collect::<Vec<_>>()]);
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.to_string().hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
 pub fn empreinte(p: &Projet) -> String {
     // Ce que l'aperçu dessine ou joue en direct ne le rend pas périmé : son (partie directe), sous-titres (réglages,
     // mots affichés, emphase), titres des parties (le début des parties, lui, compte : il pose une transition),
@@ -2199,6 +2209,7 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
         rapport["son_direct"] = json!({"fond": existe(&fond), "generique": existe(&generique)});
     }
     rapport["empreinte"] = json!(empreinte(&p));
+    rapport["empreinte_finale"] = json!(empreinte_finale(&p));
     let (avant, apres) = durees_generique(&p);
     rapport["generique"] = json!({"debut": avant, "fin": apres});
     rapport["plans_detail"] = decoupe::plans_json(&prog);
@@ -2376,7 +2387,7 @@ pub const PRESETS: &[(&str, &str)] = &[("youtube", "YouTube"), ("leger", "Léger
 /// précision. Léger (iPhone, messagerie) : réencodé en 720p.
 pub async fn exporter(etat: &EtatPartage, projet: &str, preset: &str) -> Result<crate::modele::Export> {
     let p = etat.projet(projet).await?;
-    let rendu = p.rendu.as_ref().ok_or_else(|| anyhow!("lancez d'abord le rendu final"))?;
+    let rendu = p.rendu.as_ref().ok_or_else(|| anyhow!("fabriquez d'abord la vidéo finale"))?;
     let source = etat.dossier_projet(projet).join("sorties").join(&rendu.fichier);
     let (l, h) = (rendu.rapport["largeur"].as_u64().unwrap_or(1080) as u32, rendu.rapport["hauteur"].as_u64().unwrap_or(1920) as u32);
     if preset != "leger" {

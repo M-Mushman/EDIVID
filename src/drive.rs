@@ -385,7 +385,7 @@ pub async fn deposer(etat: &EtatPartage, projet: &str) -> Result<String> {
         }
         d
     };
-    let rendu = p.rendu.as_ref().ok_or_else(|| anyhow!("pas encore de rendu final"))?;
+    let rendu = p.rendu.as_ref().ok_or_else(|| anyhow!("pas encore de vidéo finale"))?;
     let local = etat.dossier_projet(projet).join("sorties").join(&rendu.fichier);
     let nom: String = p.nom.chars().map(|c| if matches!(c, '/' | '\\' | ':') { '-' } else { c }).collect();
     let relatif = format!("{}/{} — EDIVID.mp4", d.sortie, nom.trim());
