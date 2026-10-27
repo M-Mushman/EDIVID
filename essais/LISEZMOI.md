@@ -21,3 +21,4 @@ Campagnes :
 | `2026-10-26-qualite` | Diagnostic de la qualité de captation (épisode 0) : images avant / après, quatre extraits d'écoute de même niveau (brut, débruité 70 %, 100 %, reconstruit), rendu final 4K 60 i/s HEVC 10 bits, aperçu, journal du rendu. |
 | `2026-10-27-hdr` | Sortie HDR (HLG) : mini-rendus HDR et SDR des dix premières phrases d'épisode 0, image HDR revue en SDR, journaux. |
 | `2026-10-27-son-studio` | Banc du son de studio : extraits, candidats de séchage (MossFormer2, DeepFilterNet3, séparation UVR, WPE, soustraction de traîne, VoiceFixer), spectres et courbes de timbre, écoutes numérotées, `tableau.md` (RT60 apparent, DNSMOS, mots). |
+| `2026-10-27-vote` | Voix de studio par vote (VoiceFixer depuis TF-GridNet et MossFormer2, mots vérifiés par tranche) : écoute d'essai de 20 s, deux extraits du rush entier autour des replis, journal. |

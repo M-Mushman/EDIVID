@@ -21,6 +21,7 @@ Progression : {"etape": "verification", "pct": ...}.
 import json
 import re
 import subprocess
+import unicodedata
 import sys
 from pathlib import Path
 
@@ -52,8 +53,10 @@ def transcrire(modele, f: str) -> list:
 
 
 def cle(mots: list) -> str:
-    """Les mots réduits à leurs lettres et chiffres, collés : « e-mail » et « email » sont le même mot."""
-    return re.sub(r"[^0-9a-zàâäçéèêëîïôöùûüÿœæ]", "", " ".join(m for _, _, m in mots).lower())
+    """Les mots réduits à leurs lettres et chiffres, sans accents, collés : « e-mail » et « email », « A » et « À » sont
+    le même mot (Whisper hésite sur la ponctuation et les majuscules accentuées)."""
+    texte = unicodedata.normalize("NFD", " ".join(m for _, _, m in mots).lower())
+    return re.sub(r"[^0-9a-z]", "", "".join(c for c in texte if not unicodedata.combining(c)))
 
 
 def phrases(mots: list) -> list:
