@@ -2318,6 +2318,32 @@ function dessinerReglages(corps) {
   blocGenerique(corps);
   // Le son se règle dans l'onglet PostProd, avec l'image.
   for (const s of [...new Set(E.catalogue.map((r) => r.section))].filter((x) => x !== 'Son')) blocSection(corps, s);
+  blocFichiers(corps);
+}
+
+/** Fichiers du projet : la place de chaque catégorie, et la libération de celles qu'EDIVID sait refaire. */
+function blocFichiers(corps) {
+  const liste = h('div', { class: 'fichiers-projet' }, h('span', { class: 'tres-petit muet' }, 'Calcul de la place…'));
+  const bloc = blocOutil('fichiers', { icone: 'dossier', titre: 'Fichiers du projet', famille: 'recettes', resume: '' }, liste);
+  corps.append(bloc);
+  const resume = bloc.querySelector('.outil-resume');
+  const charger = async () => {
+    let d;
+    try { d = await api('GET', `/api/projets/${E.projetId}/stockage`); } catch (e) { remplir(liste, h('span', { class: 'tres-petit muet' }, e.message)); return; }
+    const t = bloc.querySelector('.outil-titres');
+    if (t && !t.querySelector('.outil-resume')) t.append(h('span', { class: 'outil-resume' }));
+    (bloc.querySelector('.outil-resume') || resume).textContent = `${taille(d.total)} sur le disque`;
+    remplir(liste, d.categories.filter((c) => c.octets > 0).map((c) => h('div', { class: 'fichier-categorie', title: c.aide },
+      h('span', { class: 'fichier-titre' }, c.titre),
+      h('b', { class: 'petit' }, taille(c.octets)),
+      c.supprimable ? h('button', { class: 'btn petit doux', title: `Libérer : ${c.aide}`, onclick: async () => {
+        if (!await confirmer(`Libérer « ${c.titre} » ?`, `${taille(c.octets)} seront libérés. ${c.aide}`, 'Libérer')) return;
+        try { const r = await api('DELETE', `/api/projets/${E.projetId}/stockage/${c.cle}`); toast(`${taille(r.libere)} libérés.`, 'ok'); }
+        catch (e) { toast(e.message, 'erreur'); }
+        charger();
+      } }, icone('corbeille'), 'Libérer') : null)));
+  };
+  charger();
 }
 
 /** Un bloc de réglages du catalogue (une section : Autocut, Zooms, Son…). */

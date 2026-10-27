@@ -1,15 +1,13 @@
 /target
 /.venv
 /donnees
-/rushs
 /modeles/*.pth
 /modeles/*.onnx
 /modeles/*.task
-/p0/*.json
-/p0/*.mp4
-/p0/frames
 __pycache__/
-/essais/nettete
 /.venv-rehaussement
 /modeles/resemble-enhance
 /.venv-voicefixer
+# Essais : un dossier par campagne (AAAA-MM-JJ-sujet), jetable ; seul le mode d'emploi est suivi.
+/essais/*
+!/essais/LISEZMOI.md

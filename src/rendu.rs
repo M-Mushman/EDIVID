@@ -1798,7 +1798,7 @@ pub async fn plan_qualite(etat: &EtatPartage, projet: &str, t: f64) -> Result<Va
     tokio::fs::create_dir_all(&tmp).await?;
     let sources: std::collections::HashMap<String, (u32, u32)> =
         analyses.iter().map(|(id, a)| (id.clone(), (a.largeur, a.hauteur))).collect();
-    mettre_a_jour_travail(etat, &p).await?;
+    mettre_a_jour_travail(etat, &p, true).await?;
     let passe = passe_finale(etat, &p, &analyses).await?;
     let nettes = nettete_ia(etat, &p, &prog, &indices, &sources, &tmp, passe).await?;
     let mut liste = String::new();
@@ -1849,15 +1849,17 @@ async fn passe_finale(etat: &EtatPartage, p: &Projet, analyses: &[(String, std::
     Ok(Passe { ips: ips.min(60.0), dix_bits: true })
 }
 
-/// Fichier de travail d'avant la chaîne 10 bits (8 bits, 30 i/s) : refait depuis le rush avant un rendu final.
-/// Les temps ne changent pas : analyse, proxy et voix traitées restent valables.
-async fn mettre_a_jour_travail(etat: &EtatPartage, p: &Projet) -> Result<()> {
+/// Fichier de travail absent (libéré dans « Fichiers du projet ») ou, pour un rendu final (`dix_bits`), d'avant la
+/// chaîne 10 bits (8 bits, 30 i/s) : refait depuis le rush. Les temps ne changent pas : analyse, proxy et voix
+/// traitées restent valables.
+pub async fn mettre_a_jour_travail(etat: &EtatPartage, p: &Projet, dix_bits: bool) -> Result<()> {
     for r in &p.rushs {
         let mezz = etat.dossier_travail(&p.id, &r.id).join("mezz.mkv");
-        let Ok(d) = ffprobe(&mezz).await else { continue };
-        let v = d["streams"].as_array().and_then(|s| s.iter().find(|s| s["codec_type"] == "video")).cloned().unwrap_or_default();
-        if v["pix_fmt"].as_str() == Some("yuv420p10le") {
-            continue;
+        if let Ok(d) = ffprobe(&mezz).await {
+            let v = d["streams"].as_array().and_then(|s| s.iter().find(|s| s["codec_type"] == "video")).cloned().unwrap_or_default();
+            if !dix_bits || v["pix_fmt"].as_str() == Some("yuv420p10le") {
+                continue;
+            }
         }
         let source = etat.dossier_projet(&p.id).join("rushs").join(&r.fichier);
         if !source.exists() {
@@ -1879,9 +1881,7 @@ pub async fn rendre(etat: &EtatPartage, projet: &str, apercu: bool) -> Result<So
     if analyses.is_empty() {
         bail!("aucun rush analysé");
     }
-    if !apercu {
-        mettre_a_jour_travail(etat, &p).await?;
-    }
+    mettre_a_jour_travail(etat, &p, !apercu).await?;
     let passe = if apercu { Passe::APERCU } else { passe_finale(etat, &p, &analyses).await? };
     let ps = decoupe::phrases_projet(&p, &analyses);
     let prog = decoupe::programme(&p, &analyses, &ps, apercu);

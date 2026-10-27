@@ -112,6 +112,8 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/son/niveau", post(son_niveau))
         .route("/api/projets/{id}/son/essai", post(essai_son))
         .route("/api/projets/{id}/plan/qualite", post(plan_qualite))
+        .route("/api/projets/{id}/stockage", get(voir_stockage))
+        .route("/api/projets/{id}/stockage/{cle}", delete(liberer_stockage))
         .route("/api/projets/{id}/postprod", post(changer_postprod))
         .route("/api/projets/{id}/postprod/image", get(image_postprod))
         .route("/api/projets/{id}/correction", post(corriger_phrase))
@@ -203,6 +205,22 @@ async fn renommer_projet(State(etat): State<EtatPartage>, Path(id): Path<String>
     }
     etat.modifier(&id, |p| p.nom = nom).await?;
     Ok(Json(json!({})))
+}
+
+async fn voir_stockage(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let e = etat.clone();
+    Ok(Json(tokio::task::spawn_blocking(move || crate::stockage::bilan(&e, &p)).await.map_err(|e| anyhow!("{e}"))?))
+}
+
+async fn liberer_stockage(State(etat): State<EtatPartage>, Path((id, cle)): Path<(String, String)>) -> Reponse {
+    if etat.file.occupe(&id) {
+        return Err(refus("un travail est en cours sur ce projet : attendez sa fin"));
+    }
+    let p = etat.projet(&id).await?;
+    let e = etat.clone();
+    let octets = tokio::task::spawn_blocking(move || crate::stockage::liberer(&e, &p, &cle)).await.map_err(|e| anyhow!("{e}"))??;
+    Ok(Json(json!({"libere": octets})))
 }
 
 async fn supprimer_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
@@ -1703,6 +1721,9 @@ async fn essai_son(State(etat): State<EtatPartage>, Path(id): Path<String>, Quer
     let p = etat.projet(&id).await?;
     let analyses = etat.analyses_du_projet(&p).await?;
     let (rush, _) = analyses.first().ok_or_else(|| refus("aucun rush prêt"))?;
+    if !etat.dossier_travail(&id, rush).join("mezz.mkv").exists() {
+        return Err(refus("fichier de travail libéré : il sera recréé au prochain aperçu").into());
+    }
     let mut r = p.reglages.clone();
     if !q.ambiance.is_empty() {
         let tout: Value = serde_json::from_str(AMBIANCES).expect("bibliotheque/ambiances.json invalide");
@@ -1768,7 +1789,14 @@ async fn image_postprod(State(etat): State<EtatPartage>, Path(id): Path<String>,
         (pl["rush"].as_str().unwrap_or("").to_string(), pl["src"].as_f64().unwrap_or(0.0) + q.t - pl["t"].as_f64().unwrap_or(0.0))
     };
     let rush = if rush.is_empty() { p.rushs.first().map(|r| r.id.clone()).unwrap_or_default() } else { rush };
+    // Le rush vient de l'adresse : il doit être un rush du projet (jamais un chemin).
+    if !p.rushs.iter().any(|r| r.id == rush) {
+        return Err(refus("rush inconnu"));
+    }
     let mezz = etat.dossier_travail(&id, &rush).join("mezz.mkv");
+    if !mezz.exists() {
+        return Err(refus("fichier de travail libéré : il sera recréé au prochain aperçu"));
+    }
     let jpeg = rendu::image_postprod(&mezz, src, &p.postprod, !q.avant).await?;
     Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg"), (axum::http::header::CACHE_CONTROL, "no-store")], jpeg).into_response())
 }

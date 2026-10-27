@@ -17,6 +17,7 @@ mod modele;
 mod parametres;
 mod postprod;
 mod reglages;
+mod stockage;
 mod rendu;
 mod travaux;
 mod youtube;
