@@ -6,8 +6,12 @@ Usage :
       l'analyse s'ils sont donnés, sinon les fenêtres assez fortes), intégré en bandes de 1/6 d'octave de 63 Hz à
       16 kHz, normalisé à la bande 1 kHz. Écrit {"bandes": [{"f", "db"}], "fenetres", "source"}.
   python egaliseur.py courbe <spectre_source.json> <spectre_reference.json> <intensite 0-1> <sortie.json>
+                             [<relevement_aigus_max_dB = 2> <coupe_graves_max_dB = 0>]
       Différence référence − source, lissée à 1/3 d'octave, bornée à ±8 dB, nulle sous 70 Hz et dégressive au-dessus
-      de 12 kHz, multipliée par l'intensité ; puis traduite en filtres ffmpeg (equalizer/bass/treble, formules RBJ,
+      de 12 kHz, multipliée par l'intensité. Au-dessus de 2 kHz, le relèvement est plafonné (2 dB par défaut) : relever
+      les aigus d'un micro de téléphone, surtout après le séchage par masque, fait ressortir ses défauts et sonne
+      métallique (écoute du 2026-10-27 : +6 dB de 2,5 à 10 kHz avec la référence « cette voix »). Sous 250 Hz, la
+      coupe est plafonnée (0 dB par défaut : on ne retire jamais la chaleur). Puis traduite en filtres ffmpeg (equalizer/bass/treble, formules RBJ,
       les mêmes que web/son-dsp.js) par moindres carrés sur leur réponse réelle. Écrit {"filtres": [...],
       "cible": [...], "obtenue": [...], "erreur_db"}.
   python egaliseur.py essai
@@ -90,7 +94,11 @@ def lisser(courbe: np.ndarray) -> np.ndarray:
     return np.convolve(etendue, noyau, mode="valid")
 
 
-def cible(source: list, reference: list, intensite: float) -> np.ndarray:
+AIGUS = 2000.0
+GRAVES = 250.0
+
+
+def cible(source: list, reference: list, intensite: float, aigus_max: float = 2.0, coupe_graves_max: float = 0.0) -> np.ndarray:
     s = np.array([b["db"] for b in source])
     r = np.array([b["db"] for b in reference])
     d = lisser(r - s)
@@ -100,7 +108,13 @@ def cible(source: list, reference: list, intensite: float) -> np.ndarray:
         elif f > PLAFOND:
             d[i] *= max(0.0, 1 - (np.log2(f / PLAFOND) / np.log2(16000 / PLAFOND)))
     d = np.clip(d, -GAIN_MAX, GAIN_MAX) * float(np.clip(intensite, 0.0, 1.0))
-    return d - d[24]  # la bande 1 kHz reste à 0 : pas de changement de niveau
+    d = d - d[24]  # la bande 1 kHz reste à 0 : pas de changement de niveau
+    for i, f in enumerate(BANDES):
+        if f >= AIGUS:
+            d[i] = min(d[i], aigus_max)
+        if f <= GRAVES:
+            d[i] = max(d[i], -coupe_graves_max)
+    return d
 
 
 # ---------------------------------------------------------------- biquads (RBJ, comme ffmpeg et son-dsp.js)
@@ -175,7 +189,9 @@ def commande_courbe(args: list) -> None:
     src = json.loads(Path(args[0]).read_text())["bandes"]
     ref = json.loads(Path(args[1]).read_text())["bandes"]
     intensite = float(args[2])
-    d = cible(src, ref, intensite)
+    aigus_max = float(args[4]) if len(args) > 4 else 2.0
+    coupe_graves = float(args[5]) if len(args) > 5 else 0.0
+    d = cible(src, ref, intensite, aigus_max, coupe_graves)
     filtres, obtenue, erreur = traduire(d)
     resultat = {"filtres": filtres, "cible": [round(float(x), 2) for x in d], "obtenue": [round(float(x), 2) for x in obtenue],
                 "erreur_db": round(erreur, 2), "intensite": intensite}
@@ -192,7 +208,7 @@ def commande_essai() -> None:
                         "equalizer=f=300:t=q:w=1.4:g=-6,equalizer=f=4000:t=q:w=1.4:g=4", str(t / "abime.wav")], check=True)
         ref, _ = spectre(lire(str(t / "ref.wav")))
         src, _ = spectre(lire(str(t / "abime.wav")))
-        filtres, _, erreur = traduire(cible(src, ref, 1.0))
+        filtres, _, erreur = traduire(cible(src, ref, 1.0, GAIN_MAX, GAIN_MAX))
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(t / "abime.wav"), "-af", ",".join(filtres), str(t / "corrige.wav")], check=True)
         cor, _ = spectre(lire(str(t / "corrige.wav")))
         ecart = np.array([c["db"] - r["db"] for c, r in zip(cor, ref)])

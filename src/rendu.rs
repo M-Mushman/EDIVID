@@ -1064,13 +1064,11 @@ pub fn filtres_direct(r: &crate::reglages::Reglages, timbre: &[String]) -> Vec<S
     a.extend(timbre.iter().cloned());
     if vrai(r, "voix") {
         a.push(match texte(r, "timbre_voix").as_str() {
-            // Studio chaleureux : passe-haut, boue retirée, chaleur, présence et air mesurés (l'égaliseur de référence
-            // fait le gros), niveleur lent puis compresseur de crêtes, sifflantes, harmoniques douces (rondeur).
-            "studio_chaud" => "highpass=f=75,equalizer=f=350:t=q:w=1.2:g=-2,bass=g=2.5:f=170:w=0.8,\
-                               equalizer=f=3200:t=q:w=1.3:g=1.5,treble=g=1:f=11000:w=0.7,\
-                               acompressor=threshold=-24dB:ratio=2:attack=40:release=400:knee=6,\
-                               acompressor=threshold=-16dB:ratio=3.5:attack=8:release=120:knee=3:makeup=3,\
-                               deesser=i=0.35,aexciter=amount=0.4:drive=5:freq=3000:blend=2",
+            // Studio chaleureux : passe-haut, chaleur à 180 Hz, un compresseur lent et doux, des sifflantes adoucies.
+            // Rien de plus : la version d'origine (creux à 350 Hz, deux compresseurs, deux dé-esseurs, harmoniques
+            // aexciter) sonnait métallique et écrasée à l'écoute du 2026-10-27 (essais/2026-10-27-son-studio/echelle).
+            "studio_chaud" => "highpass=f=70,bass=g=2:f=180:w=0.8,\
+                               acompressor=threshold=-22dB:ratio=2:attack=30:release=300:knee=6:makeup=2,deesser=i=0.3",
             // Chaud et profond : du corps dans le bas (150 Hz), moins de nasal (400 Hz), une présence douce, des
             // aigus adoucis, une compression lente qui ne pompe pas.
             "chaud" => "highpass=f=70,bass=g=3.5:f=150:w=0.7,equalizer=f=420:t=q:w=1.3:g=-2,\
@@ -1367,7 +1365,8 @@ async fn filtres_timbre_interne(etat: &EtatPartage, projet: &str, r: &crate::reg
             (s, format!("media_{id}"))
         }
     };
-    let courbe = dossier.join(format!("timbre_{cle_source}_{cle_ref}_{}.json", (intensite * 100.0).round() as u32));
+    // « b2 » : courbe bornée (aigus relevés de 2 dB au plus, graves jamais coupés) ; les anciennes ne servent plus.
+    let courbe = dossier.join(format!("timbre_b2_{cle_source}_{cle_ref}_{}.json", (intensite * 100.0).round() as u32));
     if !courbe.exists() {
         capteur(etat, projet, "egaliseur.py", &["courbe".into(), spectre_source.to_string_lossy().into(), spectre_ref.to_string_lossy().into(),
                                                   format!("{intensite:.2}"), courbe.to_string_lossy().into()]).await?;
@@ -1384,7 +1383,7 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
     let timbre = filtres_timbre(etat, projet, r).await;
     let empreinte = {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        format!("{debut:.2}-{duree:.2}-{}|{}", cles.iter().map(|c| r.get(*c).map(|v| v.to_string()).unwrap_or_default()).collect::<Vec<_>>().join("|"),
+        format!("v2-{debut:.2}-{duree:.2}-{}|{}", cles.iter().map(|c| r.get(*c).map(|v| v.to_string()).unwrap_or_default()).collect::<Vec<_>>().join("|"),
                 timbre.join(","))
             .hash(&mut h);
         format!("{:016x}", h.finish())
@@ -1417,10 +1416,23 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
     let gain = sonie_rush(etat, projet, rush).await.map(|i| (-23.0 - i).clamp(-12.0, 30.0)).unwrap_or(0.0);
     let ir = reponse_espace(etat, &texte(r, "espace")).await?;
     let mut fc = graphe_voix(r, gain, "0:a", "voix", ir.as_ref(), true, &timbre);
-    fc.push("[voix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]".into());
+    fc.push("[voix]aresample=48000[a]".into());
+    // Niveau comme au rendu final : mesuré, puis un gain fixe et un limiteur de crêtes (loudnorm en une passe est
+    // dynamique : il écrasait l'écoute).
+    let traite = dossier.join(format!("{empreinte}-traite.wav"));
     ffmpeg_simple(vec!["-i".into(), source.to_string_lossy().into(), "-filter_complex".into(), fc.join(";"),
-                       "-map".into(), "[a]".into(), "-c:a".into(), "libmp3lame".into(), "-q:a".into(), "3".into(), mp3.to_string_lossy().into()])
+                       "-map".into(), "[a]".into(), "-c:a".into(), "pcm_s24le".into(), traite.to_string_lossy().into()])
         .await?;
+    let mesure = Command::new("ffmpeg").args(["-hide_banner", "-nostats", "-i"]).arg(&traite)
+        .args(["-af", "ebur128=framelog=quiet", "-f", "null", "-"]).stdin(Stdio::null()).output().await.context("ffmpeg introuvable")?;
+    let integre: f64 = String::from_utf8_lossy(&mesure.stderr).lines().rev()
+        .find_map(|l| l.trim().strip_prefix("I:")?.trim().strip_suffix("LUFS")?.trim().parse().ok()).unwrap_or(-14.0);
+    let g = (-14.0 - integre).clamp(-20.0, 30.0);
+    ffmpeg_simple(vec!["-i".into(), traite.to_string_lossy().into(), "-af".into(),
+                       format!("volume={g:.2}dB,alimiter=limit={:.4}:attack=5:release=50:level=false", 10f64.powf(-2.0 / 20.0)),
+                       "-c:a".into(), "libmp3lame".into(), "-q:a".into(), "3".into(), mp3.to_string_lossy().into()])
+        .await?;
+    let _ = tokio::fs::remove_file(&traite).await;
     for f in [&extrait, &source] {
         let _ = tokio::fs::remove_file(f).await;
     }
