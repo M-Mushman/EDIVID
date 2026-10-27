@@ -114,6 +114,7 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/son/essai", post(essai_son))
         .route("/api/projets/{id}/plan/qualite", post(plan_qualite))
         .route("/api/projets/{id}/stockage", get(voir_stockage))
+        .route("/api/projets/{id}/dossier", get(voir_dossier))
         .route("/api/projets/{id}/stockage/{cle}", delete(liberer_stockage))
         .route("/api/projets/{id}/postprod", post(changer_postprod))
         .route("/api/projets/{id}/postprod/image", get(image_postprod))
@@ -206,6 +207,42 @@ async fn renommer_projet(State(etat): State<EtatPartage>, Path(id): Path<String>
     }
     etat.modifier(&id, |p| p.nom = nom).await?;
     Ok(Json(json!({})))
+}
+
+/// Les vidéos produites du projet (rendu final, exports, aperçu), pour la page « Dossier » : nom, genre, taille, date.
+/// Les pistes et fichiers internes (fond, générique, niveaux, extraits) n'y figurent pas.
+async fn voir_dossier(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let dossier = etat.dossier_projet(&id).join("sorties");
+    let mut fichiers = Vec::new();
+    if let Ok(mut lus) = tokio::fs::read_dir(&dossier).await {
+        while let Ok(Some(e)) = lus.next_entry().await {
+            let nom = e.file_name().to_string_lossy().into_owned();
+            if !nom.ends_with(".mp4") || nom.starts_with("qualite-") {
+                continue;
+            }
+            let Ok(m) = e.metadata().await else { continue };
+            let genre = if nom.starts_with("rendu-") {
+                "Rendu final"
+            } else if nom.starts_with("export-youtube") {
+                "Export YouTube"
+            } else if nom.starts_with("export-leger") {
+                "Export léger"
+            } else if nom.starts_with("export-max") {
+                "Archive"
+            } else if nom.starts_with("apercu-") {
+                "Aperçu"
+            } else {
+                "Vidéo"
+            };
+            // Un export YouTube ou archive est un lien vers le rendu final : il porte la date du rendu ; on prend la sienne.
+            let date = p.exports.iter().find(|x| x.fichier == nom).map(|x| x.cree.clone())
+                .unwrap_or_else(|| m.modified().ok().map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()).unwrap_or_default());
+            fichiers.push(json!({"nom": nom, "genre": genre, "taille": m.len(), "date": date}));
+        }
+    }
+    fichiers.sort_by(|a, b| b["date"].as_str().cmp(&a["date"].as_str()));
+    Ok(Json(json!({"projet": p.nom, "chemin": dossier.to_string_lossy(), "fichiers": fichiers})))
 }
 
 async fn voir_stockage(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {

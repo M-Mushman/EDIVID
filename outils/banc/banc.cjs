@@ -48,13 +48,15 @@ const fichier = (f) => ({ status: 200, contentType: types[path.extname(f)] || 'a
       const m = vue.projet.medias.find((x) => x.id === path.basename(c));
       return m ? r.fulfill(fichier(path.join(RACINE, 'donnees/projets', PROJET, 'medias', m.fichier))) : r.fulfill({ status: 404, body: '' });
     }
+    if (c.endsWith('/dossier')) return r.fulfill(json(lire(path.join(D, 'dossier.json')).toString()));
     if (c.endsWith('/stockage')) return r.fulfill(json({ total: 40e9, categories: [
       { cle: 'rushs', titre: "Rushs d'origine", aide: '', supprimable: false, octets: 8.9e9 },
       { cle: 'travail', titre: 'Fichiers de travail', aide: 'Recréés au prochain aperçu.', supprimable: true, octets: 21.8e9 }] }));
     if (c.endsWith('/evenements')) return r.fulfill({ status: 204, body: '' });
     return r.fulfill(json({}));
   });
-  await p.goto(`http://edivid.essai/#/projet/${PROJET}`);
+  await p.goto(`http://edivid.essai/#/projet/${PROJET}${process.env.PAGE ? '/' + process.env.PAGE : ''}`);
+  if (process.env.PAGE) { await p.waitForTimeout(1500); await p.screenshot({ path: capture, fullPage: true }); await b.close(); return; }
   await p.waitForSelector('.atelier', { timeout: 20000 });
   if (onglet) await p.evaluate((o) => { [...document.querySelectorAll('.onglets button')].find((x) => x.title === o)?.click(); }, onglet);
   await p.waitForTimeout(1500);

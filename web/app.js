@@ -312,6 +312,8 @@ async function route() {
   if (!session.connecte) return afficherConnexion();
   if (!E.catalogue) E.catalogue = await api('GET', '/api/catalogue');
   if (location.hash === '#/parametres') { fermerFlux(); E.projetId = null; return afficherParametres(); }
+  const d = location.hash.match(/^#\/projet\/([a-z0-9]+)\/dossier/);
+  if (d) { fermerFlux(); return afficherDossier(d[1]); }
   const m = location.hash.match(/^#\/projet\/([a-z0-9]+)/);
   if (m) return ouvrirProjet(m[1]);
   fermerFlux();
@@ -490,6 +492,7 @@ function brancherFlux(source) {
     source.addEventListener('progression', (e) => {
       E.progression = JSON.parse(e.data).donnees;
       dessinerBarre();
+      if (E.exportVue && /^Export/.test(E.progression?.etape || '')) E.exportVue.redessiner();
       if (E.vue?.projet.rushs.some((r) => ['preparation', 'analyse'].includes(r.etat))) dessinerRushs();
     });
     source.addEventListener('projet', () => rafraichirBientot());
@@ -498,6 +501,7 @@ function brancherFlux(source) {
       const d = JSON.parse(e.data).donnees;
       toast(`${d.travail} : ${d.message}`, 'erreur');
       E.progression = null;
+      if (E.exportVue?.etat === 'en_cours') { E.exportVue.etat = 'erreur'; E.exportVue.message = d.message; E.exportVue.redessiner(); }
       rafraichir();
     });
     source.addEventListener('drive', (e) => {
@@ -512,7 +516,11 @@ function brancherFlux(source) {
     source.addEventListener('fini', (e) => {
       const d = JSON.parse(e.data).donnees;
       E.progression = null;
-      if (d.genre === 'export') { toast('Export prêt : téléchargez-le ou publiez-le depuis « Exporter ».', 'ok'); rafraichir(); return; }
+      if (d.genre === 'export') {
+        toast('Export prêt.', 'ok');
+        rafraichir().then(() => { if (E.exportVue) { E.exportVue.etat = 'pret'; E.exportVue.redessiner(); } });
+        return;
+      }
       if (d.genre === 'rendu') { E.lecteur = 'rendu'; toast('Le rendu final est prêt : vous pouvez le télécharger.', 'ok'); }
       else { E.lecteur = 'apercu'; E.aMettreAJour = false; toast('Nouvel aperçu prêt.', 'ok'); }
       rafraichir();
@@ -3484,21 +3492,50 @@ const PRESETS_EXPORT = [
 async function afficherExport() {
   let P = null;
   try { P = await api('GET', '/api/parametres'); } catch { /* sans comptes */ }
-  fenetre('Exporter la vidéo', (fermer) => {
+  const fermerFenetre = fenetre('Exporter la vidéo', (fermer) => {
     const zone = h('div');
+    const ouvrirDossier = () => window.open(`#/projet/${E.projetId}/dossier`, '_blank', 'noopener');
+    // Export en cours : barre de progression, puis le fichier prêt, sans quitter la fenêtre.
+    const suivi = () => {
+      const v = E.exportVue;
+      if (!v || !v.preset) return null;
+      const nom = (PRESETS_EXPORT.find(([k]) => k === v.preset) || [, v.preset])[1];
+      // Un export apparu depuis le clic est prêt, même si son avis de fin est arrivé avant le suivi (copie instantanée).
+      if (v.etat === 'en_cours' && (E.vue.projet.exports || []).some((e) => e.preset === v.preset && Date.parse(e.cree) >= v.debut - 2000)) v.etat = 'pret';
+      if (v.etat === 'en_cours') {
+        const prog = /^Export/.test(E.progression?.etape || '') ? E.progression : null;
+        return h('div', { class: 'carte suivi-export' },
+          h('div', { class: 'ligne' }, h('b', {}, `Export ${nom} en cours`), h('span', { class: 'muet' }, prog ? `${fr(prog.pct, 0)} %` : 'en attente…')),
+          h('div', { class: `jauge${prog ? '' : ' indetermine'}` }, h('div', { style: prog ? { width: `${prog.pct}%` } : {} })));
+      }
+      if (v.etat === 'erreur') return h('div', { class: 'aide', style: { background: 'var(--alerte-doux)' } }, icone('alerte'), h('span', {}, `Export ${nom} en échec : ${v.message || ''}`));
+      const x = [...(E.vue.projet.exports || [])].reverse().find((e) => e.preset === v.preset);
+      return x ? h('div', { class: 'carte suivi-export pret' },
+        h('div', { class: 'ligne' }, h('b', {}, `Export ${nom} prêt`), h('span', { class: 'muet' }, `${x.largeur}×${x.hauteur} · ${taille(x.taille)}`)),
+        h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' } },
+          h('a', { class: 'btn petit primaire', href: `/api/projets/${E.projetId}/sorties/${x.fichier}`, download: `${E.vue.projet.nom} (${x.preset}).mp4` }, icone('telecharger'), 'Télécharger'),
+          h('button', { class: 'btn petit doux', onclick: ouvrirDossier }, icone('dossier'), 'Ouvrir le dossier'))) : null;
+    };
     const dessiner = () => {
       const p = E.vue.projet;
       const exports = [...(p.exports || [])].reverse();
       remplir(zone,
-        h('p', { class: 'petit muet', style: { marginTop: 0 } }, `À partir du rendu final (${p.rendu.rapport.largeur}×${p.rendu.rapport.hauteur}, ${minutes(p.rendu.rapport.duree_montage)}). L’export prend une à quelques minutes.`),
+        suivi(),
+        h('p', { class: 'petit muet', style: { marginTop: 0 } }, `À partir du rendu final (${p.rendu.rapport.largeur}×${p.rendu.rapport.hauteur}, ${minutes(p.rendu.rapport.duree_montage)}).`),
         h('div', { class: 'grille-medias', style: { gridTemplateColumns: 'repeat(3, 1fr)' } }, PRESETS_EXPORT.map(([cle, nom, aide]) =>
           h('div', { class: `look ${cle === 'youtube' ? 'choisi' : ''}`, style: { cursor: 'default' } },
             h('b', {}, nom), h('span', {}, aide),
             h('button', { class: `btn petit ${cle === 'youtube' ? 'primaire' : ''}`, style: { marginTop: '8px' }, onclick: async () => {
-              try { await api('POST', `/api/projets/${E.projetId}/export`, { preset: cle }); toast(`Export ${nom} lancé.`); fermer(); }
-              catch (e) { toast(e.message, 'erreur'); }
+              try {
+                await api('POST', `/api/projets/${E.projetId}/export`, { preset: cle });
+                E.exportVue = { preset: cle, etat: 'en_cours', debut: Date.now(), redessiner: dessiner };
+                dessiner();
+                setTimeout(async () => { if (E.exportVue?.etat === 'en_cours') { await rafraichir(); E.exportVue?.redessiner(); } }, 1500);
+              } catch (e) { toast(e.message, 'erreur'); }
             } }, 'Exporter')))),
-        h('h3', { style: { margin: '18px 0 8px' } }, 'Vos exports'),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', margin: '18px 0 8px' } },
+          h('h3', { style: { margin: 0 } }, 'Vos exports'), h('span', { class: 'espace' }),
+          h('button', { class: 'btn petit doux', title: 'Tous les fichiers produits pour ce projet, dans un nouvel onglet', onclick: ouvrirDossier }, icone('dossier'), 'Ouvrir le dossier')),
         exports.length ? exports.map((x) => h('div', { class: 'incrustation' },
           h('div', { style: { minWidth: 0 } },
             h('b', { class: 'petit' }, (PRESETS_EXPORT.find(([k]) => k === x.preset) || [, x.preset])[1]),
@@ -3514,9 +3551,32 @@ async function afficherExport() {
             } }, icone('corbeille')))))
           : h('p', { class: 'petit muet' }, 'Aucun export pour l’instant.'));
     };
+    E.exportVue = { preset: null, etat: null, redessiner: dessiner };
     dessiner();
     return zone;
   }, { large: true });
+  // La fenêtre fermée, plus de suivi.
+  new MutationObserver((_, o) => { if (!document.querySelector('.suivi-export') && !document.querySelector('.fenetre')) { E.exportVue = null; o.disconnect(); } })
+    .observe(document.body, { childList: true });
+  void fermerFenetre;
+}
+
+/** Page « Dossier » d'un projet (nouvel onglet) : les vidéos produites, à télécharger. EDIVID tourne sur le serveur :
+ *  un navigateur ne peut pas ouvrir son dossier ; il en montre le contenu. */
+async function afficherDossier(id) {
+  const app = document.getElementById('app');
+  let d;
+  try { d = await api('GET', `/api/projets/${id}/dossier`); } catch (e) { remplir(app, h('main', { class: 'page' }, h('p', {}, e.message))); return; }
+  document.title = `Dossier — ${d.projet} — EDIVID`;
+  remplir(app, h('main', { class: 'page dossier-projet' },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, logo(), h('h1', { style: { margin: 0 } }, `Dossier de « ${d.projet} »`)),
+    h('p', { class: 'petit muet' }, 'Sur le serveur : ', h('code', {}, d.chemin),
+      h('button', { class: 'btn petit fantome', title: 'Copier le chemin', onclick: () => navigator.clipboard?.writeText(d.chemin).then(() => toast('Chemin copié.', 'ok')) }, 'Copier')),
+    d.fichiers.length ? h('div', { class: 'carte', style: { padding: '6px 14px' } }, d.fichiers.map((f) => h('div', { class: 'incrustation' },
+      h('div', { style: { minWidth: 0 } }, h('b', { class: 'petit' }, f.genre),
+        h('div', { class: 'tres-petit muet' }, `${f.nom} · ${taille(f.taille)} · ${new Date(f.date).toLocaleString('fr-FR')}`)),
+      h('a', { class: 'btn petit doux', href: `/api/projets/${id}/sorties/${encodeURIComponent(f.nom)}`, download: `${d.projet} — ${f.genre}.mp4` }, icone('telecharger'), 'Télécharger'))))
+      : h('p', { class: 'muet' }, 'Pas encore de vidéo produite.')));
 }
 
 function dialogueYoutube(x, P) {
