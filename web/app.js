@@ -2464,6 +2464,10 @@ function blocsSon(corps) {
     inscrit.calage_son !== r.calage_son ? 'le calage son/image' : null,
     !!inscrit.restauration !== !!r.restauration ? (r.restauration ? 'la voix de studio refaite par l’IA' : 'la voix sans reconstruction') : null,
   ].filter(Boolean) : [];
+  // Aperçu d'avant le relevé du son inscrit : on ne sait pas ce qu'il contient ; s'il faut une voix traitée par l'IA, on le dit.
+  if (!inscrit && E.vue.projet.apercu && (r.restauration || r.dereverberation !== 'non')) {
+    ecarts.push(r.restauration ? 'la voix de studio refaite par l’IA' : 'l’écho retiré par l’IA');
+  }
   if (ecarts.length) {
     corps.append(h('div', { class: 'aide', style: { background: 'var(--alerte-doux)', marginBottom: '10px' } }, icone('alerte'),
       h('span', {}, `L’aperçu que vous écoutez n’a pas encore ${ecarts.join(', ')} : le reste s’entend en direct, mais ceci demande « Mettre à jour l’aperçu ».`)));
