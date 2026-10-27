@@ -22,8 +22,8 @@ const CATEGORIES: &[Categorie] = &[
     Categorie { cle: "travail", titre: "Fichiers de travail",
                 aide: "Copie 10 bits de chaque rush, prête au montage. Recréée depuis le rush au prochain aperçu ou rendu (environ deux fois la durée du rush).",
                 supprimable: true },
-    Categorie { cle: "voix", titre: "Voix traitées par IA",
-                aide: "Voix débruitée ou reconstruite de chaque rush. Recalculée sur la carte graphique au prochain aperçu ou rendu qui en a besoin.",
+    Categorie { cle: "voix", titre: "Voix traitées par IA et timbres",
+                aide: "Voix séchée ou reconstruite de chaque rush, spectres et courbes de timbre. Recalculés sur la carte graphique au prochain aperçu ou rendu qui en a besoin.",
                 supprimable: true },
     Categorie { cle: "ecoutes", titre: "Écoutes d'essai", aide: "Extraits de vingt secondes des réglages de son essayés.", supprimable: true },
     Categorie { cle: "extraits", titre: "Extraits en qualité finale", aide: "Plans calculés par « Ce plan en qualité finale ».", supprimable: true },
@@ -45,7 +45,8 @@ fn chemins(etat: &EtatPartage, p: &Projet, cle: &str) -> Vec<PathBuf> {
                 if let Ok(lus) = std::fs::read_dir(travail(&r.id)) {
                     v.extend(lus.flatten().map(|e| e.path()).filter(|f| {
                         let n = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                        n.starts_with("voix_ia_") || n.starts_with("voix_reconstruite")
+                        n.starts_with("voix_ia_") || n.starts_with("voix_seche_") || n.starts_with("voix_reconstruite")
+                            || n.starts_with("spectre_") || n.starts_with("timbre_")
                     }));
                 }
             }

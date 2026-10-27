@@ -6,10 +6,13 @@ transitions, sous-titres — puis on l'ajuste en discutant avec lui, dans une in
 
 - `src/` : serveur Rust (axum) — file de travaux, découpe et cadrage, rendu ffmpeg, LLM, API.
 - `capteurs/` : adaptateurs de modèles en Python — `analyse.py` (Whisper large-v3, enveloppe
-  sonore, visage YuNet), `nettete.py` (Real-ESRGAN, GFPGAN), `rehausse.py` (écho et bruit retirés par IA : débruiteur de Resemble Enhance,
-  environnement à part `.venv-rehaussement`, poids dans `modeles/resemble-enhance`), `restaure.py` (timbre
-  reconstruit par VoiceFixer, `.venv-voicefixer`), `verifie_voix.py` (garde-fou : Whisper retranscrit la voix
-  reconstruite ; à moins de 99 % de mots identiques, toute la voix débruitée est gardée, jamais un mélange).
+  sonore, visage YuNet), `nettete.py` (Real-ESRGAN, GFPGAN), `seche_ia.py` (voix séchée : pièce et bruit retirés par
+  MossFormer2_SE_48K de ClearerVoice, un masque qui n'invente aucun mot ; `.venv-clearvoice`), `egaliseur.py`
+  (égaliseur par correspondance spectrale : spectres 1/6 d'octave, courbe traduite en biquads identiques au direct),
+  `qualite_son.py` (DNSMOS P.835, mesure sans référence), `debruite.py` (DeepFilterNet3, `.venv-deepfilter`),
+  `restaure.py` (timbre reconstruit par VoiceFixer, `.venv-voicefixer` : sert de *référence de timbre*, plus de
+  son final), `verifie_voix.py` (Whisper compare deux voix mot à mot), `separe.py` et `seche.py` (bancs d'essai),
+  `rehausse.py` (ancien débruiteur Resemble, `.venv-rehaussement`, plus utilisé par le rendu).
 - `web/` : interface (HTML, CSS, JavaScript sans dépendance).
 - `deploy/` : service utilisateur systemd et script d'installation.
 - `docs/` : plans techniques (`plan-qualite-et-pro.md` : qualité de captation, puis logiciel professionnel) ;
@@ -39,6 +42,14 @@ uv venv --python 3.11 .venv-voicefixer
 uv pip install --python .venv-voicefixer/bin/python --index-url https://download.pytorch.org/whl/cu130 \
     --extra-index-url https://pypi.org/simple torch==2.14.0 torchaudio
 uv pip install --python .venv-voicefixer/bin/python voicefixer==0.1.3
+# voix séchée (MossFormer2, ClearerVoice-Studio ; poids téléchargés au premier usage) :
+uv venv --python 3.12 .venv-clearvoice && uv pip install --python .venv-clearvoice/bin/python clearvoice soundfile
+# boîte à outils du son (égaliseur, DNSMOS, séparation d'essai) :
+uv venv --python 3.12 .venv-son && uv pip install --python .venv-son/bin/python "audio-separator[gpu]" librosa scipy soundfile numpy yt-dlp
+# DeepFilterNet3 sur le processeur (le paquet exige l'ancienne interface de torchaudio) :
+uv venv --python 3.12 .venv-deepfilter && uv pip install --python .venv-deepfilter/bin/python \
+    --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple torch==2.8.0 torchaudio==2.8.0 deepfilternet soundfile
+# DNSMOS (microsoft/DNS-Challenge, CC BY 4.0) : modeles/dnsmos/sig_bak_ovr.onnx et model_v8.onnx
 ./deploy/installer.sh
 ```
 
@@ -83,6 +94,11 @@ Google, mot de passe SMTP, compte rclone) écrits de façon atomique en 600 ; t�
   sous-titres et textes compensées (ffmpeg les dessine en BT.601).
 - Netteté IA (expérimentale, désactivée par défaut) : Real-ESRGAN mélangé à 60 % avec l'image d'origine
   agrandie ; « Ce plan en qualité finale » permet de l'essayer sur un plan.
+- Son de studio (2026-10-27) : voix séchée par IA (MossFormer2 : RT60 apparent 360 → 130 ms sur épisode 0, mots
+  intacts), timbre de référence par égaliseur de correspondance (« cette voix, sans la pièce » = spectre de sa propre
+  voix reconstruite par IA ; « voix de studio » intégrée, `bibliotheque/references_voix/` ; ou un son de la
+  médiathèque), intensité dosable, entendu en direct ; timbre « Studio chaleureux » (deux compressions douces,
+  sifflantes, rondeur) ; lieu « Studio » très court. Banc reproductible : `outils/son/banc_son.sh`.
 - Fichiers du projet (Réglages) : place par catégorie ; fichiers de travail, voix traitées, écoutes,
   extraits et temporaires se libèrent d'un clic et se recalculent au besoin.
 - Habillage permanent (logos et textes sur toute la durée, place, taille, opacité) et générique (vidéo, ou

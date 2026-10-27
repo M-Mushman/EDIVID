@@ -110,6 +110,7 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/son/direct", get(son_direct))
         // Elles lancent un calcul (processeur ou carte) : POST, jamais un simple lien qu'une page tierce suivrait.
         .route("/api/projets/{id}/son/niveau", post(son_niveau))
+        .route("/api/projets/{id}/son/reference", post(son_reference))
         .route("/api/projets/{id}/son/essai", post(essai_son))
         .route("/api/projets/{id}/plan/qualite", post(plan_qualite))
         .route("/api/projets/{id}/stockage", get(voir_stockage))
@@ -1674,10 +1675,21 @@ async fn son_direct(State(etat): State<EtatPartage>, Path(id): Path<String>) -> 
     let espace = reglages::texte(&p.reglages, "espace");
     let lieu = rendu::lieu_direct(&etat, &espace).await?.map(|(_, part)| json!({"url": format!("/api/son/lieu/{espace}"), "part": part}));
     Ok(Json(json!({
-        "filtres": rendu::filtres_direct(&p.reglages),
+        "filtres": rendu::filtres_direct(&p.reglages, &rendu::filtres_timbre(&etat, &id, &p.reglages).await),
         "lieu": lieu,
+        "timbre": {"reference": reglages::texte(&p.reglages, "reference_timbre"), "prete": rendu::reference_prete(&etat, &p)},
         "pistes": p.apercu.as_ref().map(|a| a.rapport["son_direct"].clone()),
     })))
+}
+
+/// Référence « cette voix, sans la pièce » : calculée sur la carte graphique (séchage, reconstruction d'une minute,
+/// spectre), environ une minute.
+async fn son_reference(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    if etat.file.occupe(&id) {
+        return Err(refus("un travail est en cours sur ce projet : attendez sa fin"));
+    }
+    rendu::calculer_reference_cette_voix(&etat, &id).await?;
+    Ok(Json(json!({"prete": true})))
 }
 
 /// Gain final du son en direct pour les réglages actuels (quelques secondes la première fois, puis gardé).

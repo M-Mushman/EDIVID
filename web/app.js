@@ -907,7 +907,7 @@ function majHabillageDirect(enCours = null) {
   n.habillage.regler(liste, actif);
 }
 
-const CLES_SON_DIRECT = ['reverberation', 'voix', 'timbre_voix', 'harmoniques', 'deesseur', 'espace'];
+const CLES_SON_DIRECT = ['reverberation', 'voix', 'timbre_voix', 'harmoniques', 'deesseur', 'espace', 'reference_timbre', 'reference_media', 'intensite_timbre'];
 let sonDirectCle = '';
 let sonNiveau = { cle: '', gain: 9 };
 
@@ -930,6 +930,7 @@ async function majSonDirect(forcer = false) {
     const d = await api('GET', `/api/projets/${E.projetId}/son/direct`);
     const url = (f) => (f ? `/api/projets/${E.projetId}/sorties/${encodeURIComponent(f)}` : '');
     const cleNiveau = JSON.stringify([p.apercu.fichier, d.filtres, d.lieu?.url || '']);
+    E.timbreDirect = d.timbre || null;
     const config = { actif: true, filtres: d.filtres, lieuUrl: d.lieu?.url || '', part: d.lieu?.part || 0,
       gainDb: sonNiveau.gain, pistes: { fond: url(pistesAp.fond), generique: url(pistesAp.generique) } };
     await n.son.regler(config);
@@ -2475,6 +2476,20 @@ function blocsSon(corps) {
   h('div', { style: { marginBottom: '10px' } }, boutonEcoute('actuel', 'Écouter le son actuel')),
   cartesAmbiances(),
   h('h4', { class: 'titre-famille', style: { marginTop: '18px' } }, active ? `Ajuster « ${active.nom} »` : 'Ajuster'),
+  ligneSon('Timbre de référence', R('reference_timbre').aide, [controleReglage(R('reference_timbre'), r.reference_timbre),
+    r.reference_timbre === 'media' ? h('div', { style: { marginTop: '6px' } }, controleReglage(R('reference_media'), r.reference_media)) : null,
+    r.reference_timbre === 'cette_voix' ? h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' } },
+      h('button', { class: `btn petit ${E.timbreDirect?.prete ? 'doux' : 'primaire'}`, disabled: E.vue.occupe,
+        title: 'Une minute de votre voix est séchée puis reconstruite en studio par IA sur la carte graphique (environ une minute) ; seul son spectre est gardé',
+        onclick: async (e) => {
+          e.target.disabled = true; e.target.textContent = 'Calcul en cours…';
+          try { await api('POST', `/api/projets/${E.projetId}/son/reference`); toast('Référence de timbre prête.', 'ok'); await majSonDirect(true); }
+          catch (err) { toast(err.message, 'erreur'); }
+          dessinerPanneau();
+        } }, E.timbreDirect?.prete ? 'Recalculer la référence' : 'Calculer la référence (carte graphique, ~1 min)'),
+      h('span', { class: 'tres-petit muet' }, E.timbreDirect?.prete ? 'Référence prête : l’égaliseur s’entend en direct.' : 'Tant qu’elle n’est pas calculée, l’égaliseur n’agit pas.')) : null],
+  'direct'),
+  r.reference_timbre !== 'aucune' ? ligne('intensite_timbre', 'direct') : null,
   ligneSon('Timbre', 'La couleur de la voix : égaliseur et compression qui lisse les écarts de volume.', choixTimbre, 'direct'),
   ligne('harmoniques', 'direct'),
   ligne('deesseur', 'direct'),

@@ -995,10 +995,11 @@ async fn bruitage(etat: &EtatPartage) -> Result<PathBuf> {
 /// timbre, sifflantes, acoustique de lieu, calage. Le rendu final et l'écoute d'essai la jouent en entier
 /// (`entiere`). L'aperçu n'en garde que la base (niveau, bruit, calage) : le navigateur joue le reste en direct,
 /// à partir des mêmes filtres (`filtres_direct`).
-fn graphe_voix(r: &crate::reglages::Reglages, gain: f64, entree: &str, sortie: &str, ir: Option<&(PathBuf, f64)>, entiere: bool) -> Vec<String> {
+fn graphe_voix(r: &crate::reglages::Reglages, gain: f64, entree: &str, sortie: &str, ir: Option<&(PathBuf, f64)>, entiere: bool,
+               timbre: &[String]) -> Vec<String> {
     let mut a = filtres_base(r, gain);
     if entiere {
-        a.extend(filtres_direct(r));
+        a.extend(filtres_direct(r, timbre));
     }
     let ir = ir.filter(|_| entiere);
     // Calage demandé par la personne : positif = son retardé, négatif = son avancé.
@@ -1044,12 +1045,13 @@ fn filtres_base(r: &crate::reglages::Reglages, gain: f64) -> Vec<String> {
 }
 
 /// Réglages du son joués en direct par le navigateur sur l'aperçu (ils ne changent pas l'aperçu rendu).
-pub const REGLAGES_SON_DIRECT: &[&str] = &["reverberation", "voix", "timbre_voix", "harmoniques", "deesseur", "espace"];
+pub const REGLAGES_SON_DIRECT: &[&str] = &["reverberation", "voix", "timbre_voix", "harmoniques", "deesseur", "espace",
+                                           "reference_timbre", "reference_media", "intensite_timbre"];
 
 /// Partie de la chaîne de la voix jouée en direct sur l'aperçu : porte de traîne, timbre, sifflantes. Le navigateur
 /// (web/son-dsp.js) exécute ces mêmes filtres ffmpeg ; il n'en connaît que ceux-ci : highpass, lowpass,
 /// equalizer, bass, treble, agate, acompressor, deesser, aexciter.
-pub fn filtres_direct(r: &crate::reglages::Reglages) -> Vec<String> {
+pub fn filtres_direct(r: &crate::reglages::Reglages, timbre: &[String]) -> Vec<String> {
     let mut a = Vec::new();
     // Écho de la pièce : une porte douce baisse la traîne entre les phrases, après avoir retiré le grave boueux.
     match texte(r, "reverberation").as_str() {
@@ -1058,8 +1060,17 @@ pub fn filtres_direct(r: &crate::reglages::Reglages) -> Vec<String> {
                            agate=threshold=0.02:ratio=5:range=0.1:attack=2:release=90:knee=1.5".into()),
         _ => {}
     }
+    // Égaliseur de correspondance (référence de timbre) : avant le timbre fixe, qui ne fait plus que la finition.
+    a.extend(timbre.iter().cloned());
     if vrai(r, "voix") {
         a.push(match texte(r, "timbre_voix").as_str() {
+            // Studio chaleureux : passe-haut, boue retirée, chaleur, présence et air mesurés (l'égaliseur de référence
+            // fait le gros), niveleur lent puis compresseur de crêtes, sifflantes, harmoniques douces (rondeur).
+            "studio_chaud" => "highpass=f=75,equalizer=f=350:t=q:w=1.2:g=-2,bass=g=2.5:f=170:w=0.8,\
+                               equalizer=f=3200:t=q:w=1.3:g=1.5,treble=g=1:f=11000:w=0.7,\
+                               acompressor=threshold=-24dB:ratio=2:attack=40:release=400:knee=6,\
+                               acompressor=threshold=-16dB:ratio=3.5:attack=8:release=120:knee=3:makeup=3,\
+                               deesser=i=0.35,aexciter=amount=0.4:drive=5:freq=3000:blend=2",
             // Chaud et profond : du corps dans le bas (150 Hz), moins de nasal (400 Hz), une présence douce, des
             // aigus adoucis, une compression lente qui ne pompe pas.
             "chaud" => "highpass=f=70,bass=g=3.5:f=150:w=0.7,equalizer=f=420:t=q:w=1.3:g=-2,\
@@ -1113,7 +1124,8 @@ pub fn filtres_direct(r: &crate::reglages::Reglages) -> Vec<String> {
 pub async fn niveau_direct(etat: &EtatPartage, p: &Projet) -> Result<f64> {
     let a = p.apercu.as_ref().ok_or_else(|| anyhow!("pas encore d'aperçu"))?;
     let sorties = etat.dossier_projet(&p.id).join("sorties");
-    let filtres = filtres_direct(&p.reglages);
+    let timbre = filtres_timbre(etat, &p.id, &p.reglages).await;
+    let filtres = filtres_direct(&p.reglages, &timbre);
     let espace = texte(&p.reglages, "espace");
     let cle = format!("{}|{espace}", filtres.join(","));
     let memo = sorties.join(format!("{}.niveaux.json", a.fichier.trim_end_matches(".mp4")));
@@ -1172,13 +1184,15 @@ fn part_ia(force: &str) -> Option<f64> {
     }
 }
 
-/// Débruiteur IA (capteurs/rehausse.py) sur un fichier, sous bail de la carte graphique.
-async fn debruiter(etat: &EtatPartage, projet: &str, entree: &Path, sortie: &Path, part: f64, duree_s: f64) -> Result<()> {
+/// Voix séchée par IA (capteurs/seche_ia.py, MossFormer2 : pièce et bruit retirés par masque, aucun mot inventé),
+/// sous bail de la carte graphique. A remplacé le débruiteur de Resemble (rehausse.py), qui ne retirait pas la
+/// réverbération (banc du 2026-10-27 : RT60 apparent 360 → 130 ms contre 345 ms).
+async fn secher(etat: &EtatPartage, projet: &str, entree: &Path, sortie: &Path, part: f64, duree_s: f64) -> Result<()> {
     let bail = etat
         .carte
-        .prendre(etat, projet, "other:rehaussement", carte::VRAM_REHAUSSEMENT_MO, (duree_s / 30.0 + 60.0) as u64)
+        .prendre(etat, projet, "other:sechage", carte::VRAM_SECHAGE_MO, (duree_s / 20.0 + 90.0) as u64)
         .await?;
-    let res = capteur(etat, projet, "rehausse.py", &[entree.to_string_lossy().into(), sortie.to_string_lossy().into(), format!("{part}")]).await;
+    let res = capteur(etat, projet, "seche_ia.py", &[entree.to_string_lossy().into(), sortie.to_string_lossy().into(), format!("{part}")]).await;
     etat.carte.rendre(bail).await;
     res
 }
@@ -1226,26 +1240,152 @@ fn bilans_voix(etat: &EtatPartage, p: &Projet) -> Value {
     }).collect::<Vec<_>>())
 }
 
-/// Son du rush sans l'écho ni le bruit de la pièce (débruiteur IA), calculé une fois par rush et par dosage.
+/// Son du rush sans la pièce ni le bruit (voix séchée par IA), calculé une fois par rush et par dosage.
 async fn voix_sans_echo(etat: &EtatPartage, projet: &str, rush: &str, force: &str, duree_s: f64) -> Result<Option<PathBuf>> {
     let Some(part) = part_ia(force) else { return Ok(None) };
     let dossier = etat.dossier_travail(projet, rush);
-    let f = dossier.join(format!("voix_ia_{force}.wav"));
+    let f = dossier.join(format!("voix_seche_{force}.wav"));
     if !f.exists() {
-        let provisoire = dossier.join(format!("voix_ia_{force}.en-cours.wav"));
-        debruiter(etat, projet, &dossier.join("mezz.mkv"), &provisoire, part, duree_s).await?;
+        let provisoire = dossier.join(format!("voix_seche_{force}.en-cours.wav"));
+        secher(etat, projet, &dossier.join("mezz.mkv"), &provisoire, part, duree_s).await?;
         tokio::fs::rename(&provisoire, &f).await?;
     }
     Ok(Some(f))
 }
 
+/// Fichier de la voix telle qu'elle entre dans la chaîne directe (séchée si le réglage le demande et si elle est
+/// déjà calculée, sinon le rush), et sa clé pour les spectres.
+fn source_timbre(etat: &EtatPartage, projet: &str, rush: &str, r: &crate::reglages::Reglages) -> (PathBuf, String) {
+    let dossier = etat.dossier_travail(projet, rush);
+    let force = texte(r, "dereverberation");
+    let seche = dossier.join(format!("voix_seche_{force}.wav"));
+    if part_ia(&force).is_some() && seche.exists() {
+        (seche, format!("seche_{force}"))
+    } else {
+        (dossier.join("mezz.mkv"), "brut".into())
+    }
+}
+
+/// Spectre moyen d'une voix (egaliseur.py spectre), gardé dans `sortie` ; `analyse` et `debut` isolent les mots.
+async fn spectre_voix(etat: &EtatPartage, projet: &str, son: &Path, sortie: &Path, analyse: Option<&Path>, debut: f64) -> Result<()> {
+    if sortie.exists() {
+        return Ok(());
+    }
+    let mut args = vec![son.to_string_lossy().into_owned(), sortie.to_string_lossy().into_owned()];
+    if let Some(a) = analyse {
+        args.extend([a.to_string_lossy().into_owned(), format!("{debut}")]);
+    }
+    capteur(etat, projet, "egaliseur.py", &[&["spectre".to_string()][..], &args[..]].concat()).await
+}
+
+/// Référence « cette voix, sans la pièce » : spectre d'une minute de la voix reconstruite par VoiceFixer (générative :
+/// on ne garde que son spectre, jamais son son). Calculée à la demande, gardée dans le dossier du rush.
+pub async fn calculer_reference_cette_voix(etat: &EtatPartage, projet: &str) -> Result<()> {
+    let p = etat.projet(projet).await?;
+    let rush = p.rushs.first().map(|r| r.id.clone()).ok_or_else(|| anyhow!("aucun rush"))?;
+    let a = etat.analyse(projet, &rush).await?;
+    let dossier = etat.dossier_travail(projet, &rush);
+    let sortie = dossier.join("spectre_reference_cette_voix.json");
+    let debut = a.mots.first().map(|m| (m.t0 - 0.3).max(0.0)).unwrap_or(0.0);
+    let duree = 60f64.min(a.duree - debut);
+    let (source, _) = source_timbre(etat, projet, &rush, &p.reglages);
+    let extrait = dossier.join("reference.extrait.wav");
+    let seche = dossier.join("reference.seche.wav");
+    let refaite = dossier.join("reference.reconstruite.wav");
+    ffmpeg_simple(vec!["-ss".into(), format!("{debut:.3}"), "-t".into(), format!("{duree:.3}"), "-i".into(), source.to_string_lossy().into(),
+                       "-vn".into(), "-ar".into(), "48000".into(), "-ac".into(), "2".into(), "-c:a".into(), "pcm_s16le".into(), extrait.to_string_lossy().into()]).await?;
+    let res = async {
+        secher(etat, projet, &extrait, &seche, 1.0, duree).await?;
+        let bail = etat.carte.prendre(etat, projet, "other:restauration", carte::VRAM_RESTAURATION_MO, (duree / 40.0 + 60.0) as u64).await?;
+        let r = capteur(etat, projet, "restaure.py", &[seche.to_string_lossy().into(), refaite.to_string_lossy().into()]).await;
+        etat.carte.rendre(bail).await;
+        r?;
+        let _ = tokio::fs::remove_file(&sortie).await;
+        spectre_voix(etat, projet, &refaite, &sortie, Some(&dossier.join("analyse.json")), debut).await
+    }.await;
+    for f in [&extrait, &seche, &refaite] {
+        let _ = tokio::fs::remove_file(f).await;
+    }
+    // Les courbes calculées avec l'ancienne référence ne valent plus.
+    if let Ok(mut lus) = tokio::fs::read_dir(&dossier).await {
+        while let Ok(Some(e)) = lus.next_entry().await {
+            if e.file_name().to_string_lossy().starts_with("timbre_") && e.file_name().to_string_lossy().contains("_cette_voix_") {
+                let _ = tokio::fs::remove_file(e.path()).await;
+            }
+        }
+    }
+    res
+}
+
+/// La référence de timbre est-elle prête (sa courbe peut-elle se calculer) ?
+pub fn reference_prete(etat: &EtatPartage, p: &Projet) -> bool {
+    let Some(rush) = p.rushs.first() else { return false };
+    match texte(&p.reglages, "reference_timbre").as_str() {
+        "cette_voix" => etat.dossier_travail(&p.id, &rush.id).join("spectre_reference_cette_voix.json").exists(),
+        "studio" => true,
+        "media" => p.medias.iter().any(|m| m.id == texte(&p.reglages, "reference_media") && m.genre == "son"),
+        _ => false,
+    }
+}
+
+/// Filtres de l'égaliseur de correspondance (biquads, joués à l'identique en direct) pour les réglages `r` : la voix
+/// du premier rush, telle qu'elle entre dans la chaîne, ramenée vers la référence choisie, à l'intensité voulue.
+/// Vide si aucune référence, ou si elle n'est pas encore calculée.
+pub async fn filtres_timbre(etat: &EtatPartage, projet: &str, r: &crate::reglages::Reglages) -> Vec<String> {
+    match filtres_timbre_interne(etat, projet, r).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("égaliseur de timbre de {projet} : {e}");
+            vec![]
+        }
+    }
+}
+
+async fn filtres_timbre_interne(etat: &EtatPartage, projet: &str, r: &crate::reglages::Reglages) -> Result<Vec<String>> {
+    let reference = texte(r, "reference_timbre");
+    let intensite = (nombre(r, "intensite_timbre") / 100.0).clamp(0.0, 1.0);
+    if reference == "aucune" || intensite <= 0.0 {
+        return Ok(vec![]);
+    }
+    let p = etat.projet(projet).await?;
+    if !reference_prete(etat, &p) {
+        return Ok(vec![]);
+    }
+    let rush = p.rushs.first().map(|x| x.id.clone()).ok_or_else(|| anyhow!("aucun rush"))?;
+    let dossier = etat.dossier_travail(projet, &rush);
+    let (source, cle_source) = source_timbre(etat, projet, &rush, r);
+    let spectre_source = dossier.join(format!("spectre_{cle_source}.json"));
+    spectre_voix(etat, projet, &source, &spectre_source, Some(&dossier.join("analyse.json")), 0.0).await?;
+    let (spectre_ref, cle_ref) = match reference.as_str() {
+        "cette_voix" => (dossier.join("spectre_reference_cette_voix.json"), "cette_voix".to_string()),
+        "studio" => (etat.cfg.racine.join("bibliotheque").join("references_voix").join("studio.json"), "studio".to_string()),
+        _ => {
+            let id = texte(r, "reference_media");
+            let m = p.medias.iter().find(|m| m.id == id).ok_or_else(|| anyhow!("son de référence introuvable"))?;
+            let s = dossier.join(format!("spectre_media_{id}.json"));
+            spectre_voix(etat, projet, &etat.dossier_projet(projet).join("medias").join(&m.fichier), &s, None, 0.0).await?;
+            (s, format!("media_{id}"))
+        }
+    };
+    let courbe = dossier.join(format!("timbre_{cle_source}_{cle_ref}_{}.json", (intensite * 100.0).round() as u32));
+    if !courbe.exists() {
+        capteur(etat, projet, "egaliseur.py", &["courbe".into(), spectre_source.to_string_lossy().into(), spectre_ref.to_string_lossy().into(),
+                                                  format!("{intensite:.2}"), courbe.to_string_lossy().into()]).await?;
+    }
+    let v: Value = serde_json::from_str(&tokio::fs::read_to_string(&courbe).await?)?;
+    Ok(v["filtres"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(String::from)).collect())
+}
+
 /// Écoute d'essai : `duree` secondes d'un rush à partir de `debut`, traitées avec les réglages de son donnés, en
 /// MP3. Tout se fait sur le processeur ; le résultat est gardé (même extrait, mêmes réglages : même fichier).
 pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64, duree: f64, r: &crate::reglages::Reglages) -> Result<Vec<u8>> {
-    let cles = ["debruitage", "dereverberation", "restauration", "reverberation", "voix", "timbre_voix", "harmoniques", "deesseur", "espace"];
+    let cles = ["debruitage", "dereverberation", "restauration", "reverberation", "voix", "timbre_voix", "harmoniques", "deesseur", "espace",
+                "calage_son", "reference_timbre", "reference_media", "intensite_timbre"];
+    let timbre = filtres_timbre(etat, projet, r).await;
     let empreinte = {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        format!("{debut:.2}-{duree:.2}-{}", cles.iter().map(|c| r.get(*c).map(|v| v.to_string()).unwrap_or_default()).collect::<Vec<_>>().join("|"))
+        format!("{debut:.2}-{duree:.2}-{}|{}", cles.iter().map(|c| r.get(*c).map(|v| v.to_string()).unwrap_or_default()).collect::<Vec<_>>().join("|"),
+                timbre.join(","))
             .hash(&mut h);
         format!("{:016x}", h.finish())
     };
@@ -1263,7 +1403,7 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
     let mut source = extrait.clone();
     if vrai(r, "restauration") {
         let sans = dossier.join(format!("{empreinte}-sans-echo.wav"));
-        debruiter(etat, projet, &extrait, &sans, 1.0, duree).await?;
+        secher(etat, projet, &extrait, &sans, 1.0, duree).await?;
         let refaite = dossier.join(format!("{empreinte}-reconstruite.wav"));
         reconstruire(etat, projet, &sans, &etat.dossier_travail(projet, rush).join("analyse.json"), &refaite, debut, duree,
                      &dossier.join(format!("{empreinte}-bilan.json"))).await?;
@@ -1271,12 +1411,12 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
         source = refaite;
     } else if let Some(part) = part_ia(&texte(r, "dereverberation")) {
         let sans = dossier.join(format!("{empreinte}-sans-echo.wav"));
-        debruiter(etat, projet, &extrait, &sans, part, duree).await?;
+        secher(etat, projet, &extrait, &sans, part, duree).await?;
         source = sans;
     }
     let gain = sonie_rush(etat, projet, rush).await.map(|i| (-23.0 - i).clamp(-12.0, 30.0)).unwrap_or(0.0);
     let ir = reponse_espace(etat, &texte(r, "espace")).await?;
-    let mut fc = graphe_voix(r, gain, "0:a", "voix", ir.as_ref(), true);
+    let mut fc = graphe_voix(r, gain, "0:a", "voix", ir.as_ref(), true, &timbre);
     fc.push("[voix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]".into());
     ffmpeg_simple(vec!["-i".into(), source.to_string_lossy().into(), "-filter_complex".into(), fc.join(";"),
                        "-map".into(), "[a]".into(), "-c:a".into(), "libmp3lame".into(), "-q:a".into(), "3".into(), mp3.to_string_lossy().into()])
@@ -1292,6 +1432,8 @@ pub async fn essai_son(etat: &EtatPartage, projet: &str, rush: &str, debut: f64,
 fn lieu(nom: &str) -> Option<(f64, u32, u32, f64)> {
     let dosage = |sous_la_voix: f64| 10f64.powf((sous_la_voix - 9.0) / 20.0);
     match nom {
+        // Studio : une pièce sèche et proche, posée sur la voix dont on a retiré la vraie pièce (« enveloppant »).
+        "studio" => Some((0.18, 6000, 8, dosage(-22.0))),
         "chambre" => Some((0.3, 7000, 3, dosage(-18.0))),
         "conference" => Some((1.0, 5000, 15, dosage(-12.0))),
         "salle" => Some((1.8, 4500, 25, dosage(-9.0))),
@@ -1389,6 +1531,9 @@ pub fn resume_son(r: &crate::reglages::Reglages) -> String {
         morceaux.push("timbre reconstruit par l'IA, vérifié mot à mot".into());
     }
     morceaux.push(if vrai(r, "voix") { format!("voix : {}", choix("timbre_voix").to_lowercase()) } else { "voix : sans traitement".into() });
+    if texte(r, "reference_timbre") != "aucune" {
+        morceaux.push(format!("timbre ramené vers « {} » à {:.0} %", choix("reference_timbre").to_lowercase(), nombre(r, "intensite_timbre")));
+    }
     if vrai(r, "deesseur") {
         morceaux.push("« s » adoucis".into());
     }
@@ -1548,7 +1693,8 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     // Son.
     let gain = gain_voix(etat, p, prog).await;
     let ir = reponse_espace(etat, &texte(r, "espace")).await?;
-    fc.extend(graphe_voix(r, gain, "0:a", "voix", ir.as_ref(), !apercu));
+    let timbre = filtres_timbre(etat, &p.id, r).await;
+    fc.extend(graphe_voix(r, gain, "0:a", "voix", ir.as_ref(), !apercu, &timbre));
     let mut melange = vec!["voix".to_string()];
     let musique = texte(r, "musique");
     if let Some(m) = p.medias.iter().find(|m| m.id == musique && nombre(r, "volume_musique") > 0.0) {
@@ -2292,10 +2438,10 @@ mod tests {
             // Une ambiance ne contredit pas les règles du son : appliquée, elle reste telle quelle.
             assert!(crate::reglages::accorder_son(&mut r.clone()).is_empty(), "{} : réglages du son contradictoires", a["cle"]);
             let ir = lieu(&texte(&r, "espace")).map(|(_, _, _, part)| (dossier.join(format!("lieu_{}.wav", texte(&r, "espace"))), part));
-            let mut fc = graphe_voix(&r, 20.0, "0:a", "voix", ir.as_ref(), true);
+            let mut fc = graphe_voix(&r, 20.0, "0:a", "voix", ir.as_ref(), true, &[]);
             fc.push("[voix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[a]".into());
             std::fs::write(dossier.join(format!("{}.graphe", a["cle"].as_str().unwrap())), fc.join(";")).unwrap();
-            std::fs::write(dossier.join(format!("{}.direct", a["cle"].as_str().unwrap())), filtres_direct(&r).join("\n")).unwrap();
+            std::fs::write(dossier.join(format!("{}.direct", a["cle"].as_str().unwrap())), filtres_direct(&r, &[]).join("\n")).unwrap();
         }
     }
 }

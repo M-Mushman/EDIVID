@@ -284,9 +284,9 @@ pub const CATALOGUE: &[Reglage] = &[
         section: "Son",
         cle: "timbre_voix",
         titre: "Timbre de la voix",
-        aide: "Avec « Voix plus présente ». Clair : voix en avant, aigus soulignés. Chaud : plus de corps, aigus adoucis. Naturel : seulement lissée. \
+        aide: "Avec « Voix plus présente ». Studio chaleureux : chaîne de studio (nettoyage, chaleur, présence, air, deux compressions douces, sifflantes, rondeur), à combiner au timbre de référence. Clair : voix en avant, aigus soulignés. Chaud : plus de corps, aigus adoucis. Naturel : seulement lissée. \
                Podcast : voix de studio, très régulière. Graves renforcés, Aigus adoucis : une seule correction. Radio, Téléphone : effets de style.",
-        genre: Genre::Choix(&[("clair", "Clair et présent"), ("chaud", "Chaud et profond"), ("naturel", "Naturel"), ("podcast", "Podcast"),
+        genre: Genre::Choix(&[("studio_chaud", "Studio chaleureux"), ("clair", "Clair et présent"), ("chaud", "Chaud et profond"), ("naturel", "Naturel"), ("podcast", "Podcast"),
                               ("graves", "Graves renforcés"), ("aigus_doux", "Aigus adoucis"), ("radio", "Radio"), ("telephone", "Téléphone"), ("proche", "Proche"),
                               ("exterieur", "Extérieur")]),
         defaut: || json!("clair"),
@@ -304,18 +304,44 @@ pub const CATALOGUE: &[Reglage] = &[
         section: "Son",
         cle: "dereverberation",
         titre: "Retirer l'écho de la voix",
-        aide: "Retire par IA l'écho de la pièce et le bruit, pendant que la voix parle comme entre les phrases, sans changer les mots \
-               (débruiteur de Resemble Enhance, sur la carte graphique ; quelques secondes par rush, la première fois). Douce : en \
-               partie, le son garde de l'air.",
+        aide: "Sèche la voix par IA : la pièce (réverbération) et le bruit retirés, pendant que la voix parle comme entre les phrases, sans \
+               changer les mots (MossFormer2, un masque, pas une reconstruction ; quinze secondes par rush sur la carte graphique, la première \
+               fois). Douce : en partie, le son garde de l'air.",
         genre: Genre::Choix(&[("non", "Non"), ("douce", "Douce"), ("forte", "Forte")]),
         defaut: || json!("non"),
     },
     Reglage {
         section: "Son",
+        cle: "reference_timbre",
+        titre: "Timbre de référence",
+        aide: "Égaliseur par correspondance : le spectre moyen de votre voix est ramené vers celui d'une référence. « Cette voix, sans la pièce » : \
+               votre propre voix reconstruite en studio par IA (on n'en garde que la couleur, jamais le son). « Voix de studio » : une voix parlée \
+               enregistrée en studio. « Un son de la médiathèque » : votre enregistrement de référence (bon micro).",
+        genre: Genre::Choix(&[("aucune", "Aucune"), ("cette_voix", "Cette voix, sans la pièce"), ("studio", "Voix de studio"), ("media", "Un son de la médiathèque")]),
+        defaut: || json!("aucune"),
+    },
+    Reglage {
+        section: "Son",
+        cle: "reference_media",
+        titre: "Son de référence",
+        aide: "Avec « Un son de la médiathèque » : l'enregistrement dont on emprunte la couleur.",
+        genre: Genre::MediaSon,
+        defaut: || json!(""),
+    },
+    Reglage {
+        section: "Son",
+        cle: "intensite_timbre",
+        titre: "Intensité du timbre de référence",
+        aide: "100 % : la correction complète (jusqu'à ±8 dB par bande). 60 % emprunte la couleur sans copier la voix de référence.",
+        genre: Genre::Curseur { min: 0.0, max: 100.0, unite: "%" },
+        defaut: || json!(60),
+    },
+    Reglage {
+        section: "Son",
         cle: "espace",
         titre: "Acoustique d'un lieu",
-        aide: "Prête à la voix la résonance d'un lieu : une petite pièce, une salle de conférence, une grande salle, une cathédrale.",
-        genre: Genre::Choix(&[("aucun", "Aucune"), ("chambre", "Petite pièce"), ("conference", "Salle de conférence"),
+        aide: "Prête à la voix la résonance d'un lieu : un studio (très court, enveloppant, après avoir séché la voix), une petite pièce, une salle de conférence, une grande salle, une cathédrale.",
+        genre: Genre::Choix(&[("aucun", "Aucune"), ("studio", "Studio (enveloppant)"), ("chambre", "Petite pièce"), ("conference", "Salle de conférence"),
                               ("salle", "Grande salle"), ("cathedrale", "Cathédrale")]),
         defaut: || json!("aucun"),
     },

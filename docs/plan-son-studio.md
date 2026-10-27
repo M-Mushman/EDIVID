@@ -159,3 +159,16 @@ compression en deux étages → dé-esseur → timbre → harmoniques. Uniquemen
   (ambiances valides, règles du son), banc d'interface (`outils/banc/banc.cjs`) sur le bloc son.
 - **Recette** : un aperçu d'épisode 0 avec l'ambiance `studio_feutre` revue, écouté en direct dans l'interface
   (bascule « Son en direct » pour comparer avec la voix de base), puis un rendu final 1080p.
+
+## Résultats du banc (2026-10-27, épisode 0) — `essais/2026-10-27-son-studio/tableau.md`
+
+- Traîne apparente (RT60 estimé) : rush 360 ms ; séparation UVR (mel-band roformer, bs-roformer, DeEcho, Reverb HQ)
+  et Resemble : inchangée (ces modèles ne voient pas la réverbération d'une petite pièce) ; WPE 340 ms ;
+  soustraction de traîne 220 ms ; DeepFilterNet3 197 ms ; **MossFormer2_SE_48K 130 ms** ; VoiceFixer 140 ms.
+- Mots (Whisper) : MossFormer2 et DeepFilterNet3 intacts (seule « différence » : « email » / « e-mail »).
+- DNSMOS : MossFormer2 + référence « cette voix » + chaîne studio 2,63 contre 2,32 brut (VoiceFixer 3,26, mais
+  génératif, écarté). DNSMOS récompense peu la sécheresse : le RT60 apparent est la mesure utile ici.
+- Retenu : MossFormer2 comme moteur de `dereverberation` (254 Mo de VRAM, 14 s pour 11 min), référence de timbre
+  « cette voix, sans la pièce » (spectre de la reconstruction VoiceFixer d'une minute, calculé en 9 s), timbre
+  « Studio chaleureux », lieu « Studio ». Ambiances `studio_feutre`, `podcast`, `voix_off`, `chambre_proximite`
+  réglées ainsi. L'écoute du porteur du projet (MP3 numérotés dans `ecoute/`) fixera l'intensité par défaut.
