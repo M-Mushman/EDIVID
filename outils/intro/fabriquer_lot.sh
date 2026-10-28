@@ -3,7 +3,8 @@
 # Attend la fin du service edivid-intro (même carte), puis :
 # 1. décor prolongé par FLUX.2 klein pour chaque photo (un seul bail) ;
 # 2. photo par photo : 2 tirages Wan par format (un bail par photo, la carte est rendue entre deux photos),
-#    puis les trois formats assemblés pour chaque tirage, avec le jingle par défaut.
+#    le visage de la photo recollé sur chaque tirage (visage.py), puis les trois formats assemblés pour chaque
+#    tirage, avec le jingle par défaut.
 # Journal : <dossier>/lot.log ; résultats : <dossier>/RESULTATS_LOT.md et planches/.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
@@ -45,7 +46,9 @@ regard = {"camera": "She keeps looking straight into the camera lens with a warm
           "profile": "She keeps her face in profile with a gentle smile.",
           "main": "She keeps looking at her open hand with a gentle smile."}[f["regard"]]
 decor = {"studio": "in front of a plain light grey studio backdrop", "rue": "in a quiet old Paris street"}[f["fond"]]
-consigne = (f"Cinematic fashion photo shoot. The camera slowly and smoothly pushes in towards her, a very subtle movement. "
+# Caméra presque immobile : une avancée franche, sur une pose en pied, la sortait du cadre (essai du 2026-10-28).
+consigne = (f"Cinematic fashion photo shoot. The camera is almost static: an extremely slow, barely perceptible push-in, "
+            f"the framing stays the same and her whole figure stays in frame. "
             f"A smiling woman with long blond hair, wearing {f['tenue']}, {f['pose']}, holds her pose perfectly still {decor}. "
             f"{regard} A gentle breeze softly lifts and floats strands of her long blond hair. Minimal body movement, only "
             f"natural breathing; no turning, no gestures. Professional lighting, sharp focus, realistic skin, high detail.")
@@ -59,17 +62,24 @@ EOF
     outils/intro/sous_bail.sh 13500 2400 $PY outils/intro/anime_wan.py --lot "$L/$nom/travaux.json" 2>&1 \
       | grep --line-buffered -E '"graine"|total_s|Error|bail' || echo "!! $nom : animation en échec"
   fi
+  # Visage de la photo recollé sur chaque tirage (processeur seul) : Wan déforme les visages de petite taille.
+  for g in 31 32; do for fmt in horizontal vertical; do
+    a="$L/$nom/anim_${fmt}_g$g.mp4"; r="$L/$nom/visage_${fmt}_g$g.mp4"
+    [ -s "$a" ] && ! [ "$r" -nt "$a" ] || continue
+    nice $PY outils/intro/visage.py "$a" "$I/sources/$nom.jpg" "$r" 2>&1 | grep -v -E 'WARN|setPreferable' \
+      || echo "!! $nom $fmt g$g : visage en échec"
+  done; done
   [ -n "$DEF" ] || continue
   for g in 31 32; do
-    h="$L/$nom/anim_horizontal_g$g.mp4"; v="$L/$nom/anim_vertical_g$g.mp4"
+    h="$L/$nom/visage_horizontal_g$g.mp4"; v="$L/$nom/visage_vertical_g$g.mp4"
     [ -s "$h" ] && [ -s "$v" ] || continue
-    [ -s "$L/$nom/rendus_g$g/intro_1080x1920.mp4" ] && continue
+    [ "$L/$nom/rendus_g$g/intro_1080x1920.mp4" -nt "$v" ] && [ "$L/$nom/rendus_g$g/intro_1080x1920.mp4" -nt "$h" ] && continue
     $PY outils/intro/composer.py "$h" "$v" "$DEF.wav" $LOGO "$L/$nom/rendus_g$g" "$DEBUT" || echo "!! $nom g$g : assemblage en échec"
   done
   # Planche : 4 images de chaque tirage, pour choisir d'un coup d'œil.
   mkdir -p $I/planches
   for g in 31 32; do for fmt in horizontal vertical; do
-    a="$L/$nom/anim_${fmt}_g$g.mp4"; [ -s "$a" ] || continue
+    a="$L/$nom/visage_${fmt}_g$g.mp4"; [ -s "$a" ] || continue
     ffmpeg -v error -y -i "$a" -vf "select='eq(n\,0)+eq(n\,30)+eq(n\,60)+eq(n\,92)',scale=-2:360,tile=4x1" -frames:v 1 \
       "$I/planches/${nom}_${fmt}_g$g.jpg"
   done; done

@@ -14,7 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+import numpy as np
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 POLICE = "/usr/share/fonts/opentype/urw-base35/NimbusSans-Bold.otf"
 LIGNES = ["Être heureux", "et en forme", "après 50 ans,", "c’est possible !"]
@@ -42,8 +43,30 @@ def titre(largeur_max: int, taille_max: int, centre: bool) -> Image.Image:
     return img
 
 
-def calques(w: int, h: int, logo_src: Image.Image, dossier: Path) -> tuple[Path, Path, int, int, int, int]:
-    """Logo et titre à la taille du format ; renvoie leurs fichiers et positions."""
+def fond_charge(video: Path, w: int, h: int, zone: tuple[int, int, int, int]) -> bool:
+    """Le décor sous le titre est-il chargé (rue, pierre, porte) ? Écart-type de la luminance sur la première image."""
+    x, y, l, t = zone
+    brut = subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-frames:v", "1", "-vf",
+                           f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},crop={l}:{t}:{x}:{y}",
+                           "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, check=True).stdout
+    return float(np.frombuffer(brut, np.uint8).std()) > 22  # studio : 3 à 8 ; rue : 40 et plus
+
+
+def voile(t: Image.Image, marge: int) -> Image.Image:
+    """Le titre posé sur un voile blanc translucide aux bords fondus, pour rester lisible sur un décor chargé."""
+    img = Image.new("RGBA", (t.width + 2 * marge, t.height + 2 * marge), (255, 255, 255, 0))
+    a = Image.new("L", img.size, 0)
+    ImageDraw.Draw(a).rounded_rectangle((marge // 2, marge // 2, img.width - marge // 2, img.height - marge // 2),
+                                        radius=marge, fill=205)
+    img.putalpha(a.filter(ImageFilter.GaussianBlur(marge / 3)))
+    img.alpha_composite(t, (marge, marge))
+    return img
+
+
+def calques(w: int, h: int, logo_src: Image.Image, dossier: Path,
+            video: Path | None = None) -> tuple[Path, Path, int, int, int, int]:
+    """Logo et titre à la taille du format ; renvoie leurs fichiers et positions. Sur un décor chargé, le titre
+    reçoit un voile blanc, le logo aussi."""
     vertical = h > w
     if vertical:
         lw = round(0.46 * w)
@@ -58,6 +81,12 @@ def calques(w: int, h: int, logo_src: Image.Image, dossier: Path) -> tuple[Path,
     else:
         lx, ly = round(0.045 * w), round(0.05 * h)
         tx, ty = round(0.055 * w), round(0.36 * h)
+    marge = round(0.03 * max(w, h))
+    if video is not None and fond_charge(video, w, h, (tx, ty, t.width, min(t.height, h - ty))):
+        t, tx, ty = voile(t, marge), tx - marge, ty - marge
+    if video is not None and fond_charge(video, w, h, (lx, ly, logo.width, logo.height)):
+        m = marge // 2
+        logo, lx, ly = voile(logo, m), max(0, lx - m), max(0, ly - m)
     fl, ft = dossier / f"logo_{w}x{h}.png", dossier / f"titre_{w}x{h}.png"
     logo.save(fl)
     t.save(ft)
@@ -65,7 +94,7 @@ def calques(w: int, h: int, logo_src: Image.Image, dossier: Path) -> tuple[Path,
 
 
 def composer(video: Path, jingle: Path, logo: Image.Image, w: int, h: int, sortie: Path, debut_jingle: float) -> None:
-    fl, ft, lx, ly, tx, ty = calques(w, h, logo, sortie.parent)
+    fl, ft, lx, ly, tx, ty = calques(w, h, logo, sortie.parent, video)
     montee = round(0.015 * h)
     netete = ",unsharp=5:5:0.6:5:5:0.0" if w >= 3000 else ""
     graphe = (

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageOps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from preparer import couleur_bord, etendre_cotes, lissage, lisser  # noqa: E402
@@ -183,15 +183,19 @@ def main() -> None:
                                height=h, strength=1.0, num_inference_steps=4, guidance_scale=1.0,
                                generator=torch.Generator("cpu").manual_seed(7)).images[0].resize((w, h))
                     # Le repeint n'entre que dans ses bandes, avec un fondu vers le dégradé.
-                    fondu = masque if rue else masque.filter(ImageFilter.GaussianBlur(14))
+                    # Rue : passage progressif vers le repeint sur 24 px à l'intérieur de la photo, où FLUX la
+                    # reproduit ; un passage franc au bord du masque laissait un trait vertical (paris3, 2026-10-28).
+                    fondu = (ImageOps.invert(ImageOps.invert(masque).filter(ImageFilter.MinFilter(49))
+                                             .filter(ImageFilter.GaussianBlur(10))) if rue
+                             else masque.filter(ImageFilter.GaussianBlur(14)))
                     remplie = Image.composite(gen, toile, fondu)
                 except Exception as e:  # noqa: BLE001 — repli : le dégradé seul
                     print(json.dumps({"repli": f"{nom} {nom_format} : {e}"}), flush=True)
-            # La photo d'origine, recollée avec un fondu de 16 px vers l'intérieur.
+            # La photo d'origine, recollée avec un fondu de 16 px vers l'intérieur (la rue l'a déjà, par son fondu).
             alpha = Image.new("L", (w, h), 0)
             alpha.paste(255, (x + 16, y + (16 if y else 0), x + ww - 16, y + hh))
             alpha = alpha.filter(ImageFilter.GaussianBlur(8))
-            finale = Image.composite(toile, remplie, alpha)
+            finale = remplie if rue else Image.composite(toile, remplie, alpha)
             finale.save(dossier / f"etendue_{nom_format}.png")
             finale.resize(taille_wan, Image.LANCZOS).save(dossier / f"depart_{nom_format}.png")
         (dossier / "consigne_decor.txt").write_text(consigne)
