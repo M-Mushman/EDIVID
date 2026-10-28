@@ -7,8 +7,12 @@ Mise en page (la même que l'assemblage, composer.py) :
 - horizontale 16:9 : la photo entière, à droite (de 45 % à 82 % de la largeur) ; à gauche, le fond libre reçoit
   le logo et le titre ;
 - verticale 9:16 : la photo entière en bas (62 % de la hauteur), centrée ; au-dessus, le logo et le titre.
-Le remplissage travaille à ~2,3 Mpx, puis la photo d'origine est recollée (fondu de 16 px vers l'intérieur), et
-l'image ramenée au format de Wan (1280×704, 704×1280). Écrit <sortie>/<nom>/depart_{horizontal,vertical}.png.
+Studio : le fond est prolongé par dégradé depuis les bords de la photo (sans couture, comme preparer.py) ; FLUX ne
+repeint qu'une bande étroite là où la personne touche un bord (bras, épaule, main coupés par le cadre), pour la
+continuer. Remplir tout le fond par FLUX y ajoutait une seconde personne et un fond d'un autre gris (essai du
+2026-10-28). Rue : FLUX prolonge tout le décor. Le travail se fait à ~2,3 Mpx, la photo d'origine est recollée
+(fondu de 16 px vers l'intérieur), puis l'image est ramenée au format de Wan (1280×704, 704×1280).
+Écrit <sortie>/<nom>/depart_{horizontal,vertical}.png.
 """
 import json
 import sys
@@ -18,6 +22,9 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image, ImageFilter
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from preparer import couleur_bord, etendre_cotes, lissage, lisser  # noqa: E402
 
 FORMATS = {
     # nom : (taille de travail, taille Wan, position de la photo)
@@ -44,22 +51,93 @@ def placer(nom_format: str, w: int, h: int, pw: int, ph: int) -> tuple[int, int,
     return (w - ww) // 2, h - hh, ww, hh
 
 
-def degrade(toile: Image.Image, rect: tuple[int, int, int, int]) -> Image.Image:
-    """Repli sans modèle : le fond hors de la photo est la couleur de son bord, étirée puis très floutée (studio uni)."""
+def prolonger(p: np.ndarray, gauche: int, droite: int, haut: int) -> np.ndarray:
+    """Fond de studio prolongé par dégradé : sur les côtés ligne par ligne, puis au-dessus depuis la couleur de fond du
+    bord haut, qui se fond vers sa moyenne en montant (sans quoi chaque colonne monterait en raie)."""
+    rng = np.random.default_rng(11)
+    # Dégradé vers le gris clair seulement sur le large fond de gauche du format horizontal.
+    out = etendre_cotes(p, gauche, droite, rng, rampe=(0.0, 0.0) if haut else (1.0, 0.0)) if gauche or droite else p
+    if haut:
+        bord = couleur_bord(out[:6].transpose(1, 0, 2).astype(np.float64))  # (largeur, 3)
+        bord = lisser(bord, 120)
+        t = lissage(np.linspace(1, 0, haut))[:, None, None]  # 1 tout en haut, 0 au bord de la photo
+        dessus = bord[None] * (1 - t) + bord.mean(axis=0)[None, None] * t
+        dessus = np.clip(dessus * np.linspace(1.015, 1.0, haut)[:, None, None]
+                         + rng.normal(0, 1.0, (haut, out.shape[1], 1)), 0, 255)
+        out = np.concatenate([dessus.astype(np.uint8), out], axis=0)
+    return raccorder(out, p, gauche, haut)
+
+
+def raccorder(out: np.ndarray, p: np.ndarray, gauche: int, haut: int) -> np.ndarray:
+    """Le dégradé repart exactement de la couleur du bord de la photo partout où ce bord est du fond ou une ombre au
+    sol (gris, même teinté), pas la personne ; l'écart s'efface en s'éloignant de la photo (sans quoi une ombre rosée,
+    écartée du fond par sa teinte, laisse un trait vertical)."""
+    o = out.astype(np.float64)
+    hp, wp = p.shape[:2]
+    def ecart(bord_photo, bord_ext):
+        c = np.median(bord_photo, axis=1)
+        sur_fond = ((c.max(axis=1) - c.min(axis=1)) < 22) & (c.mean(axis=1) > 120)
+        d = (c - bord_ext) * sur_fond[:, None]
+        return lisser(d, 12)
+    attenue = lambda n: np.exp(-np.arange(n) / 180.0)[None, :, None]
+    y0 = haut
+    if gauche:
+        d = ecart(p[:, :4].astype(np.float64), o[y0:y0 + hp, gauche - 1])
+        o[y0:y0 + hp, :gauche] += d[:, None, :] * attenue(gauche)[:, ::-1]
+    droite = o.shape[1] - gauche - wp
+    if droite:
+        d = ecart(p[:, -4:].astype(np.float64), o[y0:y0 + hp, gauche + wp])
+        o[y0:y0 + hp, gauche + wp:] += d[:, None, :] * attenue(droite)
+    if haut:
+        bande = o[y0:y0 + 4].transpose(1, 0, 2)  # le bord haut de la photo élargie (côtés compris)
+        d = ecart(bande, o[y0 - 1])
+        o[:y0] += (d[None] * np.exp(-np.arange(haut) / 180.0)[::-1, None, None])
+    # Un fond prolongé ligne par ligne recopie en stries les variations du bord : flou croissant avec la distance à
+    # la photo (nul au raccord, entier à ~250 px).
+    def adoucir(zone: np.ndarray, distance: np.ndarray) -> np.ndarray:
+        flou = np.asarray(Image.fromarray(np.clip(zone, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(35)))
+        poids = (1 - np.exp(-distance / 120.0))[..., None]
+        return zone * (1 - poids) + flou.astype(np.float64) * poids
+    if gauche:
+        z = o[y0:y0 + hp, :gauche]
+        o[y0:y0 + hp, :gauche] = adoucir(z, np.broadcast_to(np.arange(gauche)[::-1][None], z.shape[:2]).astype(float))
+    if droite:
+        z = o[y0:y0 + hp, gauche + wp:]
+        o[y0:y0 + hp, gauche + wp:] = adoucir(z, np.broadcast_to(np.arange(droite)[None], z.shape[:2]).astype(float))
+    if haut:
+        z = o[:y0]
+        o[:y0] = adoucir(z, np.broadcast_to(np.arange(haut)[::-1][:, None], z.shape[:2]).astype(float))
+    return np.clip(o, 0, 255).astype(np.uint8)
+
+
+def touche(bande: np.ndarray, marge: int) -> np.ndarray:
+    """Positions (le long du bord) où la personne touche le bord de la photo, élargies de `marge`."""
+    c = np.median(bande, axis=1)
+    sujet = ((c.max(axis=1) - c.min(axis=1)) >= 14) | (c.mean(axis=1) <= 150)
+    if not sujet.any():
+        return sujet
+    noyau = np.ones(2 * marge + 1)
+    return np.convolve(sujet.astype(float), noyau, mode="same") > 0
+
+
+def masque_bandes(w: int, h: int, rect: tuple[int, int, int, int], p: np.ndarray, nom_format: str) -> Image.Image | None:
+    """Masque FLUX : des bandes étroites hors de la photo, là seulement où la personne touche un bord."""
     x, y, ww, hh = rect
-    a = np.asarray(toile).astype(np.float64)
-    h, w = a.shape[:2]
-    out = a.copy()
-    photo = a[y:y + hh, x:x + ww]
-    gauche, droite, haut = photo[:, :4].mean(axis=1), photo[:, -4:].mean(axis=1), photo[:4].mean(axis=0)
-    out[y:y + hh, :x] = gauche[:, None]
-    out[y:y + hh, x + ww:] = droite[:, None]
+    m = np.zeros((h, w), np.uint8)
+    large = round(0.09 * w) if nom_format == "horizontal" else w
+    for cote, bande in (("g", p[:, :4]), ("d", p[:, -4:])):
+        lignes = touche(bande, 60)
+        if not lignes.any():
+            continue
+        x0, x1 = (max(0, x - large), x + 12) if cote == "g" else (x + ww - 12, min(w, x + ww + large))
+        m[y:y + hh][lignes, x0:x1] = 255
     if y:
-        out[:y, x:x + ww] = haut[None]
-        out[:y, :x] = haut[0]
-        out[:y, x + ww:] = haut[-1]
-    flou = np.asarray(Image.fromarray(out.astype(np.uint8)).filter(ImageFilter.GaussianBlur(60))).astype(np.float64)
-    return Image.fromarray(np.clip(flou + np.random.default_rng(3).normal(0, 1.0, flou.shape), 0, 255).astype(np.uint8))
+        colonnes = touche(p[:4].transpose(1, 0, 2), 60)
+        if colonnes.any():
+            y0 = max(0, y - 110)
+            sous = m[y0:y + 12, x:x + ww]
+            sous[:, colonnes] = 255
+    return Image.fromarray(m) if m.any() else None
 
 
 def main() -> None:
@@ -72,7 +150,7 @@ def main() -> None:
                                                          local_files_only=True)
         pipe.enable_model_cpu_offload()
     except Exception as e:  # noqa: BLE001 — repli : dégradé, la série continue
-        print(json.dumps({"repli": f"FLUX.2 indisponible : {e}"}), flush=True)
+        print(json.dumps({"repli": f"FLUX.2 indisponible, dégradé seul : {e}"}), flush=True)
         pipe = None
     debut = time.time()
     for k, nom in enumerate(noms):
@@ -87,24 +165,28 @@ def main() -> None:
         for nom_format, ((w, h), taille_wan) in FORMATS.items():
             x, y, ww, hh = placer(nom_format, w, h, *photo.size)
             p = photo.resize((ww, hh), Image.LANCZOS)
-            # Toile de départ : la photo sur un gris moyen du bord (le remplissage repart de zéro dans le masque).
-            bord = np.asarray(p)[:, [0, -1]].reshape(-1, 3).mean(axis=0)
-            toile = Image.new("RGB", (w, h), tuple(int(c) for c in bord))
-            toile.paste(p, (x, y))
-            # Masque : tout sauf la photo, qu'il chevauche de 12 px pour fondre le raccord.
-            masque = Image.new("L", (w, h), 255)
-            masque.paste(0, (x + 12, y + (12 if y else 0), x + ww - 12, y + hh))
-            # Bords de la photo qui touchent ceux de l'image : rien à remplir de ce côté.
-            remplie = None
-            if pipe is not None:
+            rue = fiche["fond"] == "rue"
+            if rue:
+                # Rue : tout le décor par FLUX, la toile n'est qu'un départ.
+                bord = np.asarray(p)[:, [0, -1]].reshape(-1, 3).mean(axis=0)
+                toile = Image.new("RGB", (w, h), tuple(int(c) for c in bord))
+                toile.paste(p, (x, y))
+                masque = Image.new("L", (w, h), 255)
+                masque.paste(0, (x + 12, y + (12 if y else 0), x + ww - 12, y + hh))
+            else:
+                toile = Image.fromarray(prolonger(np.asarray(p), x, w - x - ww, y))
+                masque = masque_bandes(w, h, (x, y, ww, hh), np.asarray(p), nom_format)
+            remplie = toile
+            if pipe is not None and masque is not None:
                 try:
-                    remplie = pipe(prompt=consigne, image=toile, image_reference=[photo], mask_image=masque, width=w,
-                                   height=h, strength=1.0, num_inference_steps=4, guidance_scale=1.0,
-                                   generator=torch.Generator("cpu").manual_seed(7)).images[0].resize((w, h))
-                except Exception as e:  # noqa: BLE001
+                    gen = pipe(prompt=consigne, image=toile, image_reference=[photo], mask_image=masque, width=w,
+                               height=h, strength=1.0, num_inference_steps=4, guidance_scale=1.0,
+                               generator=torch.Generator("cpu").manual_seed(7)).images[0].resize((w, h))
+                    # Le repeint n'entre que dans ses bandes, avec un fondu vers le dégradé.
+                    fondu = masque if rue else masque.filter(ImageFilter.GaussianBlur(14))
+                    remplie = Image.composite(gen, toile, fondu)
+                except Exception as e:  # noqa: BLE001 — repli : le dégradé seul
                     print(json.dumps({"repli": f"{nom} {nom_format} : {e}"}), flush=True)
-            if remplie is None:
-                remplie = degrade(toile, (x, y, ww, hh))
             # La photo d'origine, recollée avec un fondu de 16 px vers l'intérieur.
             alpha = Image.new("L", (w, h), 0)
             alpha.paste(255, (x + 16, y + (16 if y else 0), x + ww - 16, y + hh))

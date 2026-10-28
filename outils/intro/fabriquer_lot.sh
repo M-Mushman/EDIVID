@@ -15,6 +15,13 @@ LOGO=$I/sources/logo_by_edina.png
 L=$I/lot
 
 echo "== début $(date -Is)"
+# Baux laissés ouverts par un arrêt brutal précédent : rendus.
+export EDIVID_BAUX=$I/baux_ouverts.txt
+touch $EDIVID_BAUX
+while read -r b; do
+  [ -n "$b" ] && curl -s -X POST "${EDIVID_AZOTHD:-http://127.0.0.1:8016}/api/v1/admission/leases/$b/release" >/dev/null && echo "bail orphelin $b rendu"
+done < $EDIVID_BAUX
+: > $EDIVID_BAUX
 while systemctl --user is-active -q edivid-intro; do sleep 60; done
 echo "== edivid-intro terminé $(date -Is)"
 mkdir -p $L

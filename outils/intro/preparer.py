@@ -27,7 +27,14 @@ def couleur_bord(colonnes: np.ndarray) -> np.ndarray:
     ou une mèche (couleur saturée ou sombre) reprennent celle des lignes de fond voisines."""
     c = np.median(colonnes, axis=1)
     sat = c.max(axis=1) - c.min(axis=1)
-    fond = (sat < 22) & (c.mean(axis=1) > 150)
+    # Le fond de studio est un gris neutre (écart entre canaux < 14) ; un reflet de peau, même clair, ne l'est pas.
+    fond = (sat < 14) & (c.mean(axis=1) > 150)
+    if fond.any():
+        # Et de la teinte du gris de ce studio (écarts rouge-vert et bleu-vert de la médiane des lignes de fond, à
+        # 4 près ; la luminosité, elle, peut varier) : écarte les derniers reflets clairs de peau, rosés.
+        ref = np.median(c[fond], axis=0)
+        teinte = lambda v: np.stack([v[..., 0] - v[..., 1], v[..., 2] - v[..., 1]], axis=-1)
+        fond &= np.abs(teinte(c) - teinte(ref)).max(axis=-1) < 4
     idx = np.arange(len(c))
     if fond.any():
         c = np.stack([np.interp(idx, idx[fond], c[fond, k]) for k in range(3)], axis=1)
@@ -38,14 +45,17 @@ def lissage(t: np.ndarray) -> np.ndarray:
     return t * t * (3 - 2 * t)
 
 
-def etendre_cotes(img: np.ndarray, gauche: int, droite: int, rng) -> np.ndarray:
+def etendre_cotes(img: np.ndarray, gauche: int, droite: int, rng, rampe: float | tuple[float, float] = 1.0) -> np.ndarray:
     h = img.shape[0]
     # Le fond ajouté part exactement de la couleur du bord (aucune couture), puis rejoint peu à peu le gris le plus
     # clair du studio (le bord droit de la photo est assombri par l'éclairage).
     bord_g, bord_d = couleur_bord(img[:, :6].astype(np.float64)), couleur_bord(img[:, -6:].astype(np.float64))
     loin = np.maximum(bord_g, bord_d)
-    tg = lissage(np.linspace(1, 0, gauche))[None, :, None]
-    td = lissage(np.linspace(0, 1, droite))[None, :, None]
+    # `rampe` : part du chemin vers le gris clair parcourue, à gauche et à droite (0 pour une bande étroite, où le
+    # dégradé ferait une raie).
+    rg, rd = rampe if isinstance(rampe, tuple) else (rampe, rampe)
+    tg = rg * lissage(np.linspace(1, 0, gauche))[None, :, None]
+    td = rd * lissage(np.linspace(0, 1, droite))[None, :, None]
     g = bord_g[:, None, :] * (1 - tg) + loin[:, None, :] * tg
     d = bord_d[:, None, :] * (1 - td) + loin[:, None, :] * td
     g += rng.normal(0, 1.0, (h, gauche, 1))

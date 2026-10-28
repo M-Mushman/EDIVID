@@ -39,12 +39,16 @@ def charger():
 
 
 def encoder(pipe, consigne: str):
+    # Seul sur la carte : le décodeur en descend le temps de l'encodage (11 Go + 1,4 Go dépassaient le bail).
+    pipe.vae.to("cpu")
+    torch.cuda.empty_cache()
     pipe.text_encoder.to("cuda")
     with torch.inference_mode():
         positif, negatif = pipe.encode_prompt(consigne, NEGATIF, do_classifier_free_guidance=True,
                                               max_sequence_length=512, device=torch.device("cuda"))
     pipe.text_encoder.to("cpu")
     torch.cuda.empty_cache()
+    pipe.vae.to("cuda")
     return positif, negatif
 
 

@@ -13,6 +13,13 @@ while :; do
   sleep 15
 done
 echo "bail $BAIL ($VRAM Mo)" >&2
-rendre() { curl -s -X POST "$AZOTHD/api/v1/admission/leases/$BAIL/release" >/dev/null || true; echo "bail $BAIL rendu" >&2; }
+# Registre des baux ouverts (EDIVID_BAUX) : un arrêt brutal (systemctl stop) peut empêcher de rendre le bail ;
+# le prochain lancement les rend (voir fabriquer_lot.sh).
+[ -n "${EDIVID_BAUX:-}" ] && echo "$BAIL" >> "$EDIVID_BAUX"
+rendre() {
+  curl -s -X POST "$AZOTHD/api/v1/admission/leases/$BAIL/release" >/dev/null || true
+  [ -n "${EDIVID_BAUX:-}" ] && sed -i "/^$BAIL\$/d" "$EDIVID_BAUX"
+  echo "bail $BAIL rendu" >&2
+}
 trap rendre EXIT
 "$@"
