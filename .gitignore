@@ -22,3 +22,5 @@ __pycache__/
 /modeles/sgmse
 /.venv-sidon
 /modeles/yunet
+# Poids MossFormer2 téléchargés par ClearVoice dans le dossier courant.
+/checkpoints
