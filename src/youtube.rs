@@ -105,6 +105,9 @@ pub struct Publication {
     /// 22 (personnes et blogs), 26 (vie pratique et style), 27 (éducation)…
     #[serde(default)]
     pub categorie: String,
+    /// Vignette du projet (fichier de `sorties/vignettes/`), envoyée après la vidéo.
+    #[serde(default)]
+    pub vignette: String,
 }
 
 /// Envoie un export sur YouTube ; renvoie le lien de la vidéo.
@@ -172,7 +175,33 @@ pub async fn publier(etat: &EtatPartage, projet: &str, pub_: &Publication) -> Re
         .context("envoi interrompu")?;
     let v: Value = reponse.json().await?;
     let id = v["id"].as_str().ok_or_else(|| anyhow!("YouTube n'a pas confirmé l'envoi : {}", court(&v.to_string())))?;
+    if !pub_.vignette.is_empty() {
+        // Une vignette refusée (chaîne pas encore validée par téléphone, en général) n'annule pas la publication.
+        if let Err(e) = envoyer_vignette(etat, projet, &jeton, id, &pub_.vignette).await {
+            etat.emettre(projet, "erreur", json!({"travail": "Vignette YouTube",
+                "message": format!("la vidéo est en ligne, mais pas sa vignette : {e:#}. La chaîne doit être validée par téléphone pour accepter une vignette personnalisée.")}));
+        }
+    }
     Ok(format!("https://youtu.be/{id}"))
+}
+
+/// Pose la vignette choisie sur une vidéo déjà envoyée (`thumbnails.set`).
+async fn envoyer_vignette(etat: &EtatPartage, projet: &str, jeton: &str, video: &str, nom: &str) -> Result<()> {
+    let f = crate::vignette::chemin(etat, projet, nom)?;
+    let octets = tokio::fs::read(&f).await?;
+    let r = etat
+        .http
+        .post(format!("https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={video}&uploadType=media"))
+        .bearer_auth(jeton)
+        .header("Content-Type", "image/jpeg")
+        .body(octets)
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await?;
+    if !r.status().is_success() {
+        bail!("{}", court(&r.text().await.unwrap_or_default()));
+    }
+    Ok(())
 }
 
 fn court(t: &str) -> String {
@@ -212,14 +241,22 @@ pub fn lancer(etat: &EtatPartage, projet: &str, pub_: Publication) {
     });
 }
 
+/// Le texte que dit la vidéo montée (phrases gardées, accroche exclue).
+pub async fn texte_du_montage(etat: &EtatPartage, p: &crate::modele::Projet) -> Result<String> {
+    let analyses = etat.analyses_du_projet(p).await?;
+    let ps = decoupe::phrases_projet(p, &analyses);
+    let prog = decoupe::programme(p, &analyses, &ps, false);
+    let gardees: Vec<String> = prog.plans.iter().filter(|pl| !pl.accroche).map(|pl| pl.phrase.clone()).collect();
+    Ok(ps.iter().filter(|ph| gardees.contains(&ph.cle)).map(|ph| ph.texte.as_str()).collect::<Vec<_>>().join(" "))
+}
+
 /// Titre, description (avec chapitres horodatés) et mots-clés proposés par le LLM.
 pub async fn proposer(etat: &EtatPartage, projet: &str) -> Result<Value> {
     let p = etat.projet(projet).await?;
     let analyses = etat.analyses_du_projet(&p).await?;
     let ps = decoupe::phrases_projet(&p, &analyses);
     let prog = decoupe::programme(&p, &analyses, &ps, false);
-    let gardees: Vec<String> = prog.plans.iter().filter(|pl| !pl.accroche).map(|pl| pl.phrase.clone()).collect();
-    let texte: String = ps.iter().filter(|ph| gardees.contains(&ph.cle)).map(|ph| ph.texte.as_str()).collect::<Vec<_>>().join(" ");
+    let texte = texte_du_montage(etat, &p).await?;
     // Chapitres YouTube : « 0:00 » en premier, au moins trois, dix secondes chacun au minimum.
     // Les titres sont au temps du montage : la séquence d'ouverture du générique les décale d'autant.
     let (ouverture, _) = crate::rendu::durees_generique(&p);

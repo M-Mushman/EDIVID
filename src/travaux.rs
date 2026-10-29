@@ -28,6 +28,8 @@ pub enum Genre {
     Rendu,
     /// Version exportée du rendu final (youtube, leger, max).
     Export(String),
+    /// Quatre propositions de vignette (demande en JSON).
+    Vignettes(String),
 }
 
 impl Genre {
@@ -40,6 +42,7 @@ impl Genre {
             Genre::Apercu => "Aperçu rapide",
             Genre::Rendu => "Vidéo finale",
             Genre::Export(_) => "Export",
+            Genre::Vignettes(_) => "Vignettes YouTube",
         }
     }
 }
@@ -76,7 +79,7 @@ impl File {
     pub fn ajouter(&self, etat: &EtatPartage, projet: &str, genre: Genre) {
         {
             let mut attente = self.attente.lock().unwrap();
-            let unique = matches!(genre, Genre::Apercu | Genre::Rendu | Genre::Monter | Genre::Proxy(_) | Genre::Export(_));
+            let unique = matches!(genre, Genre::Apercu | Genre::Rendu | Genre::Monter | Genre::Proxy(_) | Genre::Export(_) | Genre::Vignettes(_));
             if unique && attente.iter().any(|t| t.projet == projet && t.genre == genre) {
                 return;
             }
@@ -182,6 +185,9 @@ async fn etat_rush(etat: &EtatPartage, projet: &str, rush: &str, e: EtatRush) ->
 async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
     let projet = t.projet.as_str();
     match &t.genre {
+        Genre::Vignettes(demande) => {
+            crate::vignette::fabriquer(etat, projet, &serde_json::from_str(demande)?).await?;
+        }
         Genre::Preparer(rush) => {
             let p = etat.projet(projet).await?;
             let Some(r) = p.rushs.iter().find(|x| &x.id == rush).cloned() else { return Ok(()) };

@@ -341,6 +341,7 @@ pub async fn capteur(etat: &EtatPartage, projet: &str, script: &str, args: &[Str
         "debruite.py" => &etat.cfg.python_deepfilter,
         "seche_gridnet.py" => &etat.cfg.python_gridnet,
         "restaure_sidon.py" => &etat.cfg.python_sidon,
+        "vignette.py" => &etat.cfg.python_video,
         _ => &etat.cfg.python,
     };
     let mut enfant = Command::new(python)
@@ -845,12 +846,26 @@ fn position_habillage(position: &str, marge: u32) -> (String, String) {
     }
 }
 
-/// Durées des séquences du générique (début, fin), 0 s'il n'y en a pas.
+/// Fondu enchaîné, image et son, entre une intro ou une fin de la bibliothèque et le montage. En secondes.
+pub const FONDU_ENCHAINE: f64 = 0.5;
+
+/// Chevauchement d'une séquence du générique avec le montage : le fondu enchaîné pour un élément de la
+/// bibliothèque (il a son propre fondu, au blanc), rien pour les autres (fondu au noir puis bout à bout).
+fn chevauchement(s: &Option<Sequence>) -> f64 {
+    if s.as_ref().is_some_and(|s| s.genre == "bibliotheque") { FONDU_ENCHAINE } else { 0.0 }
+}
+
+/// Durées utiles des séquences du générique (début, fin), 0 s'il n'y en a pas : le montage commence à `début` dans
+/// la vidéo, qui dure `début + montage + fin`. Une séquence de bibliothèque chevauche le montage du fondu enchaîné,
+/// retiré ici de sa durée.
 pub fn durees_generique(p: &Projet) -> (f64, f64) {
     let duree = |s: &Option<Sequence>| -> f64 {
         let Some(s) = s else { return 0.0 };
         if s.genre == "carton" {
             return s.duree;
+        }
+        if s.genre == "bibliotheque" {
+            return (s.duree - FONDU_ENCHAINE).max(0.0);
         }
         let d = p.medias.iter().find(|m| m.id == s.media).and_then(|m| m.duree).unwrap_or(0.0);
         if s.duree > 0.0 { d.min(s.duree) } else { d }
@@ -881,7 +896,10 @@ fn couper_lignes(texte: &str, max: usize) -> Vec<String> {
 /// choisie, ou sur un fond sombre ; silencieux.
 #[allow(clippy::too_many_arguments)]
 fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: usize, (wo, ho): (u32, u32),
-                      args: &mut Vec<String>, fc: &mut Vec<String>, entree: &mut usize, tmp: &Path, passe: Passe) -> Result<()> {
+                      args: &mut Vec<String>, fc: &mut Vec<String>, entree: &mut usize, tmp: &Path, passe: Passe, sonie: f64) -> Result<()> {
+    if s.genre == "bibliotheque" {
+        return sequence_bibliotheque(etat, s, d + FONDU_ENCHAINE, k, (wo, ho), args, fc, entree, passe, sonie);
+    }
     let ips = passe.ips;
     let medias = etat.dossier_projet(&p.id).join("medias");
     let media = p.medias.iter().find(|m| m.id == s.media);
@@ -908,7 +926,7 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
         if m.a_son {
             fc.push(format!(
                 "[{i}:a]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=0:{d:.3},asetpts=PTS-STARTPTS,\
-                 loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,{afondu}[ga{k}]"
+                 loudnorm=I={sonie}:TP=-1.5:LRA=11,aresample=48000,{afondu}[ga{k}]"
             ));
         } else {
             silence(args, fc, entree);
@@ -971,6 +989,68 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
     fc.push(format!("[gc{k}]{dessin},{finir}[gv{k}]"));
     silence(args, fc, entree);
     Ok(())
+}
+
+/// Une intro (k = 0) ou une fin (k = 1) de la bibliothèque, dans sa version au format de sortie, sur `d` secondes
+/// (chevauchement compris) : [gv{k}] et [ga{k}]. Sans fondu au noir : l'élément a le sien, au blanc, et le
+/// raccord se fait en fondu enchaîné. Son d'origine, ou le jingle choisi (coupé à la durée, avec fondu de fin).
+#[allow(clippy::too_many_arguments)]
+fn sequence_bibliotheque(etat: &EtatPartage, s: &Sequence, d: f64, k: usize, (wo, ho): (u32, u32), args: &mut Vec<String>,
+                         fc: &mut Vec<String>, entree: &mut usize, passe: Passe, sonie: f64) -> Result<()> {
+    let ips = passe.ips;
+    let donnees = &etat.cfg.donnees;
+    let rayon = crate::rayons::RAYONS_VIDEO[k.min(1)];
+    let (f, exact) = crate::rayons::video_au_format(donnees, rayon, &s.element, (wo, ho))
+        .ok_or_else(|| anyhow!("« {} » n'est plus dans la bibliothèque d'habillage", s.element))?;
+    args.extend(["-t".into(), format!("{d:.3}"), "-i".into(), f.to_string_lossy().into()]);
+    let i = *entree;
+    *entree += 1;
+    let finir = format!("trim=0:{d:.3},setpts=PTS-STARTPTS,fps={ips},setsar=1,format={},{}", passe.format(), passe.setparams());
+    let opaque = passe.vers_sortie_opaque();
+    if exact {
+        fc.push(format!("[{i}:v]fps={ips},{opaque}{finir}[gv{k}]"));
+    } else {
+        fc.push(format!(
+            "[{i}:v]fps={ips},split[gs{k}a][gs{k}b];\
+             [gs{k}b]scale={wo}:{ho}:force_original_aspect_ratio=increase,crop={wo}:{ho},gblur=sigma=30[gs{k}c];\
+             [gs{k}a]scale={wo}:{ho}:force_original_aspect_ratio=decrease[gs{k}d];\
+             [gs{k}c][gs{k}d]overlay=(W-w)/2:(H-h)/2,{opaque}{finir}[gv{k}]"
+        ));
+    }
+    let (son, fondu) = match (!s.jingle.is_empty()).then(|| crate::rayons::jingle(donnees, &s.jingle, d)).flatten() {
+        Some(j) => {
+            args.extend(["-i".into(), j.to_string_lossy().into()]);
+            *entree += 1;
+            (*entree - 1, format!(",afade=t=out:st={:.3}:d=0.5", (d - 0.5).max(0.0)))
+        }
+        None => (i, String::new()),
+    };
+    fc.push(format!(
+        "[{son}:a]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=0:{d:.3},asetpts=PTS-STARTPTS,\
+         loudnorm=I={sonie}:TP=-1.5:LRA=11,aresample=48000{fondu}[ga{k}]"
+    ));
+    Ok(())
+}
+
+/// Raccorde deux morceaux d'image : fondu enchaîné de `x` secondes commençant à `offset` dans le premier, ou bout à
+/// bout si `x` est nul.
+fn raccord_images(fc: &mut Vec<String>, a: &str, b: &str, x: f64, offset: f64, sortie: &str) {
+    if x > 0.0 {
+        fc.push(format!("[{a}]settb=AVTB[{sortie}p];[{b}]settb=AVTB[{sortie}q];\
+                         [{sortie}p][{sortie}q]xfade=transition=fade:duration={x:.3}:offset={offset:.3}[{sortie}]"));
+    } else {
+        fc.push(format!("[{a}][{b}]concat=n=2:v=1:a=0[{sortie}]"));
+    }
+}
+
+/// Même chose pour le son : fondu croisé de `x` secondes, ou bout à bout.
+fn raccord_son(fc: &mut Vec<String>, a: &str, b: &str, x: f64, sortie: &str) {
+    const F: &str = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo";
+    if x > 0.0 {
+        fc.push(format!("[{a}]{F}[{sortie}p];[{b}]{F}[{sortie}q];[{sortie}p][{sortie}q]acrossfade=d={x:.3}:c1=qsin:c2=qsin[{sortie}]"));
+    } else {
+        fc.push(format!("[{a}][{b}]concat=n=2:v=0:a=1[{sortie}]"));
+    }
 }
 
 // ---------------------------------------------------------------- assemblage
@@ -1495,7 +1575,13 @@ async fn sonie_rush(etat: &EtatPartage, projet: &str, rush: &str) -> Option<f64>
     Some(i)
 }
 
-/// Gain qui amène la voix du montage à −23 LUFS (moyenne des rushs, pondérée par leur temps dans le montage).
+/// Sonie de la voix du montage avant le gain final du rendu ; le son du générique y est calé aussi, pour que le gain
+/// final (qui vise SONIE_SORTIE sur toute la vidéo) laisse jingle et voix au même niveau.
+const SONIE_VOIX: f64 = -23.0;
+/// Sonie de la vidéo finale ; celle du générique dans l'aperçu, où le navigateur applique le gain final à la voix seule.
+const SONIE_SORTIE: f64 = -14.0;
+
+/// Gain qui amène la voix du montage à SONIE_VOIX (moyenne des rushs, pondérée par leur temps dans le montage).
 async fn gain_voix(etat: &EtatPartage, p: &Projet, prog: &Programme) -> f64 {
     let mut temps: HashMap<&str, f64> = HashMap::new();
     for pl in &prog.plans {
@@ -1508,7 +1594,7 @@ async fn gain_voix(etat: &EtatPartage, p: &Projet, prog: &Programme) -> f64 {
             poids += t;
         }
     }
-    if poids == 0.0 { 0.0 } else { (-23.0 - somme / poids).clamp(-12.0, 30.0) }
+    if poids == 0.0 { 0.0 } else { (SONIE_VOIX - somme / poids).clamp(-12.0, 30.0) }
 }
 
 /// Empreinte de tout ce qui change une vidéo rendue : un aperçu dont l'empreinte diffère de celle du projet
@@ -1762,25 +1848,25 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     // loudnorm en une passe est dynamique et faisait « pomper » la voix.
     fc.push(format!("[{mix}]aresample=48000[a]"));
 
-    // Générique : une séquence avant le montage, une après, au même format, enchaînées en fondu.
+    // Générique : une séquence avant le montage, une après, au même format. Un élément de la bibliothèque s'enchaîne
+    // en fondu croisé (image et son) ; une vidéo ou un carton, en fondu au noir puis bout à bout.
     let (mut v_final, mut a_final) = ("v".to_string(), "a".to_string());
     if avant > 0.0 || apres > 0.0 {
         let tmp = ass.parent().unwrap_or(Path::new("."));
-        let mut suite = String::new();
-        let mut n = 1;
         if let (Some(s), true) = (&p.generique.debut, avant > 0.0) {
-            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe)?;
-            suite.push_str("[gv0][ga0]");
-            n += 1;
+            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe, SONIE_VOIX)?;
+            let x = chevauchement(&p.generique.debut);
+            raccord_images(&mut fc, "gv0", &v_final, x, avant, "vg0");
+            raccord_son(&mut fc, "ga0", &a_final, x, "ag0");
+            (v_final, a_final) = ("vg0".to_string(), "ag0".to_string());
         }
-        suite.push_str("[v][a]");
         if let (Some(s), true) = (&p.generique.fin, apres > 0.0) {
-            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe)?;
-            suite.push_str("[gv1][ga1]");
-            n += 1;
+            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe, SONIE_VOIX)?;
+            let x = chevauchement(&p.generique.fin);
+            raccord_images(&mut fc, &v_final.clone(), "gv1", x, avant + total - x, "vg1");
+            raccord_son(&mut fc, &a_final.clone(), "ga1", x, "ag1");
+            (v_final, a_final) = ("vg1".to_string(), "ag1".to_string());
         }
-        fc.push(format!("{suite}concat=n={n}:v=1:a=1[vg][ag]"));
-        (v_final, a_final) = ("vg".to_string(), "ag".to_string());
     }
     let total = avant + total + apres;
     // Fondus d'ouverture et de fin, sur toute la vidéo (générique compris) : image et son ensemble. L'aperçu ne les
@@ -1907,8 +1993,9 @@ async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: 
     let mut generique = None;
     if avant > 0.0 || apres > 0.0 {
         let tmp = ass.parent().unwrap_or(Path::new("."));
-        let (mut images, mut voixs, mut fonds, mut gens) = (String::new(), String::new(), String::new(), String::new());
+        let (mut voixs, mut fonds, mut gens) = (String::new(), String::new(), String::new());
         let mut n = 1;
+        let (x0, x1) = (chevauchement(&p.generique.debut), chevauchement(&p.generique.fin));
         let morceau = |k: usize, d: f64, fc: &mut Vec<String>, voixs: &mut String, fonds: &mut String, gens: &mut String| {
             fc.push(silence(d, &format!("sv{k}")));
             fc.push(silence(d, &format!("sf{k}")));
@@ -1917,13 +2004,18 @@ async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: 
             fonds.push_str(&format!("[sf{k}]"));
             gens.push_str(&format!("[gq{k}]"));
         };
+        // Les silences de la voix et du fond ont les durées utiles du générique ; la piste du générique joue chaque
+        // séquence en entier, chevauchement compris, avec entre elles un silence raccourci d'autant.
+        let mut images = "v".to_string();
+        let (mut debut_gen, mut fin_gen_x) = (0.0, 0.0);
         if let (Some(s), true) = (&p.generique.debut, avant > 0.0) {
-            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe)?;
-            images.push_str("[gv0]");
+            sequence_generique(etat, p, s, avant, 0, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe, SONIE_SORTIE)?;
+            raccord_images(&mut fc, "gv0", "v", x0, avant, "vg0");
+            images = "vg0".into();
             morceau(0, avant, &mut fc, &mut voixs, &mut fonds, &mut gens);
+            debut_gen = x0;
             n += 1;
         }
-        images.push_str("[v]");
         voixs.push_str("[vx]");
         if fond {
             fonds.push_str("[fd]");
@@ -1931,18 +2023,20 @@ async fn assembler_apercu(etat: &EtatPartage, p: &Projet, sortie: &Path, liste: 
             fc.push(silence(total, "fdm"));
             fonds.push_str("[fdm]");
         }
-        fc.push(silence(total, "gm"));
-        gens.push_str("[gm]");
         let mut fin_gen = String::new();
         if let (Some(s), true) = (&p.generique.fin, apres > 0.0) {
-            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe)?;
-            images.push_str("[gv1]");
+            sequence_generique(etat, p, s, apres, 1, (wo, ho), &mut args, &mut fc, &mut entree, tmp, passe, SONIE_SORTIE)?;
+            raccord_images(&mut fc, &images.clone(), "gv1", x1, avant + total - x1, "vg1");
+            images = "vg1".into();
             morceau(1, apres, &mut fc, &mut voixs, &mut fonds, &mut fin_gen);
+            fin_gen_x = x1;
             n += 1;
         }
+        fc.push(silence((total - debut_gen - fin_gen_x).max(0.0), "gm"));
+        gens.push_str("[gm]");
         gens.push_str(&fin_gen);
         // Les silences de fin de la voix et du fond suivent l'ordre des morceaux : [début][montage][fin].
-        fc.push(format!("{images}concat=n={n}:v=1:a=0[vg]"));
+        fc.push(format!("[{images}]null[vg]"));
         fc.push(format!("{voixs}concat=n={n}:v=0:a=1[vxg]"));
         fc.push(format!("{fonds}concat=n={n}:v=0:a=1[fdg]"));
         fc.push(format!("{gens}concat=n={n}:v=0:a=1[gg]"));

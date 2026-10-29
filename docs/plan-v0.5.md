@@ -77,3 +77,19 @@ Risque : la ressemblance d'Edina une fois passée en style manga. Premier essai 
 Rendu final réel d'un projet témoin en horizontal, carré et vertical, avec intro et fin de bibliothèque : ffprobe
 (format, durée = intro + montage + fin − 2 × 0,5 s), images autour de chaque raccord, écoute des raccords. Vignettes :
 les quatre propositions d'un projet réel, regardées en taille YouTube (petite et grande).
+
+## Réalisé (2026-10-29)
+
+- Bibliothèque : 29 intros (une par photo : tirage g31, variante 21 pour paris11, les tirages se valent), la fin
+  by-edina, 7 jingles, le style manga_selfie (7 images), 29 photos, le logo. Fichiers liés (liens physiques) depuis
+  `essais/2026-10-27-intro`, sans copie.
+- Générique de bibliothèque, fondu enchaîné, aperçu : vérifiés sur une copie d'« épisode 0 » (montage réduit à
+  36 s) par une instance d'essai (port 8039, `EDIVID_NVENC=0`) : durée exacte (2,5 + 36,3 + 7,23 s), version au
+  format pris en horizontal comme en vertical, raccords en fondu image et son.
+- Défaut corrigé au passage : le son du générique était calé à −14 LUFS avant le gain final, la voix à −23 ; une
+  intro sortait ~10 LU au-dessus de la voix dans la vidéo finale (vidéos de générique comprises). Désormais −23 au
+  rendu final (jingle −13,1, voix −14,9 LUFS mesurés), −14 dans l'aperçu (le navigateur ne relève que la voix).
+- Vignettes : premier essai (scène entière d'après photo + image de style) raté : style « BD » et non anime, Edina
+  méconnaissable et rajeunie. Second essai : style décrit en toutes lettres et âge précisé ; la méthode « retouche »
+  (photo redessinée, décor changé) garde tenue, bijoux, coiffure. Les deux méthodes sont proposées (deux vignettes
+  chacune). Texte placé à l'opposé du visage repéré par YuNet. Fabrication complète dans EDIVID : ~1 min de carte.

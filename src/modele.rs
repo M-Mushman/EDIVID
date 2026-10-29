@@ -62,6 +62,22 @@ pub struct Projet {
     /// Séquences avant et après le montage.
     #[serde(default)]
     pub generique: Generique,
+    /// Titre, description et vignette de la vidéo publiée.
+    #[serde(default)]
+    pub fiche: Fiche,
+}
+
+/// Ce que le public voit de la vidéo : titre, description, mots-clés et vignette (YouTube et ailleurs).
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct Fiche {
+    pub titre: String,
+    pub description: String,
+    pub mots_cles: Vec<String>,
+    /// Texte posé sur la vignette (vide : le titre).
+    pub texte_vignette: String,
+    /// Vignette choisie : fichier de `sorties/vignettes/`.
+    pub vignette: String,
 }
 
 /// Élément posé sur toute la durée du montage : un logo (image de la médiathèque) ou un texte.
@@ -100,14 +116,20 @@ pub struct Generique {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct Sequence {
-    /// « video » : une vidéo de la médiathèque ; « carton » : un titre sur une image (ou sur un fond uni).
+    /// « video » : une vidéo de la médiathèque ; « carton » : un titre sur une image (ou sur un fond uni) ;
+    /// « bibliotheque » : une intro ou une fin de la bibliothèque d'habillage, au format de la sortie.
     pub genre: String,
     /// La vidéo, ou l'image de fond du carton (vide : fond uni).
     pub media: String,
     pub titre: String,
     pub sous_titre: String,
-    /// Carton : sa durée ; vidéo : durée maximale gardée (0 : entière). En secondes.
+    /// Carton : sa durée ; vidéo : durée maximale gardée (0 : entière) ; bibliothèque : durée de l'élément.
+    /// En secondes.
     pub duree: f64,
+    /// Bibliothèque : l'intro (début) ou la fin (fin).
+    pub element: String,
+    /// Bibliothèque : jingle qui remplace le son de l'élément (vide : son d'origine).
+    pub jingle: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

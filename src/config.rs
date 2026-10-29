@@ -36,6 +36,8 @@ pub struct Config {
     pub python_gridnet: PathBuf,
     /// Python de Sidon (`.venv-sidon`, transformers).
     pub python_sidon: PathBuf,
+    /// Python des modèles d'image (FLUX.2 klein : vignettes ; `.venv-video`).
+    pub python_video: PathBuf,
     pub code_acces: String,
     /// Valeur du témoin de session, dérivée du code.
     pub jeton: String,
@@ -105,6 +107,7 @@ impl Config {
             python_deepfilter: racine.join(".venv-deepfilter/bin/python"),
             python_gridnet: racine.join(".venv-gridnet/bin/python"),
             python_sidon: racine.join(".venv-sidon/bin/python"),
+            python_video: racine.join(".venv-video/bin/python"),
             racine,
             donnees,
             ecoute,

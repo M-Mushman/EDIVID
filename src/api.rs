@@ -130,11 +130,17 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/jeux/{jid}", post(appliquer_jeu))
         .route("/api/projets/{id}/habillage", post(changer_habillage))
         .route("/api/projets/{id}/generique", post(changer_generique))
+        .route("/api/habillage", get(voir_rayons))
+        .route("/api/projets/{id}/fiche", post(changer_fiche))
+        .route("/api/projets/{id}/vignettes", get(voir_vignettes).post(fabriquer_vignettes))
+        .route("/api/projets/{id}/vignettes/titrer", post(titrer_vignettes))
+        .route("/api/projets/{id}/vignettes/{nom}", get(fichier_vignette))
         .route("/api/drive/parcourir", get(parcourir_drive))
         .route("/api/projets/{id}/drive/importer", post(importer_drive))
         .route("/api/bibliotheque/{did}", delete(retirer_demande))
         .merge(televersement)
         .nest_service("/polices", ServeDir::new(etat.cfg.racine.join("modeles").join("polices")))
+        .nest_service("/habillage", ServeDir::new(crate::rayons::racine(&etat.cfg.donnees)))
         .fallback_service(ServeDir::new(&web).fallback(ServeFile::new(web.join("index.html"))))
         .layer(middleware::from_fn_with_state(etat.clone(), acces::garde))
         .with_state(etat)
@@ -193,6 +199,7 @@ async fn creer_projet(State(etat): State<EtatPartage>, Json(n): Json<Nom>) -> Re
         exports: vec![],
         habillage: vec![],
         generique: Default::default(),
+        fiche: Default::default(),
     };
     etat.enregistrer(&p).await?;
     let id = p.id.clone();
@@ -1442,12 +1449,25 @@ async fn changer_habillage(State(etat): State<EtatPartage>, Path(id): Path<Strin
     Ok(Json(json!({"habillage": propre})))
 }
 
-/// Vérifie une séquence du générique : une vidéo de la médiathèque, ou un carton (titre, image facultative).
-fn borner_sequence(p: &Projet, s: Option<Sequence>) -> Result<Option<Sequence>, String> {
+/// Vérifie une séquence du générique : une vidéo de la médiathèque, un carton (titre, image facultative), ou une
+/// intro (`rayon` « intros ») ou une fin (« fins ») de la bibliothèque d'habillage, avec un jingle facultatif.
+fn borner_sequence(donnees: &std::path::Path, rayon: &str, p: &Projet, s: Option<Sequence>) -> Result<Option<Sequence>, String> {
     let Some(mut s) = s else { return Ok(None) };
     s.titre = s.titre.trim().chars().take(80).collect();
     s.sous_titre = s.sous_titre.trim().chars().take(120).collect();
+    if s.genre != "bibliotheque" {
+        s.element.clear();
+        s.jingle.clear();
+    }
     match s.genre.as_str() {
+        "bibliotheque" => {
+            let f = crate::rayons::fiche(donnees, rayon, &s.element).ok_or("choisissez un élément de la bibliothèque")?;
+            if !s.jingle.is_empty() && crate::rayons::fiche(donnees, "jingles", &s.jingle).is_none() {
+                return Err("ce jingle n'est plus dans la bibliothèque".into());
+            }
+            s.media.clear();
+            s.duree = f["duree"].as_f64().unwrap_or(3.0).clamp(1.0, 60.0);
+        }
         "video" => {
             if !p.medias.iter().any(|m| m.id == s.media && m.genre == "video") {
                 return Err("choisissez une vidéo de la médiathèque du projet".into());
@@ -1463,16 +1483,69 @@ fn borner_sequence(p: &Projet, s: Option<Sequence>) -> Result<Option<Sequence>, 
             }
             s.duree = if s.duree > 0.0 { s.duree.clamp(1.5, 10.0) } else { 3.0 };
         }
-        _ => return Err("une séquence du générique est une vidéo ou un carton".into()),
+        _ => return Err("une séquence du générique est une vidéo, un carton ou un élément de la bibliothèque".into()),
     }
     Ok(Some(s))
 }
 
 async fn changer_generique(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(g): Json<Generique>) -> Reponse {
     let p = etat.projet(&id).await?;
-    let g = Generique { debut: borner_sequence(&p, g.debut).map_err(refus)?, fin: borner_sequence(&p, g.fin).map_err(refus)? };
+    let d = &etat.cfg.donnees;
+    let g = Generique { debut: borner_sequence(d, "intros", &p, g.debut).map_err(refus)?,
+                        fin: borner_sequence(d, "fins", &p, g.fin).map_err(refus)? };
     etat.modifier(&id, |p| p.generique = g.clone()).await?;
     Ok(Json(json!({"generique": g})))
+}
+
+/// Titre, description, mots-clés, texte et choix de la vignette.
+async fn changer_fiche(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(mut f): Json<crate::modele::Fiche>) -> Reponse {
+    f.titre = f.titre.trim().chars().take(100).collect();
+    f.description = f.description.trim().chars().take(5000).collect();
+    f.mots_cles = f.mots_cles.iter().map(|m| m.trim().chars().take(60).collect::<String>()).filter(|m| !m.is_empty()).take(30).collect();
+    f.texte_vignette = f.texte_vignette.trim().chars().take(80).collect();
+    if !f.vignette.is_empty() && !crate::vignette::existe(&crate::vignette::dossier(&etat, &id), &f.vignette) {
+        return Err(refus("vignette introuvable"));
+    }
+    etat.modifier(&id, |p| p.fiche = f.clone()).await?;
+    Ok(Json(json!({"fiche": f})))
+}
+
+async fn voir_vignettes(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    etat.projet(&id).await?;
+    let en_cours = etat.file.visibles().iter().any(|t| t.projet == id && t.libelle.starts_with("Vignettes"));
+    Ok(Json(json!({"vignettes": crate::vignette::liste(&etat, &id), "en_cours": en_cours})))
+}
+
+/// Quatre nouvelles propositions (carte graphique, en file).
+async fn fabriquer_vignettes(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(d): Json<crate::vignette::Demande>) -> Reponse {
+    etat.projet(&id).await?;
+    crate::vignette::verifier(&etat, &d).map_err(|e| refus(e.to_string()))?;
+    etat.file.ajouter(&etat, &id, Genre::Vignettes(serde_json::to_string(&d).map_err(|e| anyhow!("{e}"))?));
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct Titrer {
+    #[serde(default)]
+    logo: bool,
+}
+
+/// Repose le texte de la fiche sur les vignettes déjà dessinées (processeur, quelques secondes).
+async fn titrer_vignettes(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(t): Json<Titrer>) -> Reponse {
+    crate::vignette::retitrer(&etat, &id, t.logo).await?;
+    Ok(Json(json!({"vignettes": crate::vignette::liste(&etat, &id)})))
+}
+
+async fn fichier_vignette(State(etat): State<EtatPartage>, Path((id, nom)): Path<(String, String)>, requete: Request)
+                          -> Result<Response, Erreur> {
+    etat.projet(&id).await?;
+    let f = crate::vignette::chemin(&etat, &id, &nom).map_err(|e| Erreur(StatusCode::NOT_FOUND, e.to_string()))?;
+    Ok(ServeFile::new(f).try_call(requete).await.map_err(|e| anyhow!("{e}"))?.into_response())
+}
+
+/// La bibliothèque d'habillage (intros, fins, jingles, styles, photos), commune à tous les projets.
+async fn voir_rayons(State(etat): State<EtatPartage>) -> Json<Value> {
+    Json(crate::rayons::catalogue(&etat.cfg.donnees))
 }
 
 // ---------------------------------------------------------------- Google Drive : choisir des fichiers

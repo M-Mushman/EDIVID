@@ -17,10 +17,12 @@ mod llm;
 mod modele;
 mod parametres;
 mod postprod;
+mod rayons;
 mod reglages;
 mod stockage;
 mod rendu;
 mod travaux;
+mod vignette;
 mod youtube;
 
 use anyhow::Result;
@@ -34,7 +36,8 @@ async fn main() -> Result<()> {
     let cfg = config::Config::charger()?;
     let adresses = cfg.ecoute.clone();
     let relais = cfg.ecoute_relais;
-    let nvenc = rendu::nvenc_disponible().await;
+    // EDIVID_NVENC=0 : tout sur le processeur, sans même essayer l'encodeur de la carte (instance d'essai).
+    let nvenc = std::env::var("EDIVID_NVENC").map_or(true, |v| v != "0") && rendu::nvenc_disponible().await;
     tracing::info!("encodeur matériel NVENC : {}", if nvenc { "disponible" } else { "absent, x264 utilisé" });
     let etat = etat::Etat::nouveau(cfg, nvenc).await?;
     travaux::demarrer(etat.clone());

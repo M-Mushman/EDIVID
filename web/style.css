@@ -342,6 +342,19 @@ select.champ { padding: 8px 10px; margin-top: 8px; }
 .media .supprimer { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,.55); color: #fff; border: 0; border-radius: 8px; width: 28px; height: 28px; display: grid; place-items: center; cursor: pointer; }
 .media .supprimer svg { width: 14px; height: 14px; }
 .media.choisi { outline: 2px solid var(--accent); }
+.grille-rayon { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); max-height: 300px; overflow-y: auto; padding: var(--space-1); }
+.tuile-rayon { display: flex; flex-direction: column; gap: var(--space-1); padding: 0 0 var(--space-1); border-radius: var(--rayon-petit); border: 1px solid var(--bord);
+  background: var(--surface); cursor: pointer; overflow: hidden; font-size: var(--text-xs); color: var(--texte-2); }
+.tuile-rayon .image-rayon { aspect-ratio: 16 / 9; display: block; background: var(--surface-3); }
+.tuile-rayon img, .tuile-rayon video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tuile-rayon:hover { border-color: var(--accent); }
+.tuile-rayon.choisi { border-color: var(--accent); outline: 2px solid var(--accent); color: var(--texte); }
+.ligne-son { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: center; }
+.grille-vignettes { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-2); margin-top: var(--space-2); max-height: 360px; overflow-y: auto; padding: var(--space-1); }
+.grille-photos { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--space-1); max-height: 190px; overflow-y: auto; padding: var(--space-1); }
+.grille-photos .image-photo { aspect-ratio: 3 / 4; display: block; background: var(--surface-3); }
+.grille-styles { display: grid; grid-template-columns: repeat(7, 1fr); gap: var(--space-1); margin-top: var(--space-2); }
+.grille-styles img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: var(--rayon-petit); display: block; }
 
 .incrustation { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px; border-radius: 11px; background: var(--surface-2); margin-bottom: 8px; }
 
