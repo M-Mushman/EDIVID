@@ -18,6 +18,7 @@ mod modele;
 mod parametres;
 mod postprod;
 mod rayons;
+mod sauvegarde;
 mod reglages;
 mod stockage;
 mod rendu;

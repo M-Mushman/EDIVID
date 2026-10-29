@@ -30,6 +30,8 @@ pub enum Genre {
     Export(String),
     /// Quatre propositions de vignette (demande en JSON).
     Vignettes(String),
+    /// Rush d'un projet réimporté : vidéo de travail refaite, analyse reprise de la sauvegarde.
+    Restaurer(String),
 }
 
 impl Genre {
@@ -43,6 +45,7 @@ impl Genre {
             Genre::Rendu => "Vidéo finale",
             Genre::Export(_) => "Export",
             Genre::Vignettes(_) => "Vignettes YouTube",
+            Genre::Restaurer(_) => "Reprise d'un rush sauvegardé",
         }
     }
 }
@@ -185,6 +188,25 @@ async fn etat_rush(etat: &EtatPartage, projet: &str, rush: &str, e: EtatRush) ->
 async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
     let projet = t.projet.as_str();
     match &t.genre {
+        Genre::Restaurer(rush) => {
+            let p = etat.projet(projet).await?;
+            let Some(r) = p.rushs.iter().find(|x| &x.id == rush).cloned() else { return Ok(()) };
+            let dossier = etat.dossier_travail(projet, rush);
+            tokio::fs::create_dir_all(&dossier).await?;
+            if !dossier.join("mezz.mkv").exists() {
+                let source = etat.dossier_projet(projet).join("rushs").join(&r.fichier);
+                let infos = rendu::sonder_rush(&source).await?;
+                rendu::preparer(etat, projet, &source, &infos, &dossier.join("mezz.mkv")).await?;
+            }
+            // L'analyse (transcription, visages) vient de la sauvegarde : pas de nouveau passage sur la carte.
+            if dossier.join("analyse.json").exists() {
+                etat_rush(etat, projet, rush, EtatRush::Pret).await?;
+            } else {
+                etat_rush(etat, projet, rush, EtatRush::Prepare).await?;
+                etat.file.ajouter(etat, projet, Genre::Analyser(rush.clone()));
+            }
+            etat.file.ajouter(etat, projet, Genre::Proxy(rush.clone()));
+        }
         Genre::Vignettes(demande) => {
             crate::vignette::fabriquer(etat, projet, &serde_json::from_str(demande)?).await?;
         }

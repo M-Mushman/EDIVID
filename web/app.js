@@ -405,7 +405,9 @@ async function afficherAccueil() {
     h('div', { style: { display: 'flex', alignItems: 'end', justifyContent: 'space-between', gap: '12px', marginTop: '28px', flexWrap: 'wrap' } },
       h('div', {}, h('h1', {}, 'Vos projets'),
         h('p', { class: 'muet', style: { margin: '4px 0 0' } }, 'Un projet = une vidéo à monter.')),
-      h('button', { class: 'btn primaire', onclick: nouveauProjet }, icone('plus'), 'Nouveau projet')),
+      h('div', { style: { display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' } },
+        h('button', { class: 'btn', onclick: importerSauvegarde, title: 'Reprendre un projet depuis son zip de sauvegarde' }, icone('televerser'), 'Importer une sauvegarde'),
+        h('button', { class: 'btn primaire', onclick: nouveauProjet }, icone('plus'), 'Nouveau projet'))),
     h('div', { class: 'etapes-accueil' }, etapes.map(([t, d], i) =>
       h('div', { class: 'carte etape-accueil' }, h('div', { class: 'num' }, i + 1), h('h3', {}, t), h('p', { class: 'petit muet', style: { margin: '4px 0 0' } }, d)))),
     projets.length === 0
@@ -421,7 +423,8 @@ async function afficherAccueil() {
               h('span', { class: 'pastille' }, `${p.rushs} rush${p.rushs > 1 ? 's' : ''}`),
               p.monte ? h('span', { class: 'pastille accent' }, 'Monté') : null,
               p.rendu ? h('span', { class: 'pastille ok' }, 'Rendu prêt') : null,
-              p.origine ? h('span', { class: 'pastille' }, icone('nuage'), p.origine) : null))))));
+              p.origine ? h('span', { class: 'pastille' }, icone('nuage'), p.origine) : null,
+              p.sauvegarde ? h('span', { class: 'pastille', title: 'Dernière sauvegarde téléchargée' }, `Sauvegardé le ${new Date(p.sauvegarde).toLocaleDateString('fr-FR')}`) : null))))));
 }
 
 function nouveauProjet() {
@@ -603,13 +606,81 @@ function construireProjet() {
   construirePanneau();
 }
 
-async function supprimerProjet() {
+/** Sauvegarder (zip téléchargé) puis supprimer le projet ; la bibliothèque du compte n'est pas touchée. */
+function supprimerProjet() {
+  const id = E.projetId;
   const nom = E.vue?.projet?.nom || 'ce projet';
-  if (!(await confirmer('Supprimer le projet ?', `« ${nom} », ses rushs, ses médias et ses rendus seront effacés de cet ordinateur. C’est définitif.`, 'Supprimer'))) return;
-  try {
-    await api('DELETE', `/api/projets/${E.projetId}`);
-    location.hash = '#/';
-  } catch (e) { toast(e.message, 'erreur'); }
+  fenetre('Sauvegarder et supprimer le projet', (fermer) => {
+    const zone = h('div', {}, h('p', { class: 'muet' }, 'Calcul de la taille…'));
+    let suivi;
+    const dessiner = async () => {
+      let s;
+      try { s = await api('GET', `/api/projets/${id}/sauvegarde`); } catch (e) { remplir(zone, h('p', {}, e.message)); return; }
+      if (!zone.isConnected) return;
+      clearTimeout(suivi);
+      const quand = s.sauvegarde ? new Date(s.sauvegarde.quand).toLocaleString('fr-FR') : null;
+      const etatSauvegarde = s.a_jour
+        ? h('div', { class: 'aide', style: { background: 'var(--ok-doux)' } }, icone('ok'), h('span', {}, `Sauvegarde téléchargée le ${quand} (${taille(s.sauvegarde.taille)}) : elle contient l’état actuel du projet.`))
+        : s.sauvegarde
+          ? h('div', { class: 'aide', style: { background: 'var(--alerte-doux)' } }, icone('alerte'), h('span', {}, `La dernière sauvegarde (${quand}) date d’avant des changements : téléchargez-en une nouvelle.`))
+          : null;
+      const telecharger = h('a', { class: `btn ${s.a_jour ? '' : 'primaire'}`, href: `/api/projets/${id}/sauvegarde.zip`,
+        onclick: () => { toast('Téléchargement lancé : le navigateur l’enregistre. Cette fenêtre le dira quand il sera complet.', 'ok'); suivre(); } },
+        icone('telecharger'), `Télécharger la sauvegarde (${taille(s.taille_zip || 0)})`);
+      const supprimer = h('button', { class: `btn ${s.a_jour ? 'primaire' : ''} danger`, onclick: async () => {
+        if (!s.a_jour && !(await confirmer('Supprimer sans sauvegarde à jour ?', `« ${nom} » sera effacé de ce serveur, et aucune sauvegarde ne contient son état actuel. C’est définitif.`, 'Supprimer quand même'))) return;
+        try {
+          const r = await api('DELETE', `/api/projets/${id}`);
+          toast(r.medias_verses ? `Projet supprimé ; ${r.medias_verses} média${r.medias_verses > 1 ? 's' : ''} rangé${r.medias_verses > 1 ? 's' : ''} dans la bibliothèque.` : 'Projet supprimé.', 'ok');
+          fermer();
+          location.hash = '#/';
+        } catch (e) { toast(e.message, 'erreur'); }
+      } }, icone('corbeille'), 'Supprimer le projet');
+      remplir(zone,
+        h('p', { class: 'muet', style: { marginTop: 0 } }, `La sauvegarde de « ${nom} » est un zip qui garde l’essentiel pour reprendre le projet plus tard : rushs d’origine, médias, montage, réglages, textes, analyses et vidéo finale. La vidéo de travail, très lourde, n’y est pas : elle se refait toute seule si le zip est réimporté (accueil, « Importer une sauvegarde »).`),
+        h('p', { class: 'muet' }, `La bibliothèque de ${s.proprietaire || 'ce compte'} (intros, fins, jingles, styles, photos) n’est pas touchée. ${s.medias ? `Les ${s.medias} média${s.medias > 1 ? 's' : ''} ajouté${s.medias > 1 ? 's' : ''} à ce projet (logos, vidéos, sons) la rejoignent avant la suppression.` : ''}`),
+        etatSauvegarde,
+        h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', flexWrap: 'wrap', marginTop: 'var(--space-4)' } },
+          h('button', { class: 'btn', onclick: fermer }, 'Fermer'), telecharger, supprimer));
+    };
+    // Tant que le téléchargement court, la fenêtre regarde si le serveur a tout envoyé.
+    const suivre = () => { clearTimeout(suivi); suivi = setTimeout(async () => { if (zone.isConnected) { await dessiner(); suivre(); } }, 5000); };
+    dessiner();
+    return zone;
+  }, { large: true });
+}
+
+/** Réimporte une sauvegarde (zip) comme un nouveau projet, avec la progression de l'envoi. */
+function importerSauvegarde() {
+  const choix = h('input', { type: 'file', accept: '.zip,application/zip', style: { display: 'none' } });
+  choix.addEventListener('change', () => {
+    const f = choix.files[0];
+    if (!f) return;
+    fenetre('Importer une sauvegarde', (fermer) => {
+      const jauge = h('div', { style: { width: '0%' } });
+      const texte = h('span', { class: 'tres-petit muet' }, `${f.name} · ${taille(f.size)}`);
+      const x = new XMLHttpRequest();
+      x.open('PUT', '/api/sauvegardes');
+      x.setRequestHeader('X-EDIVID', '1');
+      x.upload.onprogress = (e) => { if (e.lengthComputable) jauge.style.width = `${(100 * e.loaded) / e.total}%`; };
+      x.upload.onload = () => { texte.textContent = 'Envoi terminé : déballage du zip…'; };
+      x.onload = () => {
+        let r = {};
+        try { r = JSON.parse(x.responseText); } catch { /* réponse vide */ }
+        if (x.status >= 400) { toast(r.erreur || `erreur ${x.status}`, 'erreur'); fermer(); return; }
+        toast('Projet réimporté : la vidéo de travail de chaque rush se refait, puis tout est prêt.', 'ok');
+        fermer();
+        location.hash = `#/projet/${r.id}`;
+      };
+      x.onerror = () => { toast('Envoi interrompu', 'erreur'); fermer(); };
+      x.send(f);
+      return h('div', {}, h('div', { class: 'carte suivi-export' }, h('b', {}, 'Envoi de la sauvegarde'), h('div', { class: 'jauge' }, jauge), texte),
+        h('p', { class: 'tres-petit muet' }, 'Gardez cette page ouverte jusqu’à la fin de l’envoi.'));
+    });
+  });
+  document.body.append(choix);
+  choix.click();
+  choix.remove();
 }
 
 function dessinerTout() {
@@ -2174,20 +2245,26 @@ function blocHabillage(corps) {
   corps.append(blocOutil('habillage', { icone: 'etoile', titre: 'Habillage permanent', famille: 'image', resume }, zone));
 }
 
-/** Bibliothèque d'habillage commune à tous les projets : intros, fins, jingles, styles et photos. */
+/** Bibliothèque d'habillage du propriétaire du projet ouvert : intros, fins, jingles, styles et photos ;
+ *  `base` : l'adresse de ses fichiers. Rechargée quand on change de projet. */
 let catalogueRayons = null;
+function chargerRayons(rappel) {
+  if (catalogueRayons?.projet === E.projetId) return;
+  const projet = E.projetId;
+  api('GET', `/api/projets/${projet}/habillage`).then((c) => { catalogueRayons = { ...c, projet }; rappel(); }).catch(() => {});
+}
 const ecouteJingle = new Audio();
 
 /** Grille de vignettes d'un rayon (intros ou fins) : un clic choisit, le survol fait jouer l'élément sans le son. */
 function grilleRayon(rayon, valeur, changer) {
   const prefixe = rayon === 'intros' ? 'intro' : 'fin';
   return h('div', { class: 'grille-rayon' }, (catalogueRayons?.[rayon] || []).map((el) => {
-    const img = h('img', { src: `/habillage/${rayon}/${el.id}/vignette.jpg`, alt: '', loading: 'lazy' });
+    const img = h('img', { src: `${catalogueRayons.base}/${rayon}/${el.id}/vignette.jpg`, alt: '', loading: 'lazy' });
     const tuile = h('button', { class: `tuile-rayon ${valeur === el.id ? 'choisi' : ''}`, title: `${el.nom} · ${fr(el.duree)} s`,
       'aria-pressed': valeur === el.id ? 'true' : 'false', onclick: () => changer(el) }, h('span', { class: 'image-rayon' }, img), h('span', {}, el.nom));
     let video = null;
     tuile.addEventListener('mouseenter', () => {
-      video = h('video', { src: `/habillage/${rayon}/${el.id}/${prefixe}_1920x1080.mp4`, loop: true, playsinline: true });
+      video = h('video', { src: `${catalogueRayons.base}/${rayon}/${el.id}/${prefixe}_1920x1080.mp4`, loop: true, playsinline: true });
       video.muted = true;
       img.replaceWith(video);
       video.play().catch(() => {});
@@ -2254,11 +2331,11 @@ function blocFiche(corps) {
     const photos = h('div', { class: 'grille-photos' }, (c?.photos || []).map((n) => h('button', {
       class: `tuile-rayon ${photo === n ? 'choisi' : ''}`, title: n, 'aria-pressed': photo === n ? 'true' : 'false',
       onclick: () => { photo = n; stocker('edivid_vignette_photo', n); dessiner(); } },
-      h('span', { class: 'image-photo' }, h('img', { src: `/habillage/photos/${encodeURIComponent(n)}`, alt: '', loading: 'lazy' })))));
+      h('span', { class: 'image-photo' }, h('img', { src: `${c.base}/photos/${encodeURIComponent(n)}`, alt: '', loading: 'lazy' })))));
     const styles = h('div', { class: 'segments' }, (c?.styles || []).map((x) => h('button', { class: style === x.id ? 'actif' : '',
       onclick: () => { style = x.id; stocker('edivid_vignette_style', x.id); dessiner(); } }, x.id.replace(/_/g, ' '))));
     const exemples = h('div', { class: 'grille-styles' }, (c?.styles.find((x) => x.id === style)?.images || []).map((n) =>
-      h('img', { src: `/habillage/styles/${style}/${encodeURIComponent(n)}`, alt: '', loading: 'lazy' })));
+      h('img', { src: `${c.base}/styles/${style}/${encodeURIComponent(n)}`, alt: '', loading: 'lazy' })));
     const dessinerLot = h('button', { class: 'btn primaire petit', onclick: async () => {
       try {
         await api('POST', `/api/projets/${E.projetId}/vignettes`, { photo, style, logo });
@@ -2289,7 +2366,7 @@ function blocFiche(corps) {
   };
   dessiner();
   dessinerVignettes();
-  if (!catalogueRayons) api('GET', '/api/habillage').then((c) => { catalogueRayons = c; dessiner(); }).catch(() => {});
+  chargerRayons(dessiner);
   corps.append(blocOutil('fiche', { icone: 'youtube', titre: 'Fiche de la vidéo', famille: 'recettes',
     resume: f.titre ? `« ${f.titre} »${f.vignette ? ' · vignette choisie' : ''}` : 'Titre, description, vignette' }, zone));
 }
@@ -2343,11 +2420,11 @@ function blocGenerique(corps) {
       const ecouter = () => {
         if (!ecouteJingle.paused) { ecouteJingle.pause(); return; }
         const j = jingles.find((x) => x.id === s.jingle);
-        let url = `/habillage/${rayon}/${s.element}/${cle === 'debut' ? 'intro' : 'fin'}_1920x1080.mp4`;
+        let url = `${catalogueRayons.base}/${rayon}/${s.element}/${cle === 'debut' ? 'intro' : 'fin'}_1920x1080.mp4`;
         if (j) {
           const versions = Object.entries(j.durees || {}).sort((a, b) => a[1] - b[1]);
           const v = versions.find(([, d]) => d + 0.05 >= s.duree) || versions[versions.length - 1];
-          if (v) url = `/habillage/jingles/${j.id}/${v[0]}.wav`;
+          if (v) url = `${catalogueRayons.base}/jingles/${j.id}/${v[0]}.wav`;
         }
         ecouteJingle.src = url;
         ecouteJingle.play().catch((e) => toast(e.message, 'erreur'));
@@ -2387,7 +2464,7 @@ function blocGenerique(corps) {
     h('div', { class: 'reglage-aide' }, 'Une séquence avant le montage et une après : une intro ou une fin de la bibliothèque, votre propre vidéo (onglet Médias), ou un titre sur une image. Les sous-titres et l’habillage ne s’y posent pas.'),
     cote('debut', 'Avant le montage'), cote('fin', 'Après le montage'));
   dessiner();
-  if (!catalogueRayons) api('GET', '/api/habillage').then((c) => { catalogueRayons = c; dessiner(); }).catch(() => {});
+  chargerRayons(dessiner);
   const decrire = (s) => (!s ? 'aucun' : s.genre === 'bibliotheque' ? (s.element || 'bibliothèque') : s.genre === 'video' ? 'vidéo' : `« ${s.titre || 'carton'} »`);
   corps.append(blocOutil('generique', { icone: 'film', titre: 'Générique : début et fin', famille: 'montage',
     resume: `Début : ${decrire(g.debut)} · Fin : ${decrire(g.fin)}` }, zone));

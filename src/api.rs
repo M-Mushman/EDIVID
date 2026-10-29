@@ -61,6 +61,7 @@ pub fn routes(etat: EtatPartage) -> Router {
     let televersement = Router::new()
         .route("/api/projets/{id}/rushs", put(televerser_rush))
         .route("/api/projets/{id}/medias", put(televerser_media))
+        .route("/api/sauvegardes", put(importer_sauvegarde))
         .layer(DefaultBodyLimit::max(TELEVERSEMENT_MAX as usize));
     Router::new()
         .route("/api/session", get(acces::voir_session))
@@ -130,8 +131,10 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/jeux/{jid}", post(appliquer_jeu))
         .route("/api/projets/{id}/habillage", post(changer_habillage))
         .route("/api/projets/{id}/generique", post(changer_generique))
-        .route("/api/habillage", get(voir_rayons))
+        .route("/api/projets/{id}/habillage", get(voir_rayons))
         .route("/api/projets/{id}/fiche", post(changer_fiche))
+        .route("/api/projets/{id}/sauvegarde", get(voir_sauvegarde))
+        .route("/api/projets/{id}/sauvegarde.zip", get(telecharger_sauvegarde))
         .route("/api/projets/{id}/vignettes", get(voir_vignettes).post(fabriquer_vignettes))
         .route("/api/projets/{id}/vignettes/titrer", post(titrer_vignettes))
         .route("/api/projets/{id}/vignettes/{nom}", get(fichier_vignette))
@@ -140,7 +143,7 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/bibliotheque/{did}", delete(retirer_demande))
         .merge(televersement)
         .nest_service("/polices", ServeDir::new(etat.cfg.racine.join("modeles").join("polices")))
-        .nest_service("/habillage", ServeDir::new(crate::rayons::racine(&etat.cfg.donnees)))
+        .nest_service("/habillage", ServeDir::new(crate::rayons::racine_commune(&etat.cfg.donnees)))
         .fallback_service(ServeDir::new(&web).fallback(ServeFile::new(web.join("index.html"))))
         .layer(middleware::from_fn_with_state(etat.clone(), acces::garde))
         .with_state(etat)
@@ -165,7 +168,7 @@ async fn liste_projets(State(etat): State<EtatPartage>) -> Json<Value> {
     v.sort_by(|a, b| b.cree.cmp(&a.cree));
     Json(json!(v.iter().map(|p| json!({"id": p.id, "nom": p.nom, "cree": p.cree, "rushs": p.rushs.len(),
         "monte": p.montage.is_some(), "rendu": p.rendu.is_some(), "origine": p.origine,
-        "drive": p.depot_drive.is_some()})).collect::<Vec<_>>()))
+        "drive": p.depot_drive.is_some(), "sauvegarde": p.sauvegarde.as_ref().map(|s| &s.quand)})).collect::<Vec<_>>()))
 }
 
 #[derive(Deserialize)]
@@ -173,8 +176,13 @@ struct Nom {
     nom: String,
 }
 
-async fn creer_projet(State(etat): State<EtatPartage>, Json(n): Json<Nom>) -> Reponse {
+async fn creer_projet(State(etat): State<EtatPartage>, entetes: axum::http::HeaderMap, Json(n): Json<Nom>) -> Reponse {
     let nom = n.nom.trim();
+    // La bibliothèque d'habillage du projet : celle de la personne connectée, sinon celle du compte principal.
+    let proprietaire = match acces::session(&etat, &entetes).await.and_then(|s| s.email) {
+        Some(e) => e,
+        None => etat.proprietaire_par_defaut().await,
+    };
     let p = Projet {
         id: nouvel_id(),
         nom: if nom.is_empty() { "Nouveau projet".into() } else { nom.chars().take(80).collect() },
@@ -200,6 +208,8 @@ async fn creer_projet(State(etat): State<EtatPartage>, Json(n): Json<Nom>) -> Re
         habillage: vec![],
         generique: Default::default(),
         fiche: Default::default(),
+        proprietaire,
+        sauvegarde: None,
     };
     etat.enregistrer(&p).await?;
     let id = p.id.clone();
@@ -268,13 +278,31 @@ async fn liberer_stockage(State(etat): State<EtatPartage>, Path((id, cle)): Path
     Ok(Json(json!({"libere": octets})))
 }
 
+/// Supprime le projet ; ses médias rejoignent d'abord la bibliothèque de son propriétaire.
 async fn supprimer_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
-    if etat.file.occupe(&id) {
-        return Err(refus("un travail est en cours sur ce projet : attendez sa fin"));
+    let verses = crate::sauvegarde::supprimer(&etat, &id).await.map_err(|e| refus(format!("{e:#}")))?;
+    Ok(Json(json!({"medias_verses": verses})))
+}
+
+async fn voir_sauvegarde(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    Ok(Json(crate::sauvegarde::infos(&etat, &id).await?))
+}
+
+async fn telecharger_sauvegarde(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Result<Response, Erreur> {
+    Ok(crate::sauvegarde::telecharger(&etat, &id).await?)
+}
+
+/// Reçoit le zip d'une sauvegarde et en fait un nouveau projet.
+async fn importer_sauvegarde(State(etat): State<EtatPartage>, requete: Request) -> Reponse {
+    let archive = etat.cfg.donnees.join("imports").join(format!("{}.zip", nouvel_id()));
+    let res = async {
+        ecrire_corps(requete.into_body(), &archive).await?;
+        crate::sauvegarde::importer(&etat, &archive).await
     }
-    etat.projets.lock().await.remove(&id).ok_or_else(|| anyhow!("projet introuvable"))?;
-    let _ = tokio::fs::remove_dir_all(etat.dossier_projet(&id)).await;
-    Ok(Json(json!({})))
+    .await;
+    let _ = tokio::fs::remove_file(&archive).await;
+    let id = res.map_err(|e| refus(format!("{e:#}")))?;
+    Ok(Json(json!({"id": id})))
 }
 
 async fn voir_projet(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
@@ -1450,7 +1478,8 @@ async fn changer_habillage(State(etat): State<EtatPartage>, Path(id): Path<Strin
 }
 
 /// Vérifie une séquence du générique : une vidéo de la médiathèque, un carton (titre, image facultative), ou une
-/// intro (`rayon` « intros ») ou une fin (« fins ») de la bibliothèque d'habillage, avec un jingle facultatif.
+/// intro (`rayon` « intros ») ou une fin (« fins ») de la bibliothèque `donnees` (celle du propriétaire du projet),
+/// avec un jingle facultatif.
 fn borner_sequence(donnees: &std::path::Path, rayon: &str, p: &Projet, s: Option<Sequence>) -> Result<Option<Sequence>, String> {
     let Some(mut s) = s else { return Ok(None) };
     s.titre = s.titre.trim().chars().take(80).collect();
@@ -1490,9 +1519,9 @@ fn borner_sequence(donnees: &std::path::Path, rayon: &str, p: &Projet, s: Option
 
 async fn changer_generique(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(g): Json<Generique>) -> Reponse {
     let p = etat.projet(&id).await?;
-    let d = &etat.cfg.donnees;
-    let g = Generique { debut: borner_sequence(d, "intros", &p, g.debut).map_err(refus)?,
-                        fin: borner_sequence(d, "fins", &p, g.fin).map_err(refus)? };
+    let d = crate::rayons::racine(&etat.cfg.donnees, &p.proprietaire);
+    let g = Generique { debut: borner_sequence(&d, "intros", &p, g.debut).map_err(refus)?,
+                        fin: borner_sequence(&d, "fins", &p, g.fin).map_err(refus)? };
     etat.modifier(&id, |p| p.generique = g.clone()).await?;
     Ok(Json(json!({"generique": g})))
 }
@@ -1518,8 +1547,8 @@ async fn voir_vignettes(State(etat): State<EtatPartage>, Path(id): Path<String>)
 
 /// Quatre nouvelles propositions (carte graphique, en file).
 async fn fabriquer_vignettes(State(etat): State<EtatPartage>, Path(id): Path<String>, Json(d): Json<crate::vignette::Demande>) -> Reponse {
-    etat.projet(&id).await?;
-    crate::vignette::verifier(&etat, &d).map_err(|e| refus(e.to_string()))?;
+    let p = etat.projet(&id).await?;
+    crate::vignette::verifier(&crate::rayons::racine(&etat.cfg.donnees, &p.proprietaire), &d).map_err(|e| refus(e.to_string()))?;
     etat.file.ajouter(&etat, &id, Genre::Vignettes(serde_json::to_string(&d).map_err(|e| anyhow!("{e}"))?));
     Ok(Json(json!({})))
 }
@@ -1543,9 +1572,10 @@ async fn fichier_vignette(State(etat): State<EtatPartage>, Path((id, nom)): Path
     Ok(ServeFile::new(f).try_call(requete).await.map_err(|e| anyhow!("{e}"))?.into_response())
 }
 
-/// La bibliothèque d'habillage (intros, fins, jingles, styles, photos), commune à tous les projets.
-async fn voir_rayons(State(etat): State<EtatPartage>) -> Json<Value> {
-    Json(crate::rayons::catalogue(&etat.cfg.donnees))
+/// La bibliothèque d'habillage du propriétaire du projet (intros, fins, jingles, styles, photos).
+async fn voir_rayons(State(etat): State<EtatPartage>, Path(id): Path<String>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    Ok(Json(crate::rayons::catalogue(&etat.cfg.donnees, &p.proprietaire)))
 }
 
 // ---------------------------------------------------------------- Google Drive : choisir des fichiers

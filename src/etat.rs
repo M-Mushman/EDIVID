@@ -74,6 +74,12 @@ impl Etat {
         }
         let (evenements, _) = broadcast::channel(512);
         let donnees = cfg.donnees.clone();
+        let parametres = parametres::charger(&donnees);
+        // Projets d'avant les bibliothèques par compte : celle du compte principal.
+        let principal = parametres.comptes.first().map(|c| c.email.clone()).unwrap_or_default();
+        for p in projets.values_mut().filter(|p| p.proprietaire.is_empty()) {
+            p.proprietaire = principal.clone();
+        }
         let http = reqwest::Client::builder().build()?;
         Ok(Arc::new(Self {
             carte: Carte::nouvelle(&cfg, http.clone()),
@@ -83,12 +89,17 @@ impl Etat {
             evenements,
             file: File::nouvelle(),
             http,
-            parametres: tokio::sync::RwLock::new(parametres::charger(&donnees)),
+            parametres: tokio::sync::RwLock::new(parametres),
             drive: Veille::nouvelle(),
             nvenc,
             propositions: Default::default(),
             google: Default::default(),
         }))
+    }
+
+    /// Compte dont la bibliothèque d'habillage sert par défaut : le premier compte relié (vide : bibliothèque commune).
+    pub async fn proprietaire_par_defaut(&self) -> String {
+        self.parametres.read().await.comptes.first().map(|c| c.email.clone()).unwrap_or_default()
     }
 
     pub fn dossier_projet(&self, id: &str) -> PathBuf {

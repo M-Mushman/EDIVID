@@ -104,9 +104,10 @@ Google, mot de passe SMTP, compte rclone) écrits de façon atomique en 600 ; t�
 - Habillage permanent (logos et textes sur toute la durée, place, taille, opacité) et générique (intro ou fin de
   la bibliothèque d'habillage, vidéo, ou titre sur une image, avant et après le montage) ; repris par les jeux de
   réglages, avec copie des médias nécessaires.
-- Bibliothèque d'habillage commune à tous les projets (`donnees/habillage/`, hors git) : `intros/` et `fins/` (un
+- Bibliothèque d'habillage par compte (`donnees/habillage/<compte>/`, hors git ; chaque projet a un propriétaire, la
+  personne connectée qui l'a créé ou le compte principal) : `intros/` et `fins/` (un
   dossier par élément, `intro_<l>x<h>.mp4` dans les six formats de sortie, `vignette.jpg`, `fiche.json`), `jingles/`,
-  `styles/` (images de référence des vignettes), `photos/`, `logos/`. Le rendu prend la version au format de sortie
+  `styles/` (images de référence des vignettes), `photos/`, `logos/`, `medias/` (versés par les projets supprimés). Le rendu prend la version au format de sortie
   et l'enchaîne au montage en fondu croisé d'une demi-seconde, image et son ; un jingle de la bibliothèque peut
   remplacer le son de l'élément. Fabrication : `outils/intro/` (`composer.py` pour les intros, `fin.py` pour la fin,
   `ranger.py` pour ranger un élément dans la bibliothèque).
@@ -125,6 +126,10 @@ Google, mot de passe SMTP, compte rclone) écrits de façon atomique en 600 ; t�
 - Ambiances sonores (`bibliotheque/ambiances.json`) : studio feutré, chambre, podcast, voix off, extérieur,
   salles, cathédrale, radio, téléphone ; écoute d'essai de vingt secondes avant d'appliquer. Écho et bruit
   retirés par IA, porte de traîne, acoustique de lieu par convolution, voix ramenée à −23 LUFS avant traitement.
+- Sauvegarde d'un projet en zip téléchargé (`outils/sauvegarde.py`, écrit à la volée, ZIP64) : rushs d'origine,
+  médias, montage, réglages, analyses, vidéo finale, vignettes ; sans la vidéo de travail ni les aperçus, qui se
+  refont. Suppression ensuite : les médias du projet rejoignent la bibliothèque du propriétaire. Réimport depuis
+  l'accueil : nouveau projet, vidéo de travail refaite sur le processeur, analyse reprise du zip.
 - Encodage NVENC si le paquet `libnvidia-encode-<branche>` du pilote est installé, sinon x264 ; `EDIVID_NVENC=0`
   force le processeur sans même essayer la carte (instance d'essai).
 

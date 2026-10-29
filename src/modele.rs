@@ -65,6 +65,20 @@ pub struct Projet {
     /// Titre, description et vignette de la vidéo publiée.
     #[serde(default)]
     pub fiche: Fiche,
+    /// Compte dont la bibliothèque d'habillage sert à ce projet (intros, fins, jingles, styles, photos).
+    #[serde(default)]
+    pub proprietaire: String,
+    /// Dernière sauvegarde zip téléchargée en entier.
+    #[serde(default)]
+    pub sauvegarde: Option<Sauvegarde>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Sauvegarde {
+    pub quand: String,
+    pub taille: u64,
+    /// Empreinte du contenu sauvegardé (crate::sauvegarde::empreinte) : le projet a-t-il changé depuis ?
+    pub empreinte: String,
 }
 
 /// Ce que le public voit de la vidéo : titre, description, mots-clés et vignette (YouTube et ailleurs).

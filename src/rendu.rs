@@ -898,7 +898,8 @@ fn couper_lignes(texte: &str, max: usize) -> Vec<String> {
 fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: usize, (wo, ho): (u32, u32),
                       args: &mut Vec<String>, fc: &mut Vec<String>, entree: &mut usize, tmp: &Path, passe: Passe, sonie: f64) -> Result<()> {
     if s.genre == "bibliotheque" {
-        return sequence_bibliotheque(etat, s, d + FONDU_ENCHAINE, k, (wo, ho), args, fc, entree, passe, sonie);
+        let biblio = crate::rayons::racine(&etat.cfg.donnees, &p.proprietaire);
+        return sequence_bibliotheque(&biblio, s, d + FONDU_ENCHAINE, k, (wo, ho), args, fc, entree, passe, sonie);
     }
     let ips = passe.ips;
     let medias = etat.dossier_projet(&p.id).join("medias");
@@ -991,16 +992,15 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
     Ok(())
 }
 
-/// Une intro (k = 0) ou une fin (k = 1) de la bibliothèque, dans sa version au format de sortie, sur `d` secondes
+/// Une intro (k = 0) ou une fin (k = 1) de la bibliothèque `biblio` (celle du propriétaire du projet), dans sa version au format de sortie, sur `d` secondes
 /// (chevauchement compris) : [gv{k}] et [ga{k}]. Sans fondu au noir : l'élément a le sien, au blanc, et le
 /// raccord se fait en fondu enchaîné. Son d'origine, ou le jingle choisi (coupé à la durée, avec fondu de fin).
 #[allow(clippy::too_many_arguments)]
-fn sequence_bibliotheque(etat: &EtatPartage, s: &Sequence, d: f64, k: usize, (wo, ho): (u32, u32), args: &mut Vec<String>,
+fn sequence_bibliotheque(biblio: &Path, s: &Sequence, d: f64, k: usize, (wo, ho): (u32, u32), args: &mut Vec<String>,
                          fc: &mut Vec<String>, entree: &mut usize, passe: Passe, sonie: f64) -> Result<()> {
     let ips = passe.ips;
-    let donnees = &etat.cfg.donnees;
     let rayon = crate::rayons::RAYONS_VIDEO[k.min(1)];
-    let (f, exact) = crate::rayons::video_au_format(donnees, rayon, &s.element, (wo, ho))
+    let (f, exact) = crate::rayons::video_au_format(biblio, rayon, &s.element, (wo, ho))
         .ok_or_else(|| anyhow!("« {} » n'est plus dans la bibliothèque d'habillage", s.element))?;
     args.extend(["-t".into(), format!("{d:.3}"), "-i".into(), f.to_string_lossy().into()]);
     let i = *entree;
@@ -1017,7 +1017,7 @@ fn sequence_bibliotheque(etat: &EtatPartage, s: &Sequence, d: f64, k: usize, (wo
              [gs{k}c][gs{k}d]overlay=(W-w)/2:(H-h)/2,{opaque}{finir}[gv{k}]"
         ));
     }
-    let (son, fondu) = match (!s.jingle.is_empty()).then(|| crate::rayons::jingle(donnees, &s.jingle, d)).flatten() {
+    let (son, fondu) = match (!s.jingle.is_empty()).then(|| crate::rayons::jingle(biblio, &s.jingle, d)).flatten() {
         Some(j) => {
             args.extend(["-i".into(), j.to_string_lossy().into()]);
             *entree += 1;

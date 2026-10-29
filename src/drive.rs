@@ -328,6 +328,9 @@ async fn prendre(etat: &EtatPartage, d: &Drive, compte: &str, groupe: &str, fich
         habillage: jeu.as_ref().map(|j| j.habillage.clone()).or_else(|| modele.as_ref().map(|m| m.habillage.clone())).unwrap_or_default(),
         generique: jeu.as_ref().map(|j| j.generique.clone()).or_else(|| modele.as_ref().map(|m| m.generique.clone())).unwrap_or_default(),
         fiche: Default::default(),
+        // Le projet venu du Drive d'un compte se sert de la bibliothèque de ce compte.
+        proprietaire: compte.to_string(),
+        sauvegarde: None,
     };
     // Les logos et vidéos de cet habillage et de ce générique, copiés dans la médiathèque du nouveau projet.
     let dossier_medias = etat.dossier_projet(&id).join("medias");

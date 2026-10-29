@@ -46,9 +46,8 @@ pub fn liste(etat: &EtatPartage, projet: &str) -> Vec<String> {
     v.into_iter().map(|(_, n)| n).collect()
 }
 
-/// Vérifie une demande avant de la mettre en file.
-pub fn verifier(etat: &EtatPartage, d: &Demande) -> Result<()> {
-    let r = rayons::racine(&etat.cfg.donnees);
+/// Vérifie une demande avant de la mettre en file ; `r` : la bibliothèque du propriétaire du projet.
+pub fn verifier(r: &Path, d: &Demande) -> Result<()> {
     if !rayons::photo_valide(&d.photo) || !r.join("photos").join(&d.photo).is_file() {
         bail!("choisissez une photo de la bibliothèque");
     }
@@ -62,15 +61,16 @@ fn texte_vignette(p: &crate::modele::Projet) -> String {
     [&p.fiche.texte_vignette, &p.fiche.titre, &p.nom].into_iter().find(|t| !t.trim().is_empty()).cloned().unwrap_or_default()
 }
 
-fn logo(etat: &EtatPartage, avec: bool) -> String {
-    let f = rayons::racine(&etat.cfg.donnees).join("logos").join("by-edina.png");
+fn logo(r: &Path, avec: bool) -> String {
+    let f = r.join("logos").join("by-edina.png");
     if avec && f.is_file() { f.to_string_lossy().into() } else { String::new() }
 }
 
 /// Fabrique quatre propositions : la scène par le LLM, puis le dessin sous bail de la carte.
 pub async fn fabriquer(etat: &EtatPartage, projet: &str, d: &Demande) -> Result<()> {
-    verifier(etat, d)?;
     let p = etat.projet(projet).await?;
+    let r = rayons::racine(&etat.cfg.donnees, &p.proprietaire);
+    verifier(&r, d)?;
     let contenu = crate::youtube::texte_du_montage(etat, &p).await.unwrap_or_default();
     let schema = json!({"type": "object", "properties": {"scene": {"type": "string"}, "lieu": {"type": "string"}},
                         "required": ["scene", "lieu"]});
@@ -86,7 +86,6 @@ qu'elle fait, sa tenue, l'ambiance (« scene ») ; puis, à part, le lieu seul e
     if scene.is_empty() {
         bail!("le LLM n'a pas décrit de scène");
     }
-    let r = rayons::racine(&etat.cfg.donnees);
     let styles: Vec<String> = rayons::images(&r.join("styles").join(&d.style)).into_iter()
         .map(|n| r.join("styles").join(&d.style).join(n).to_string_lossy().into()).collect();
     if styles.is_empty() {
@@ -99,7 +98,7 @@ qu'elle fait, sa tenue, l'ambiance (« scene ») ; puis, à part, le lieu seul e
     let graines: Vec<u64> = (0..PROPOSITIONS).map(|k| base + k).collect();
     let travail = json!({"photo": r.join("photos").join(&d.photo), "styles": styles, "scene": scene, "lieu": lieu,
                          "methode": METHODE, "texte": texte_vignette(&p),
-                         "logo": logo(etat, d.logo), "sortie": sortie, "graines": graines});
+                         "logo": logo(&r, d.logo), "sortie": sortie, "graines": graines});
     let fichier = sortie.join(format!("travail_{base}.json"));
     tokio::fs::write(&fichier, serde_json::to_vec_pretty(&travail)?).await?;
     let bail = etat.carte.prendre(etat, projet, "other:vignette", VRAM_VIGNETTE_MO, 300).await?;
@@ -113,6 +112,7 @@ qu'elle fait, sa tenue, l'ambiance (« scene ») ; puis, à part, le lieu seul e
 /// Repose le texte (et le logo) sur toutes les vignettes déjà dessinées, sur le processeur.
 pub async fn retitrer(etat: &EtatPartage, projet: &str, logo_voulu: bool) -> Result<()> {
     let p = etat.projet(projet).await?;
+    let r = rayons::racine(&etat.cfg.donnees, &p.proprietaire);
     let texte = texte_vignette(&p);
     let travaux: Vec<PathBuf> = std::fs::read_dir(dossier(etat, projet)).into_iter().flatten().flatten().map(|e| e.path())
         .filter(|f| f.file_name().is_some_and(|n| n.to_string_lossy().starts_with("travail_")))
@@ -120,7 +120,7 @@ pub async fn retitrer(etat: &EtatPartage, projet: &str, logo_voulu: bool) -> Res
     for f in travaux {
         let mut t: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&f).await?)?;
         t["texte"] = json!(texte);
-        t["logo"] = json!(logo(etat, logo_voulu));
+        t["logo"] = json!(logo(&r, logo_voulu));
         tokio::fs::write(&f, serde_json::to_vec_pretty(&t)?).await?;
         rendu::capteur(etat, projet, "vignette.py", &["titrer".into(), f.to_string_lossy().into()]).await?;
     }
