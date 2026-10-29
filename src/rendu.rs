@@ -1832,6 +1832,8 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
             fc.push(format!("[w{i}]adelay=delays={ms}:all=1,volume=0.6[wd{i}]"));
             melange.push(format!("wd{i}"));
         }
+        // Sans cela, la séquence du générique qui suit prenait le même numéro d'entrée que le bruitage.
+        entree += 1;
     }
     let (avant, apres) = durees_generique(p);
     if apercu {

@@ -1976,7 +1976,8 @@ function controleReglage(r, valeur) {
         E.aMettreAJour = true;
         if (r.remontage) toast(`${res.faits.join(', ')} — pris en compte au prochain montage par le LLM.`);
       }
-    } catch (e) { toast(e.message, 'erreur'); }
+      return true;
+    } catch (e) { toast(e.message, 'erreur'); return false; }
   };
   if (r.genre === 'interrupteur') {
     return h('label', { class: 'interrupteur', title: r.titre },
@@ -1984,8 +1985,21 @@ function controleReglage(r, valeur) {
   }
   if (r.genre === 'choix') {
     if (r.options.length <= 4) {
-      return h('div', { class: 'segments', role: 'radiogroup', 'aria-label': r.titre }, r.options.map((o) =>
-        h('button', { class: o.valeur === valeur ? 'actif' : '', role: 'radio', 'aria-checked': o.valeur === valeur ? 'true' : 'false', onclick: () => changer(o.valeur) }, o.libelle)));
+      // Le choix s'allume tout de suite : dans une fenêtre (vidéo finale), rien ne redessine le contrôle ensuite.
+      const marquer = (groupe, v) => groupe.querySelectorAll('button').forEach((b, i) => {
+        const oui = r.options[i].valeur === v;
+        b.classList.toggle('actif', oui);
+        b.setAttribute('aria-checked', oui ? 'true' : 'false');
+      });
+      const groupe = h('div', { class: 'segments', role: 'radiogroup', 'aria-label': r.titre }, r.options.map((o) =>
+        h('button', { class: o.valeur === valeur ? 'actif' : '', role: 'radio', 'aria-checked': o.valeur === valeur ? 'true' : 'false',
+          onclick: async () => {
+            const avant = r.options.find((x) => x.valeur === valeur) ? valeur : null;
+            marquer(groupe, o.valeur);
+            if (await changer(o.valeur)) valeur = o.valeur;
+            else marquer(groupe, avant);
+          } }, o.libelle)));
+      return groupe;
     }
     return h('select', { class: 'champ', onchange: (e) => changer(e.target.value), 'aria-label': r.titre },
       r.options.map((o) => h('option', { value: o.valeur, selected: o.valeur === valeur }, o.libelle)));
