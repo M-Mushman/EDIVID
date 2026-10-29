@@ -3,10 +3,13 @@
 Usage : python composer.py <video_horizontale.mp4> <video_verticale.mp4> <jingle.wav> <logo.png> <dossier_sortie>
                            [debut_jingle_s=0]
 
-Formats : 3840×2160 et 1920×1080 (depuis la vidéo horizontale), 1080×1920 (depuis la verticale). MP4 H.264 High, SDR
-BT.709, 30 i/s, 3 s, son AAC 48 kHz. Titre en Nimbus Sans Bold (reprise libre d'Helvetica, URW).
+Formats : les six de sortie d'EDIVID. 3840×2160 et 1920×1080 depuis la vidéo horizontale ; 2160×3840, 1080×1920,
+2160×2160 et 1080×1080 depuis la verticale. Un format déjà écrit n'est pas refait. MP4 H.264 High, SDR BT.709, 30 i/s,
+3 s, son AAC 48 kHz. Titre en Nimbus Sans Bold (reprise libre d'Helvetica, URW).
 - horizontal : logo en haut à gauche, titre à gauche sur le fond, la personne à droite ;
-- vertical : logo centré en haut, titre centré dessous, au-dessus de la tête.
+- vertical : logo centré en haut, titre centré dessous, au-dessus de la tête ;
+- carré : la fenêtre carrée glisse dans la verticale jusqu'à mettre le visage aux deux tiers de la hauteur ; logo et
+  titre, plus petits, centrés au-dessus de la tête.
 Le logo est là dès la première image ; le titre apparaît en montant légèrement (0,25 → 0,8 s) ; tout part au blanc
 dans la dernière demi-seconde.
 """
@@ -14,6 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -21,6 +25,9 @@ POLICE = "/usr/share/fonts/opentype/urw-base35/NimbusSans-Bold.otf"
 LIGNES = ["Être heureux", "et en forme", "après 50 ans,", "c’est possible !"]
 ENCRE = (30, 30, 36, 255)
 DUREE, IPS, FONDU = 3.0, 30, 0.5
+YUNET = Path(__file__).resolve().parents[2] / "modeles/yunet/face_detection_yunet_2023mar.onnx"
+# (largeur, hauteur, vidéo source) : les six formats de sortie d'EDIVID (src/decoupe.rs).
+FORMATS = [(3840, 2160, "h"), (1920, 1080, "h"), (2160, 3840, "v"), (1080, 1920, "v"), (2160, 2160, "v"), (1080, 1080, "v")]
 
 
 def titre(largeur_max: int, taille_max: int, centre: bool) -> Image.Image:
@@ -43,11 +50,34 @@ def titre(largeur_max: int, taille_max: int, centre: bool) -> Image.Image:
     return img
 
 
-def fond_charge(video: Path, w: int, h: int, zone: tuple[int, int, int, int]) -> bool:
+def cadrage(w: int, h: int, haut: int | None) -> str:
+    """La vidéo agrandie jusqu'à couvrir le format, coupée au centre, ou à `haut` pixels du bord supérieur."""
+    y = "(ih-oh)/2" if haut is None else str(haut)
+    return f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h}:(iw-ow)/2:{y}"
+
+
+def haut_carre(video: Path, w: int) -> int:
+    """Carré tiré de la verticale : bord supérieur de la fenêtre, d'après le visage repéré sur la première image."""
+    brut = subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-frames:v", "1", "-vf", f"scale={w}:-2",
+                           "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], capture_output=True, check=True).stdout
+    hv = len(brut) // (3 * w)
+    img = np.frombuffer(brut, np.uint8)[:hv * w * 3].reshape(hv, w, 3)
+    d = cv2.FaceDetectorYN.create(str(YUNET), "", (w, hv), 0.6)
+    _, f = d.detect(img)
+    if f is None:
+        return (hv - w) // 2
+    x, y, l, t = f[np.argmax(f[:, 14])][:4]
+    # Visage aux deux tiers ; un gros plan descend davantage, pour que le haut de la tête (cheveux compris, 0,4 de
+    # la hauteur du visage) reste sous le titre, qui finit vers 0,47 de la hauteur ; sans jamais couper le menton.
+    haut = max(min(y + t / 2 - 0.68 * w, y - 0.4 * t - 0.48 * w), y + 1.15 * t - 0.97 * w)
+    return int(np.clip(haut, 0, hv - w))
+
+
+def fond_charge(video: Path, w: int, h: int, zone: tuple[int, int, int, int], haut: int | None = None) -> bool:
     """Le décor sous le titre est-il chargé (rue, pierre, porte) ? Écart-type de la luminance sur la première image."""
     x, y, l, t = zone
     brut = subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-frames:v", "1", "-vf",
-                           f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},crop={l}:{t}:{x}:{y}",
+                           f"{cadrage(w, h, haut)},crop={l}:{t}:{x}:{y}",
                            "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, check=True).stdout
     return float(np.frombuffer(brut, np.uint8).std()) > 22  # studio : 3 à 8 ; rue : 40 et plus
 
@@ -64,13 +94,16 @@ def voile(t: Image.Image, marge: int) -> Image.Image:
 
 
 def calques(w: int, h: int, logo_src: Image.Image, dossier: Path,
-            video: Path | None = None) -> tuple[Path, Path, int, int, int, int]:
+            video: Path | None = None, haut: int | None = None) -> tuple[Path, Path, int, int, int, int]:
     """Logo et titre à la taille du format ; renvoie leurs fichiers et positions. Sur un décor chargé, le titre
     reçoit un voile blanc, le logo aussi."""
-    vertical = h > w
-    if vertical:
+    vertical = h >= w
+    if h > w:
         lw = round(0.46 * w)
         t = titre(round(0.86 * w), round(0.085 * w), centre=True)
+    elif h == w:
+        lw = round(0.30 * w)
+        t = titre(round(0.70 * w), round(0.062 * w), centre=True)
     else:
         lw = round(0.24 * w)
         t = titre(round(0.34 * w), round(0.05 * w), centre=False)
@@ -82,9 +115,12 @@ def calques(w: int, h: int, logo_src: Image.Image, dossier: Path,
         lx, ly = round(0.045 * w), round(0.05 * h)
         tx, ty = round(0.055 * w), round(0.36 * h)
     marge = round(0.03 * max(w, h))
-    if video is not None and fond_charge(video, w, h, (tx, ty, t.width, min(t.height, h - ty))):
+    if h == w:
+        ly = round(0.03 * h)
+        ty = ly + logo.height
+    if video is not None and fond_charge(video, w, h, (tx, ty, t.width, min(t.height, h - ty)), haut):
         t, tx, ty = voile(t, marge), tx - marge, ty - marge
-    if video is not None and fond_charge(video, w, h, (lx, ly, logo.width, logo.height)):
+    if video is not None and fond_charge(video, w, h, (lx, ly, logo.width, logo.height), haut):
         m = marge // 2
         logo, lx, ly = voile(logo, m), max(0, lx - m), max(0, ly - m)
     fl, ft = dossier / f"logo_{w}x{h}.png", dossier / f"titre_{w}x{h}.png"
@@ -94,12 +130,13 @@ def calques(w: int, h: int, logo_src: Image.Image, dossier: Path,
 
 
 def composer(video: Path, jingle: Path, logo: Image.Image, w: int, h: int, sortie: Path, debut_jingle: float) -> None:
-    fl, ft, lx, ly, tx, ty = calques(w, h, logo, sortie.parent, video)
+    haut = haut_carre(video, w) if w == h else None
+    fl, ft, lx, ly, tx, ty = calques(w, h, logo, sortie.parent, video, haut)
     montee = round(0.015 * h)
-    netete = ",unsharp=5:5:0.6:5:5:0.0" if w >= 3000 else ""
+    netete = ",unsharp=5:5:0.6:5:5:0.0" if max(w, h) >= 3000 else ""
     graphe = (
         f"[0:v]fps={IPS},trim=0:{DUREE},setpts=PTS-STARTPTS,"
-        f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h}{netete},setsar=1[v];"
+        f"{cadrage(w, h, haut)}{netete},setsar=1[v];"
         f"[1:v]format=rgba[logo];"
         f"[2:v]format=rgba,fade=t=in:st=0.25:d=0.55:alpha=1[titre];"
         f"[v][logo]overlay={lx}:{ly}[a];"
@@ -122,8 +159,10 @@ def main() -> None:
     debut_jingle = float(sys.argv[6]) if len(sys.argv) > 6 else 0.0
     dossier.mkdir(parents=True, exist_ok=True)
     src = Image.open(logo).convert("RGBA")
-    for video, (w, h) in [(horiz, (3840, 2160)), (horiz, (1920, 1080)), (vert, (1080, 1920))]:
-        composer(video, jingle, src, w, h, dossier / f"intro_{w}x{h}.mp4", debut_jingle)
+    for w, h, source in FORMATS:
+        sortie = dossier / f"intro_{w}x{h}.mp4"
+        if not sortie.exists():
+            composer(horiz if source == "h" else vert, jingle, src, w, h, sortie, debut_jingle)
 
 
 if __name__ == "__main__":
