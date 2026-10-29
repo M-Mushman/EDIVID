@@ -127,17 +127,20 @@ pub fn recaler_generique(donnees: &Path, p: &mut crate::modele::Projet) -> bool 
     change
 }
 
-/// Le fichier d'un jingle pour une séquence de `duree` secondes. Pour une fin, sa version `final` (la vraie fin du
-/// morceau, de son accord final à son extinction) quand il en a une, avec sa durée : le rendu la cale pour qu'elle
-/// s'éteigne avec la séquence. Sinon sa plus courte version qui dure au moins autant, ou la plus longue.
+/// Le fichier d'un jingle pour une séquence de `duree` secondes. Pour une intro ou une fin, sa version qui finit
+/// franchement sur l'accord final du morceau (`intro` : la dernière mesure et l'accord ; `final` : la phrase qui y
+/// mène et l'accord jusqu'à son extinction) quand il en a une, avec sa durée : le rendu la prend telle quelle (une
+/// fin calée pour s'éteindre avec la séquence). Sinon sa plus courte version qui dure au moins autant, ou la plus longue.
 pub fn jingle(r: &Path, id: &str, duree: f64, fin: bool) -> Option<(PathBuf, Option<f64>)> {
     let f = fiche(r, "jingles", id)?;
     let durees = f["durees"].as_object()?;
     let dossier = r.join("jingles").join(id);
-    if let Some(d) = durees.get("final").and_then(Value::as_f64).filter(|_| fin) {
-        return Some((dossier.join("final.wav"), Some(d)));
+    let franche = if fin { "final" } else { "intro" };
+    if let Some(d) = durees.get(franche).and_then(Value::as_f64) {
+        return Some((dossier.join(format!("{franche}.wav")), Some(d)));
     }
-    let mut durees: Vec<(&String, f64)> = durees.iter().filter(|(k, _)| *k != "final").filter_map(|(k, v)| Some((k, v.as_f64()?))).collect();
+    let mut durees: Vec<(&String, f64)> = durees.iter().filter(|(k, _)| !["intro", "final"].contains(&k.as_str()))
+        .filter_map(|(k, v)| Some((k, v.as_f64()?))).collect();
     durees.sort_by(|a, b| a.1.total_cmp(&b.1));
     let (nom, _) = durees.iter().find(|(_, d)| *d + 0.05 >= duree).or_else(|| durees.last())?;
     Some((dossier.join(format!("{nom}.wav")), None))

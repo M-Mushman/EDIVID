@@ -994,8 +994,8 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
 
 /// Une intro (k = 0) ou une fin (k = 1) de la bibliothèque `biblio` (celle du propriétaire du projet), dans sa version au format de sortie, sur `d` secondes
 /// (chevauchement compris) : [gv{k}] et [ga{k}]. Sans fondu au noir : l'élément a le sien, au blanc, et le
-/// raccord se fait en fondu enchaîné. Son d'origine, ou le jingle choisi : coupé à la durée avec fondu de fin, ou,
-/// pour une fin, la vraie fin du morceau calée pour s'éteindre avec la séquence.
+/// raccord se fait en fondu enchaîné. Son d'origine, ou le jingle choisi : sa version qui finit franchement sur
+/// l'accord final (pour une fin, calée pour s'éteindre avec la séquence), sinon coupé à la durée avec fondu de fin.
 #[allow(clippy::too_many_arguments)]
 fn sequence_bibliotheque(biblio: &Path, s: &Sequence, d: f64, k: usize, (wo, ho): (u32, u32), args: &mut Vec<String>,
                          fc: &mut Vec<String>, entree: &mut usize, passe: Passe, sonie: f64) -> Result<()> {
@@ -1022,7 +1022,7 @@ fn sequence_bibliotheque(biblio: &Path, s: &Sequence, d: f64, k: usize, (wo, ho)
         Some((j, finale)) => {
             args.extend(["-i".into(), j.to_string_lossy().into()]);
             *entree += 1;
-            let cale = match finale {
+            let cale = match finale.filter(|_| k == 1) {
                 Some(l) if l <= d => format!("adelay={:.0}:all=1,", (d - l) * 1000.0),
                 Some(l) => format!("atrim=start={:.3},asetpts=PTS-STARTPTS,afade=t=in:d=0.3,", l - d),
                 None => String::new(),

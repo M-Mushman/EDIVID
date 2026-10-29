@@ -1,11 +1,14 @@
 """Assemble l'intro : vidéo animée, logo, titre, jingle, fondu au blanc ; un fichier par format.
 
-Usage : python composer.py <video_horizontale.mp4> <video_verticale.mp4> <jingle.wav> <logo.png> <dossier_sortie>
-                           [debut_jingle_s=0]
+Usage : python composer.py <video_horizontale.mp4> <video_verticale.mp4> <intro.wav> <logo.png> <dossier_sortie>
+
+Le son est la version `intro` d'un jingle (declinaisons.py), pris en entier : la dernière mesure du morceau et son
+accord final, une fin franche. L'intro dure autant que lui (environ 3,5 s) ; l'animation (3,1 s) garde sa dernière
+image jusqu'au bout.
 
 Formats : les six de sortie d'EDIVID. 3840×2160 et 1920×1080 depuis la vidéo horizontale ; 2160×3840, 1080×1920,
 2160×2160 et 1080×1080 depuis la verticale. Un format déjà écrit n'est pas refait. MP4 H.264 High, SDR BT.709, 30 i/s,
-3 s, son AAC 48 kHz. Titre en Nimbus Sans Bold (reprise libre d'Helvetica, URW).
+son AAC 48 kHz. Titre en Nimbus Sans Bold (reprise libre d'Helvetica, URW).
 - horizontal : logo en haut à gauche, titre à gauche sur le fond, la personne à droite ;
 - vertical : logo centré en haut, titre centré dessous, au-dessus de la tête ;
 - carré : la fenêtre carrée glisse dans la verticale jusqu'à mettre le visage aux deux tiers de la hauteur ; logo et
@@ -18,13 +21,14 @@ import sys
 from pathlib import Path
 
 import cv2
+import soundfile as sf
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 POLICE = "/usr/share/fonts/opentype/urw-base35/NimbusSans-Bold.otf"
 LIGNES = ["Être heureux", "et en forme", "après 50 ans,", "c’est possible !"]
 ENCRE = (30, 30, 36, 255)
-DUREE, IPS, FONDU = 3.0, 30, 0.5
+IPS, FONDU = 30, 0.5
 YUNET = Path(__file__).resolve().parents[2] / "modeles/yunet/face_detection_yunet_2023mar.onnx"
 # (largeur, hauteur, vidéo source) : les six formats de sortie d'EDIVID (src/decoupe.rs).
 FORMATS = [(3840, 2160, "h"), (1920, 1080, "h"), (2160, 3840, "v"), (1080, 1920, "v"), (2160, 2160, "v"), (1080, 1080, "v")]
@@ -129,25 +133,25 @@ def calques(w: int, h: int, logo_src: Image.Image, dossier: Path,
     return fl, ft, lx, ly, tx, ty
 
 
-def composer(video: Path, jingle: Path, logo: Image.Image, w: int, h: int, sortie: Path, debut_jingle: float) -> None:
+def composer(video: Path, son: Path, logo: Image.Image, w: int, h: int, sortie: Path) -> None:
+    duree = sf.info(son).duration
     haut = haut_carre(video, w) if w == h else None
     fl, ft, lx, ly, tx, ty = calques(w, h, logo, sortie.parent, video, haut)
     montee = round(0.015 * h)
     netete = ",unsharp=5:5:0.6:5:5:0.0" if max(w, h) >= 3000 else ""
     graphe = (
-        f"[0:v]fps={IPS},trim=0:{DUREE},setpts=PTS-STARTPTS,"
+        f"[0:v]fps={IPS},tpad=stop_mode=clone:stop_duration=2,trim=0:{duree:.3f},setpts=PTS-STARTPTS,"
         f"{cadrage(w, h, haut)}{netete},setsar=1[v];"
         f"[1:v]format=rgba[logo];"
         f"[2:v]format=rgba,fade=t=in:st=0.25:d=0.55:alpha=1[titre];"
         f"[v][logo]overlay={lx}:{ly}[a];"
         f"[a][titre]overlay=x={tx}:y='{ty}+{montee}*max(0,1-max(0,t-0.25)/0.55)':eval=frame[b];"
-        f"[b]fade=t=out:st={DUREE - FONDU}:d={FONDU}:color=white,format=yuv420p[sv];"
-        f"[3:a]atrim={debut_jingle}:{debut_jingle + DUREE},asetpts=PTS-STARTPTS,aresample=48000,"
-        f"afade=t=in:d=0.03,afade=t=out:st={DUREE - 0.6}:d=0.6,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[sa]"
+        f"[b]fade=t=out:st={duree - FONDU:.3f}:d={FONDU}:color=white,format=yuv420p[sv];"
+        f"[3:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[sa]"
     )
     subprocess.run([
         "ffmpeg", "-v", "error", "-y", "-i", str(video), "-loop", "1", "-i", str(fl), "-loop", "1", "-i", str(ft),
-        "-i", str(jingle), "-filter_complex", graphe, "-map", "[sv]", "-map", "[sa]", "-t", str(DUREE),
+        "-i", str(son), "-filter_complex", graphe, "-map", "[sv]", "-map", "[sa]", "-t", f"{duree:.3f}",
         "-c:v", "libx264", "-profile:v", "high", "-preset", "slow", "-crf", "16" if w * h <= 1920 * 1080 else "18",
         "-r", str(IPS), "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", str(sortie)], check=True)
@@ -155,14 +159,13 @@ def composer(video: Path, jingle: Path, logo: Image.Image, w: int, h: int, sorti
 
 
 def main() -> None:
-    horiz, vert, jingle, logo, dossier = map(Path, sys.argv[1:6])
-    debut_jingle = float(sys.argv[6]) if len(sys.argv) > 6 else 0.0
+    horiz, vert, son, logo, dossier = map(Path, sys.argv[1:6])
     dossier.mkdir(parents=True, exist_ok=True)
     src = Image.open(logo).convert("RGBA")
     for w, h, source in FORMATS:
         sortie = dossier / f"intro_{w}x{h}.mp4"
         if not sortie.exists():
-            composer(horiz if source == "h" else vert, jingle, src, w, h, sortie, debut_jingle)
+            composer(horiz if source == "h" else vert, son, src, w, h, sortie)
 
 
 if __name__ == "__main__":

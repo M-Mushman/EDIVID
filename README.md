@@ -109,7 +109,8 @@ Google, mot de passe SMTP, compte rclone) écrits de façon atomique en 600 ; t�
   dossier par élément, `intro_<l>x<h>.mp4` dans les six formats de sortie, `vignette.jpg`, `fiche.json`), `jingles/`,
   `styles/` (images de référence des vignettes), `photos/`, `logos/`, `medias/` (versés par les projets supprimés). Le rendu prend la version au format de sortie
   et l'enchaîne au montage en fondu croisé d'une demi-seconde, image et son ; un jingle de la bibliothèque peut
-  remplacer le son de l'élément (pour une fin, sa version `final` : la phrase qui mène à l'accord final du morceau,
+  remplacer le son de l'élément, dans sa version qui finit franchement sur l'accord final du morceau (`intro` : la
+  dernière mesure et l'accord, ~3,5 s ; `final` : la phrase qui y mène et l'accord jusqu'à son extinction, ~9,7 s,
   calée pour s'éteindre avec la séquence). Fabrication : `outils/intro/` (`composer.py` pour les intros, `fin.py` pour
   la fin, `declinaisons.py` pour les versions d'un jingle, `ranger.py` pour ranger un élément dans la bibliothèque
   d'un compte, `EDIVID_COMPTE=<adresse>`).

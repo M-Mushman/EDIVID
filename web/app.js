@@ -2415,15 +2415,16 @@ function blocGenerique(corps) {
         h('option', { value: '', selected: !s.jingle }, `Son de ${nom}`),
         jingles.map((j) => h('option', { value: j.id, selected: j.id === s.jingle }, `Jingle ${j.nom}`)));
       son.addEventListener('change', () => { s.jingle = son.value; enregistrer(); });
-      // Écoute : le jingle dans la version que prend le rendu (pour une fin, la vraie fin du morceau ; sinon la plus
-      // proche de la durée de la séquence), ou le son de l'élément lui-même.
+      // Écoute : le jingle dans la version que prend le rendu (celle qui finit sur l'accord final du morceau ; sinon la
+      // plus proche de la durée de la séquence), ou le son de l'élément lui-même.
       const ecouter = () => {
         if (!ecouteJingle.paused) { ecouteJingle.pause(); return; }
         const j = jingles.find((x) => x.id === s.jingle);
         let url = `${catalogueRayons.base}/${rayon}/${s.element}/${cle === 'debut' ? 'intro' : 'fin'}_1920x1080.mp4`;
         if (j) {
-          const versions = Object.entries(j.durees || {}).filter(([n]) => n !== 'final').sort((a, b) => a[1] - b[1]);
-          const v = (cle === 'fin' && j.durees?.final ? ['final'] : null)
+          const franche = cle === 'fin' ? 'final' : 'intro';
+          const versions = Object.entries(j.durees || {}).filter(([n]) => n !== 'intro' && n !== 'final').sort((a, b) => a[1] - b[1]);
+          const v = (j.durees?.[franche] ? [franche] : null)
             || versions.find(([, d]) => d + 0.05 >= s.duree) || versions[versions.length - 1];
           if (v) url = `${catalogueRayons.base}/jingles/${j.id}/${v[0]}.wav`;
         }

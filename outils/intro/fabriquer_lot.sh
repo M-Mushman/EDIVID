@@ -31,9 +31,8 @@ mkdir -p $L
 outils/intro/sous_bail.sh 13500 3600 $PY outils/intro/etendre_flux.py $I/photos.json $I/sources $L 2>&1 \
   | grep --line-buffered -v -E 'it/s|s/it' || echo "!! décors en échec"
 
-# Jingle par défaut (à remplacer après écoute : recomposer avec composer.py).
+# Jingle par défaut, dans sa version intro (à remplacer après écoute : recomposer avec composer.py).
 DEF=$(ls -d $I/jingles/A_pop_solaire/jingle_*/ 2>/dev/null | head -1); DEF=${DEF%/}
-DEBUT=$( [ -n "$DEF" ] && python3 -c "import json;print(json.load(open('$DEF/depart.json'))['debut_s'])" || echo 0)
 
 # 2. Animation puis assemblage, photo par photo.
 for nom in $(python3 -c "import json;print(' '.join(json.load(open('$I/photos.json'))))"); do
@@ -74,7 +73,7 @@ EOF
     h="$L/$nom/visage_horizontal_g$g.mp4"; v="$L/$nom/visage_vertical_g$g.mp4"
     [ -s "$h" ] && [ -s "$v" ] || continue
     [ "$L/$nom/rendus_g$g/intro_1080x1920.mp4" -nt "$v" ] && [ "$L/$nom/rendus_g$g/intro_1080x1920.mp4" -nt "$h" ] && continue
-    $PY outils/intro/composer.py "$h" "$v" "$DEF.wav" $LOGO "$L/$nom/rendus_g$g" "$DEBUT" || echo "!! $nom g$g : assemblage en échec"
+    $PY outils/intro/composer.py "$h" "$v" "$DEF/intro.wav" $LOGO "$L/$nom/rendus_g$g" || echo "!! $nom g$g : assemblage en échec"
   done
   # Planche : 4 images de chaque tirage, pour choisir d'un coup d'œil.
   mkdir -p $I/planches

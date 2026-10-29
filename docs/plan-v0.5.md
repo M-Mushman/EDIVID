@@ -103,3 +103,7 @@ les quatre propositions d'un projet réel, regardées en taille YouTube (petite 
   désormais une version `final` (phrase de 4 mesures prise à son premier temps, puis l'accord final jusqu'à son
   extinction, ~9,7 s). La fin dure donc ~9,7 s au lieu de 7,7 s et repart au blanc pendant que l'accord s'éteint.
   Un jingle choisi sur une fin prend cette version, calée sur la fin de la séquence.
+- Intros : même défaut, le jingle de 3 s s'arrêtait en fondu au milieu d'une mesure. Nouvelle version `intro` de
+  chaque jingle : la dernière mesure du morceau, puis l'accord final tenu 1,6 s (~3,5 s). Les 29 intros sont
+  recomposées dessus (3,57 s ; l'animation de 3,1 s garde sa dernière image pendant le passage au blanc). La durée
+  des générique déjà réglés suit toute seule (relue dans la bibliothèque).

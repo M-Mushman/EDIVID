@@ -49,26 +49,24 @@ done
 DEF=$(ls -d $I/jingles/A_pop_solaire/jingle_*/ 2>/dev/null | head -1)
 DEF=${DEF%/}
 if [ -n "$DEF" ]; then
-  debut=$(python3 -c "import json;print(json.load(open('$DEF/depart.json'))['debut_s'])")
   for g in "${GRAINES[@]}"; do
     [ -s "$I/anim/h2_g$g.mp4" ] && [ -s "$I/anim/v2_g$g.mp4" ] || continue
     echo "== variante $g"
-    $PY outils/intro/composer.py $I/anim/h2_g$g.mp4 $I/anim/v2_g$g.mp4 "$DEF.wav" $LOGO $I/rendus/variante_$g "$debut"
+    $PY outils/intro/composer.py $I/anim/h2_g$g.mp4 $I/anim/v2_g$g.mp4 "$DEF/intro.wav" $LOGO $I/rendus/variante_$g
   done
   # Chaque jingle sur la variante 21 en 1080p, pour les comparer en situation.
   for d in $I/jingles/*/jingle_*/; do
     d=${d%/}
     nom=$(basename "$(dirname "$d")")_$(basename "$d")
-    debut=$(python3 -c "import json;print(json.load(open('$d/depart.json'))['debut_s'])")
-    $PY - "$I/anim/h2_g21.mp4" "$d.wav" "$LOGO" "$I/rendus/comparer_jingles/$nom.mp4" "$debut" <<'EOF'
+    $PY - "$I/anim/h2_g21.mp4" "$d/intro.wav" "$LOGO" "$I/rendus/comparer_jingles/$nom.mp4" <<'EOF'
 import sys
 from pathlib import Path
 from PIL import Image
 sys.path.insert(0, "outils/intro")
 import composer
-video, jingle, logo, sortie, debut = sys.argv[1:6]
+video, son, logo, sortie = sys.argv[1:5]
 Path(sortie).parent.mkdir(parents=True, exist_ok=True)
-composer.composer(Path(video), Path(jingle), Image.open(logo).convert("RGBA"), 1920, 1080, Path(sortie), float(debut))
+composer.composer(Path(video), Path(son), Image.open(logo).convert("RGBA"), 1920, 1080, Path(sortie))
 EOF
   done
 fi
@@ -84,6 +82,6 @@ fi
   for f in $I/rendus/comparer_jingles/*.mp4; do [ -e "$f" ] && echo "- ${f#$I/}"; done
   echo
   echo "## Jingles et déclinaisons (MP3 pour l'écoute)"
-  for d in $I/jingles/*/jingle_*/; do echo "- ${d#$I/} : jingle_3s, transition_8s, fin_16s"; done
+  for d in $I/jingles/*/jingle_*/; do echo "- ${d#$I/} : jingle_3s, transition_8s, fin_16s, intro, final"; done
 } > $I/RESULTATS.md
 echo "== fin $(date -Is)"
