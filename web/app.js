@@ -2360,6 +2360,13 @@ function blocGenerique(corps) {
         h('div', { class: 'reglage' }, h('div', { class: 'reglage-titre' }, 'Image de fond'), image),
         curseurElement('Durée', s.duree || 3, 1.5, 10, 0.5, (v) => `${fr(v)} s`, (v, fin) => { s.duree = v; enregistrer(fin); }));
     }
+    // Hors bibliothèque, ses intros (ou fins) restent en vue : un clic en choisit une.
+    if (s?.genre !== 'bibliotheque' && catalogueRayons?.[rayon]?.length) {
+      parties.push(h('div', { class: 'reglage' },
+        h('div', { class: 'reglage-titre' }, cle === 'debut' ? 'Ou une intro de la bibliothèque' : 'Ou une fin de la bibliothèque'),
+        grilleRayon(rayon, null, (el) => { g[cle] = { genre: 'bibliotheque', element: el.id, jingle: '', duree: el.duree }; enregistrer(); dessiner(); }),
+        h('div', { class: 'reglage-aide' }, 'Prête dans tous les formats ; jingle intégré ; raccord en fondu enchaîné. Survolez pour la voir bouger.')));
+    }
     return h('div', { class: 'element-habillage' }, h('b', { class: 'petit' }, libelle), ...parties);
   };
   const dessiner = () => remplir(zone,
