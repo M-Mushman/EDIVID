@@ -32,6 +32,7 @@ ADRESSE = "www.by-edina.ch"
 COURRIEL = "ciao@by-edina.ch"
 ENCRE = (30, 30, 36)
 GRIS = (95, 95, 105)
+FUCHSIA = (255, 0, 255)  # le rose d'« Edina » dans le logo : « c’est possible ! », comme dans l'intro
 FOND = (253, 251, 248)
 IPS = 30
 # Les six formats de sortie d'EDIVID (src/decoupe.rs) : horizontal, carré, vertical, en 1080 et en 2160.
@@ -45,8 +46,9 @@ def lisse(t: float) -> float:
     return t * t * (3 - 2 * t)
 
 
-def texte(lignes: list[str], police: str, largeur_max: int, taille_max: int, couleur) -> Image.Image:
-    """Lignes centrées sur fond transparent, à la plus grande taille qui tienne dans `largeur_max`."""
+def texte(lignes: list[str], police: str, largeur_max: int, taille_max: int, couleur, derniere=None) -> Image.Image:
+    """Lignes centrées sur fond transparent, à la plus grande taille qui tienne dans `largeur_max` ; la dernière dans la
+    couleur `derniere` si elle est donnée."""
     taille = taille_max
     while True:
         f = ImageFont.truetype(police, taille)
@@ -59,7 +61,7 @@ def texte(lignes: list[str], police: str, largeur_max: int, taille_max: int, cou
     img = Image.new("RGBA", (round(larg) + 4, marge + interligne * len(lignes) + round(taille * 0.3)), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     for i, l in enumerate(lignes):
-        d.text(((img.width - f.getlength(l)) / 2, marge + i * interligne), l, font=f, fill=couleur + (255,))
+        d.text(((img.width - f.getlength(l)) / 2, marge + i * interligne), l, font=f, fill=(derniere if derniere and i == len(lignes) - 1 else couleur) + (255,))
     return img
 
 
@@ -98,15 +100,15 @@ class Signature:
 
 def mise_en_page(w: int, h: int, logo_src: Image.Image):
     if h > w:
-        t = texte(LIGNES_V, GRAS, round(0.84 * w), round(0.10 * w), ENCRE)
+        t = texte(LIGNES_V, GRAS, round(0.84 * w), round(0.10 * w), ENCRE, FUCHSIA)
         lw = round(0.74 * w)
         u = texte([ADRESSE, COURRIEL], NORMAL, round(0.8 * w), round(0.052 * w), GRIS)
     elif h == w:
-        t = texte(LIGNES_V, GRAS, round(0.7 * w), round(0.075 * w), ENCRE)
+        t = texte(LIGNES_V, GRAS, round(0.7 * w), round(0.075 * w), ENCRE, FUCHSIA)
         lw = round(0.52 * w)
         u = texte([ADRESSE, COURRIEL], NORMAL, round(0.6 * w), round(0.038 * w), GRIS)
     else:
-        t = texte(LIGNES_H, GRAS, round(0.78 * w), round(0.052 * w), ENCRE)
+        t = texte(LIGNES_H, GRAS, round(0.78 * w), round(0.052 * w), ENCRE, FUCHSIA)
         lw = round(0.38 * w)
         u = texte([ADRESSE, COURRIEL], NORMAL, round(0.5 * w), round(0.024 * w), GRIS)
     logo = logo_src.resize((lw, round(lw * logo_src.height / logo_src.width)), Image.LANCZOS)
