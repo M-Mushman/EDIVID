@@ -110,14 +110,37 @@ pub fn video_au_format(r: &Path, rayon: &str, id: &str, (wo, ho): (u32, u32)) ->
     Some((choix.2.clone(), false))
 }
 
-/// Le fichier d'un jingle pour une séquence de `duree` secondes : sa plus courte version qui dure au moins autant,
-/// sinon la plus longue.
-pub fn jingle(r: &Path, id: &str, duree: f64) -> Option<PathBuf> {
+/// Recale sur la bibliothèque la durée des séquences « bibliothèque » du générique : une intro ou une fin refaite peut
+/// changer de durée, et le rendu coupe la séquence à celle enregistrée dans le projet. Vrai si le projet a changé.
+pub fn recaler_generique(donnees: &Path, p: &mut crate::modele::Projet) -> bool {
+    let r = racine(donnees, &p.proprietaire);
+    let mut change = false;
+    for (s, rayon) in [(&mut p.generique.debut, RAYONS_VIDEO[0]), (&mut p.generique.fin, RAYONS_VIDEO[1])] {
+        let Some(s) = s.as_mut().filter(|s| s.genre == "bibliotheque") else { continue };
+        if let Some(d) = fiche(&r, rayon, &s.element).and_then(|f| f["duree"].as_f64()).map(|d| d.clamp(1.0, 60.0)) {
+            if (d - s.duree).abs() > 1e-3 {
+                s.duree = d;
+                change = true;
+            }
+        }
+    }
+    change
+}
+
+/// Le fichier d'un jingle pour une séquence de `duree` secondes. Pour une fin, sa version `final` (la vraie fin du
+/// morceau, de son accord final à son extinction) quand il en a une, avec sa durée : le rendu la cale pour qu'elle
+/// s'éteigne avec la séquence. Sinon sa plus courte version qui dure au moins autant, ou la plus longue.
+pub fn jingle(r: &Path, id: &str, duree: f64, fin: bool) -> Option<(PathBuf, Option<f64>)> {
     let f = fiche(r, "jingles", id)?;
-    let mut durees: Vec<(String, f64)> = f["durees"].as_object()?.iter().filter_map(|(k, v)| Some((k.clone(), v.as_f64()?))).collect();
+    let durees = f["durees"].as_object()?;
+    let dossier = r.join("jingles").join(id);
+    if let Some(d) = durees.get("final").and_then(Value::as_f64).filter(|_| fin) {
+        return Some((dossier.join("final.wav"), Some(d)));
+    }
+    let mut durees: Vec<(&String, f64)> = durees.iter().filter(|(k, _)| *k != "final").filter_map(|(k, v)| Some((k, v.as_f64()?))).collect();
     durees.sort_by(|a, b| a.1.total_cmp(&b.1));
     let (nom, _) = durees.iter().find(|(_, d)| *d + 0.05 >= duree).or_else(|| durees.last())?;
-    Some(r.join("jingles").join(id).join(format!("{nom}.wav")))
+    Some((dossier.join(format!("{nom}.wav")), None))
 }
 
 /// Verse un fichier dans le rayon `medias` d'une bibliothèque : gardé sous son nom, ou suffixé si un autre fichier

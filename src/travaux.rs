@@ -293,6 +293,8 @@ async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
         }
         Genre::Apercu | Genre::Rendu => {
             let apercu = t.genre == Genre::Apercu;
+            let donnees = etat.cfg.donnees.clone();
+            etat.modifier(projet, |p| crate::rayons::recaler_generique(&donnees, p)).await?;
             let sortie = rendu::rendre(etat, projet, apercu).await?;
             let ancien = etat
                 .modifier(projet, |p| {

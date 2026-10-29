@@ -77,8 +77,16 @@ impl Etat {
         let parametres = parametres::charger(&donnees);
         // Projets d'avant les bibliothèques par compte : celle du compte principal.
         let principal = parametres.comptes.first().map(|c| c.email.clone()).unwrap_or_default();
-        for p in projets.values_mut().filter(|p| p.proprietaire.is_empty()) {
-            p.proprietaire = principal.clone();
+        for p in projets.values_mut() {
+            if p.proprietaire.is_empty() {
+                p.proprietaire = principal.clone();
+            }
+            if crate::rayons::recaler_generique(&donnees, p) {
+                let chemin = cfg.donnees.join("projets").join(&p.id).join("projet.json");
+                if let Err(e) = serde_json::to_vec_pretty(&*p).map_err(std::io::Error::from).and_then(|v| std::fs::write(&chemin, v)) {
+                    tracing::warn!("générique de {} non recalé sur disque : {e}", p.id);
+                }
+            }
         }
         let http = reqwest::Client::builder().build()?;
         Ok(Arc::new(Self {

@@ -1,17 +1,19 @@
-"""Fin de vidéo : le titre, le logo by Edina signé à la main dessous, l'adresse du site ; un fichier par format.
+"""Fin de vidéo : le titre, le logo by Edina signé à la main dessous, l'adresse du site et le courriel ; un fichier par
+format.
 
-Usage : python fin.py <logo.png> <musique.wav> <dossier_sortie>
+Usage : python fin.py <logo.png> <final.wav> <dossier_sortie>
 
-Fichier à réutiliser tel quel au bout de chaque vidéo : on le range dans donnees/habillage/fin/.
-Formats : les six de sortie d'EDIVID (horizontal, carré, vertical ; 1080 et 2160). MP4 H.264 High, SDR BT.709, 30 i/s, durée de la musique (la
-transition de 4 mesures du jingle fait environ 7,7 s), son AAC 48 kHz. Fond blanc : l'intro part au blanc, la fin en
+Fichier à réutiliser tel quel au bout de chaque vidéo : on le range dans la bibliothèque (ranger.py fin).
+Formats : les six de sortie d'EDIVID (horizontal, carré, vertical ; 1080 et 2160). MP4 H.264 High, SDR BT.709, 30 i/s, durée de la musique : la
+version `final` d'un jingle (declinaisons.py), une phrase de 4 mesures et l'accord final qui s'éteint, environ 9,7 s ;
+son AAC 48 kHz. Fond blanc : l'intro part au blanc, la fin en
 revient. Déroulé :
 - 0 → 0,5 s : le blanc s'ouvre sur un fond très légèrement chaud ;
 - 0,3 → 1,0 s : le titre apparaît en montant légèrement, comme dans l'intro ;
 - 1,3 → 1,6 s : « by » apparaît ; 1,5 → 3,4 s : « Edina » se trace de gauche à droite, le front de l'encre suivant
   la pente de l'écriture, comme une signature ;
-- 3,6 → 4,1 s : l'adresse du site apparaît ;
-- la dernière seconde : tout repart au blanc avec la musique.
+- 3,6 → 4,1 s : l'adresse du site et le courriel apparaissent ;
+- les 1,5 dernières secondes, pendant que l'accord final s'éteint : tout repart au blanc.
 Écrit aussi fin_<format>.png, la dernière image pleine, pour juger la mise en page.
 """
 import subprocess
@@ -27,12 +29,14 @@ NORMAL = "/usr/share/fonts/opentype/urw-base35/NimbusSans-Regular.otf"
 LIGNES_H = ["Être heureux et en forme après 50 ans,", "c’est possible !"]
 LIGNES_V = ["Être heureux", "et en forme", "après 50 ans,", "c’est possible !"]
 ADRESSE = "www.by-edina.ch"
+COURRIEL = "ciao@by-edina.ch"
 ENCRE = (30, 30, 36)
 GRIS = (95, 95, 105)
 FOND = (253, 251, 248)
 IPS = 30
 # Les six formats de sortie d'EDIVID (src/decoupe.rs) : horizontal, carré, vertical, en 1080 et en 2160.
 FORMATS = [(1920, 1080), (1080, 1080), (1080, 1920), (3840, 2160), (2160, 2160), (2160, 3840)]
+BLANC = 1.5  # retour au blanc final, pendant l'extinction de l'accord
 PENTE = 0.35  # inclinaison de l'écriture : le haut d'une lettre est à droite de son pied
 
 
@@ -96,15 +100,15 @@ def mise_en_page(w: int, h: int, logo_src: Image.Image):
     if h > w:
         t = texte(LIGNES_V, GRAS, round(0.84 * w), round(0.10 * w), ENCRE)
         lw = round(0.74 * w)
-        u = texte([ADRESSE], NORMAL, round(0.8 * w), round(0.052 * w), GRIS)
+        u = texte([ADRESSE, COURRIEL], NORMAL, round(0.8 * w), round(0.052 * w), GRIS)
     elif h == w:
         t = texte(LIGNES_V, GRAS, round(0.7 * w), round(0.075 * w), ENCRE)
         lw = round(0.52 * w)
-        u = texte([ADRESSE], NORMAL, round(0.6 * w), round(0.038 * w), GRIS)
+        u = texte([ADRESSE, COURRIEL], NORMAL, round(0.6 * w), round(0.038 * w), GRIS)
     else:
         t = texte(LIGNES_H, GRAS, round(0.78 * w), round(0.052 * w), ENCRE)
         lw = round(0.38 * w)
-        u = texte([ADRESSE], NORMAL, round(0.5 * w), round(0.024 * w), GRIS)
+        u = texte([ADRESSE, COURRIEL], NORMAL, round(0.5 * w), round(0.024 * w), GRIS)
     logo = logo_src.resize((lw, round(lw * logo_src.height / logo_src.width)), Image.LANCZOS)
     ecart = round(0.035 * max(w, h))
     total = t.height + ecart + logo.height + ecart // 2 + u.height
@@ -129,7 +133,7 @@ def image(n: int, duree: float, w: int, h: int, calques) -> Image.Image:
     a = lisse((s - 3.6) / 0.5)
     if a > 0:
         img.alpha_composite(avec_opacite(u_img, a), pos_u)
-    blanc = max(1 - lisse(s / 0.5), lisse((s - (duree - 1.0)) / 1.0))
+    blanc = max(1 - lisse(s / 0.5), lisse((s - (duree - BLANC)) / BLANC))
     if blanc > 0:
         img = Image.blend(img, Image.new("RGBA", (w, h), (255, 255, 255, 255)), blanc)
     return img.convert("RGB")
@@ -138,7 +142,7 @@ def image(n: int, duree: float, w: int, h: int, calques) -> Image.Image:
 def rendre(logo_src: Image.Image, musique: Path, duree: float, w: int, h: int, dossier: Path) -> None:
     calques = mise_en_page(w, h, logo_src)
     nb = round(duree * IPS)
-    image(round((duree - 1.2) * IPS), duree, w, h, calques).save(dossier / f"fin_{w}x{h}.png")
+    image(round((duree - BLANC - 0.3) * IPS), duree, w, h, calques).save(dossier / f"fin_{w}x{h}.png")
     sortie = dossier / f"fin_{w}x{h}.mp4"
     p = subprocess.Popen([
         "ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(IPS),

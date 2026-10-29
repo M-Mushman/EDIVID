@@ -2415,15 +2415,16 @@ function blocGenerique(corps) {
         h('option', { value: '', selected: !s.jingle }, `Son de ${nom}`),
         jingles.map((j) => h('option', { value: j.id, selected: j.id === s.jingle }, `Jingle ${j.nom}`)));
       son.addEventListener('change', () => { s.jingle = son.value; enregistrer(); });
-      // Écoute : le jingle dans sa version la plus proche de la durée de la séquence (celle que prend le rendu),
-      // ou le son de l'élément lui-même.
+      // Écoute : le jingle dans la version que prend le rendu (pour une fin, la vraie fin du morceau ; sinon la plus
+      // proche de la durée de la séquence), ou le son de l'élément lui-même.
       const ecouter = () => {
         if (!ecouteJingle.paused) { ecouteJingle.pause(); return; }
         const j = jingles.find((x) => x.id === s.jingle);
         let url = `${catalogueRayons.base}/${rayon}/${s.element}/${cle === 'debut' ? 'intro' : 'fin'}_1920x1080.mp4`;
         if (j) {
-          const versions = Object.entries(j.durees || {}).sort((a, b) => a[1] - b[1]);
-          const v = versions.find(([, d]) => d + 0.05 >= s.duree) || versions[versions.length - 1];
+          const versions = Object.entries(j.durees || {}).filter(([n]) => n !== 'final').sort((a, b) => a[1] - b[1]);
+          const v = (cle === 'fin' && j.durees?.final ? ['final'] : null)
+            || versions.find(([, d]) => d + 0.05 >= s.duree) || versions[versions.length - 1];
           if (v) url = `${catalogueRayons.base}/jingles/${j.id}/${v[0]}.wav`;
         }
         ecouteJingle.src = url;
@@ -3753,20 +3754,15 @@ const PRESETS_EXPORT = [
 const REGLAGES_FINALE = ['definition', 'cadence', 'codec_final', 'plage_dynamique', 'nettete_ia'];
 
 /** Deux qualités prêtes à l'emploi pour la vidéo finale : chacune règle les cinq réglages avancés et lance le rendu. */
-const QUALITES_FINALE = [
-  { cle: 'max', titre: 'Qualité maximale — 4K pour YouTube',
-    reglages: { definition: '2160', cadence: 'source', codec_final: 'hevc', plage_dynamique: 'sdr', nettete_ia: 'non' },
-    pourquoi: ['YouTube donne bien plus de débit aux vidéos envoyées en 4K : même regardée en 1080p, l’image reste nette.',
-      'Cadence du rush (60 i/s pour un iPhone réglé en 60) : mouvements fluides. HEVC 10 bits : dégradés de ciel et de peau sans marches.',
-      'Couleurs de la PostProd appliquées. Fabrication longue (de l’ordre de quatre fois la durée de la vidéo) et fichier lourd.'] },
-  { cle: 'rapide', titre: 'Rapide et universelle — 1080p',
-    reglages: { definition: '1080', cadence: '30', codec_final: 'h264', plage_dynamique: 'sdr', nettete_ia: 'non' },
-    pourquoi: ['Se lit partout tel quel : WhatsApp, Instagram, courriel, n’importe quel navigateur.',
-      'Fichier léger, fabrication nettement plus courte : le bon choix pour une série de petites vidéos.',
-      'Couleurs de la PostProd appliquées. Moins de détails qu’en 4K sur un grand écran.'] },
-];
+const QUALITE_FINALE = {
+  titre: 'Qualité maximale — 4K pour YouTube',
+  reglages: { definition: '2160', cadence: 'source', codec_final: 'hevc', plage_dynamique: 'sdr', nettete_ia: 'non' },
+  pourquoi: ['YouTube donne bien plus de débit aux vidéos envoyées en 4K : même regardée en 1080p, l’image reste nette, zooms compris.',
+    'Cadence du rush (60 i/s pour un iPhone réglé en 60) : mouvements fluides. HEVC 10 bits : dégradés de ciel et de peau sans marches.',
+    'Couleurs de la PostProd appliquées. Fabrication longue (de l’ordre de quatre fois la durée de la vidéo) et fichier lourd.'],
+};
 
-/** Fenêtre « Fabriquer la vidéo finale » : deux qualités prêtes, les réglages avancés repliés, l'état du rendu. */
+/** Fenêtre « Fabriquer la vidéo finale » : la qualité maximale en un clic, les réglages avancés repliés, l'état du rendu. */
 function afficherVideoFinale() {
   fenetre('Fabriquer la vidéo finale', (fermer) => {
     const etat = h('div');
@@ -3820,18 +3816,19 @@ function afficherVideoFinale() {
             h('a', { class: 'btn petit doux', href: `/api/projets/${E.projetId}/sorties/${p.rendu.fichier}`, download: `${p.nom}.mp4` }, icone('telecharger'), 'Télécharger'),
             h('button', { class: 'btn petit primaire', onclick: () => { fermer(); afficherExport(); } }, icone('televerser'), 'Exporter')));
       }
-      const actuelle = QUALITES_FINALE.find((q) => Object.entries(q.reglages).every(([k, v]) => String(p.reglages[k]) === v));
+      const q = QUALITE_FINALE;
+      const choisie = Object.entries(q.reglages).every(([k, v]) => String(p.reglages[k]) === v);
       remplir(etat,
-        h('div', { class: 'qualites-finale' }, QUALITES_FINALE.map((q) => h('button', {
-          class: `qualite-finale ${actuelle === q ? 'choisi' : ''}`, disabled: !p.montage || !!travail, onclick: () => lancer(q.reglages) },
-          h('b', {}, q.titre), h('ul', {}, q.pourquoi.map((t) => h('li', {}, t)))))),
+        h('div', { class: 'qualites-finale' }, h('button', {
+          class: `qualite-finale ${choisie ? 'choisi' : ''}`, disabled: !p.montage || !!travail, onclick: () => lancer(q.reglages) },
+          h('b', {}, q.titre), h('ul', {}, q.pourquoi.map((t) => h('li', {}, t))))),
         carte ? h('div', { style: { marginTop: 'var(--space-3)' } }, carte) : null);
     };
     E.finaleVue = dessinerEtat;
     dessinerAvances();
     const zone = h('div', {},
       h('p', { class: 'petit muet', style: { marginTop: 0 } },
-        'La vidéo en pleine définition, image soignée et son prêt pour YouTube ; c’est d’elle que partent les exports. Choisissez une qualité : la fabrication démarre aussitôt et remplace la vidéo finale précédente.'),
+        'La vidéo en pleine définition, image soignée et son prêt pour YouTube ; c’est d’elle que partent les exports. Un clic sur la qualité maximale lance la fabrication, qui remplace la vidéo finale précédente.'),
       etat,
       blocOutil('finale_avances', { icone: 'engrenage', titre: 'Réglages avancés', famille: 'recettes',
         resume: 'Définition, cadence, format du fichier, plage dynamique, netteté IA' }, avances),

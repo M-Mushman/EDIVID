@@ -262,7 +262,7 @@ pub const CATALOGUE: &[Reglage] = &[
         titre: "Définition",
         aide: "1080p convient à presque tout, et laisse aux zooms les vrais pixels d'un rush 4K jusqu'à ×2. En 4K, chaque zoom agrandit l'image du rush : les zooms sont alors limités à ×1,5. Le rendu 4K est plus long et plus lourd.",
         genre: Genre::Choix(&[("1080", "1080p (Full HD)"), ("2160", "2160p (4K)")]),
-        defaut: || json!("1080"),
+        defaut: || json!("2160"),
     },
     Reglage {
         section: "Son",

@@ -994,7 +994,8 @@ fn sequence_generique(etat: &EtatPartage, p: &Projet, s: &Sequence, d: f64, k: u
 
 /// Une intro (k = 0) ou une fin (k = 1) de la bibliothèque `biblio` (celle du propriétaire du projet), dans sa version au format de sortie, sur `d` secondes
 /// (chevauchement compris) : [gv{k}] et [ga{k}]. Sans fondu au noir : l'élément a le sien, au blanc, et le
-/// raccord se fait en fondu enchaîné. Son d'origine, ou le jingle choisi (coupé à la durée, avec fondu de fin).
+/// raccord se fait en fondu enchaîné. Son d'origine, ou le jingle choisi : coupé à la durée avec fondu de fin, ou,
+/// pour une fin, la vraie fin du morceau calée pour s'éteindre avec la séquence.
 #[allow(clippy::too_many_arguments)]
 fn sequence_bibliotheque(biblio: &Path, s: &Sequence, d: f64, k: usize, (wo, ho): (u32, u32), args: &mut Vec<String>,
                          fc: &mut Vec<String>, entree: &mut usize, passe: Passe, sonie: f64) -> Result<()> {
@@ -1017,16 +1018,22 @@ fn sequence_bibliotheque(biblio: &Path, s: &Sequence, d: f64, k: usize, (wo, ho)
              [gs{k}c][gs{k}d]overlay=(W-w)/2:(H-h)/2,{opaque}{finir}[gv{k}]"
         ));
     }
-    let (son, fondu) = match (!s.jingle.is_empty()).then(|| crate::rayons::jingle(biblio, &s.jingle, d)).flatten() {
-        Some(j) => {
+    let (son, cale, fondu) = match (!s.jingle.is_empty()).then(|| crate::rayons::jingle(biblio, &s.jingle, d, k == 1)).flatten() {
+        Some((j, finale)) => {
             args.extend(["-i".into(), j.to_string_lossy().into()]);
             *entree += 1;
-            (*entree - 1, format!(",afade=t=out:st={:.3}:d=0.5", (d - 0.5).max(0.0)))
+            let cale = match finale {
+                Some(l) if l <= d => format!("adelay={:.0}:all=1,", (d - l) * 1000.0),
+                Some(l) => format!("atrim=start={:.3},asetpts=PTS-STARTPTS,afade=t=in:d=0.3,", l - d),
+                None => String::new(),
+            };
+            let fondu = if finale.is_some() { String::new() } else { format!(",afade=t=out:st={:.3}:d=0.5", (d - 0.5).max(0.0)) };
+            (*entree - 1, cale, fondu)
         }
-        None => (i, String::new()),
+        None => (i, String::new(), String::new()),
     };
     fc.push(format!(
-        "[{son}:a]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=0:{d:.3},asetpts=PTS-STARTPTS,\
+        "[{son}:a]aresample=48000,aformat=channel_layouts=stereo,{cale}apad,atrim=0:{d:.3},asetpts=PTS-STARTPTS,\
          loudnorm=I={sonie}:TP=-1.5:LRA=11,aresample=48000{fondu}[ga{k}]"
     ));
     Ok(())

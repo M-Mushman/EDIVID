@@ -1,7 +1,8 @@
-"""Range une intro, une fin ou un jingle dans la bibliothèque d'habillage d'EDIVID (donnees/habillage/).
+"""Range une intro, une fin ou un jingle dans la bibliothèque d'habillage d'un compte EDIVID
+(donnees/habillage/<adresse du compte>/).
 
-Usage : python ranger.py intro|fin <id> <dossier_des_rendus> <nom> [jingle_d_origine]
-        python ranger.py jingle <id> <dossier_du_jingle> <nom>
+Usage : EDIVID_COMPTE=<adresse> python ranger.py intro|fin <id> <dossier_des_rendus> <nom> [jingle_d_origine]
+        EDIVID_COMPTE=<adresse> python ranger.py jingle <id> <dossier_du_jingle> <nom>
 
 Intro et fin : les fichiers `intro_<l>x<h>.mp4` (ou `fin_…`) du dossier, liés (lien physique, sans copie) dans
 `intros/<id>/` ou `fins/<id>/`, une vignette 480 × 270 tirée de la version 1920 × 1080, et `fiche.json` (nom, durée,
@@ -16,7 +17,8 @@ from pathlib import Path
 
 import soundfile as sf
 
-RACINE = Path(__file__).resolve().parents[2] / "donnees" / "habillage"
+HABILLAGE = Path(__file__).resolve().parents[2] / "donnees" / "habillage"
+RACINE = HABILLAGE / os.environ.get("EDIVID_COMPTE", "")
 
 
 def lier(src: Path, dst: Path) -> None:
@@ -45,7 +47,7 @@ def ranger_video(genre: str, ident: str, dossier: Path, nom: str, jingle: str) -
     reference = next((f for f in fichiers if f.stem.endswith("1920x1080")), fichiers[0])
     d = duree(reference)
     # Intro : l'image où tout est en place (titre monté) ; fin : celle où la signature est tracée.
-    instant = 1.6 if genre == "intro" else max(0.0, d - 1.5)
+    instant = 1.6 if genre == "intro" else max(0.0, d - 2.0)
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{instant:.2f}", "-i", str(reference), "-frames:v", "1",
                     "-vf", "scale=480:270:force_original_aspect_ratio=increase,crop=480:270", "-q:v", "3",
                     str(rayon / "vignette.jpg")], check=True)
@@ -70,6 +72,8 @@ def ranger_jingle(ident: str, dossier: Path, nom: str) -> None:
 
 
 def main() -> None:
+    if not os.environ.get("EDIVID_COMPTE") or "/" in os.environ["EDIVID_COMPTE"]:
+        raise SystemExit(f"EDIVID_COMPTE : l'adresse du compte (dossiers de {HABILLAGE})")
     genre, ident, dossier, nom = sys.argv[1], sys.argv[2], Path(sys.argv[3]), sys.argv[4]
     if genre in ("intro", "fin"):
         ranger_video(genre, ident, dossier, nom, sys.argv[5] if len(sys.argv) > 5 else "")

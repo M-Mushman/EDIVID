@@ -109,8 +109,10 @@ Google, mot de passe SMTP, compte rclone) écrits de façon atomique en 600 ; t�
   dossier par élément, `intro_<l>x<h>.mp4` dans les six formats de sortie, `vignette.jpg`, `fiche.json`), `jingles/`,
   `styles/` (images de référence des vignettes), `photos/`, `logos/`, `medias/` (versés par les projets supprimés). Le rendu prend la version au format de sortie
   et l'enchaîne au montage en fondu croisé d'une demi-seconde, image et son ; un jingle de la bibliothèque peut
-  remplacer le son de l'élément. Fabrication : `outils/intro/` (`composer.py` pour les intros, `fin.py` pour la fin,
-  `ranger.py` pour ranger un élément dans la bibliothèque).
+  remplacer le son de l'élément (pour une fin, sa version `final` : la phrase qui mène à l'accord final du morceau,
+  calée pour s'éteindre avec la séquence). Fabrication : `outils/intro/` (`composer.py` pour les intros, `fin.py` pour
+  la fin, `declinaisons.py` pour les versions d'un jingle, `ranger.py` pour ranger un élément dans la bibliothèque
+  d'un compte, `EDIVID_COMPTE=<adresse>`).
 - Fiche de la vidéo : titre, description, mots-clés (proposés par le LLM), reprise par la publication YouTube ;
   vignette YouTube (`capteurs/vignette.py`, FLUX.2 klein 4B sous bail de la carte, `.venv-video`) : Edina redessinée
   dans un style de la bibliothèque, dans un décor tiré de la vidéo, texte posé par le code à l'opposé du visage ;

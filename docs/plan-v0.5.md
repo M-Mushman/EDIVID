@@ -93,3 +93,13 @@ les quatre propositions d'un projet réel, regardées en taille YouTube (petite 
   méconnaissable et rajeunie. Second essai : style décrit en toutes lettres et âge précisé ; la méthode « retouche »
   (photo redessinée, décor changé) garde tenue, bijoux, coiffure. Les deux méthodes sont proposées (deux vignettes
   chacune). Texte placé à l'opposé du visage repéré par YuNet. Fabrication complète dans EDIVID : ~1 min de carte.
+
+## Retouches (2026-10-29, après essais réels)
+
+- Vidéo finale : une seule qualité proposée, la maximale (4K, cadence du rush, HEVC 10 bits) ; en 1080p, les zooms
+  sont trop mous pour YouTube. 4K par défaut pour les nouveaux projets ; les réglages avancés restent repliés.
+- Fin by Edina : le courriel ciao@by-edina.ch sous l'adresse du site. Son : la transition de 4 mesures était coupée
+  au milieu du morceau avec un fondu. Les morceaux d'ACE-Step finissent tous sur un accord tenu ; chaque jingle a
+  désormais une version `final` (phrase de 4 mesures prise à son premier temps, puis l'accord final jusqu'à son
+  extinction, ~9,7 s). La fin dure donc ~9,7 s au lieu de 7,7 s et repart au blanc pendant que l'accord s'éteint.
+  Un jingle choisi sur une fin prend cette version, calée sur la fin de la séquence.
