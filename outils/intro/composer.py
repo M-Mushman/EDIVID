@@ -8,7 +8,7 @@ image jusqu'au bout.
 
 Formats : les six de sortie d'EDIVID. 3840×2160 et 1920×1080 depuis la vidéo horizontale ; 2160×3840, 1080×1920,
 2160×2160 et 1080×1080 depuis la verticale. Un format déjà écrit n'est pas refait. MP4 H.264 High, SDR BT.709, 30 i/s,
-son AAC 48 kHz. Titre en Nimbus Sans Bold (reprise libre d'Helvetica, URW).
+son AAC 48 kHz. Titre en Nimbus Sans Bold (reprise libre d'Helvetica, URW), « c’est possible ! » dans le rose du logo.
 - horizontal : logo en haut à gauche, titre à gauche sur le fond, la personne à droite ;
 - vertical : logo centré en haut, titre centré dessous, au-dessus de la tête ;
 - carré : la fenêtre carrée glisse dans la verticale jusqu'à mettre le visage aux deux tiers de la hauteur ; logo et
@@ -28,6 +28,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 POLICE = "/usr/share/fonts/opentype/urw-base35/NimbusSans-Bold.otf"
 LIGNES = ["Être heureux", "et en forme", "après 50 ans,", "c’est possible !"]
 ENCRE = (30, 30, 36, 255)
+FUCHSIA = (255, 0, 255, 255)  # le rose d'« Edina » dans le logo by Edina : la dernière ligne du titre
 IPS, FONDU = 30, 0.5
 YUNET = Path(__file__).resolve().parents[2] / "modeles/yunet/face_detection_yunet_2023mar.onnx"
 # (largeur, hauteur, vidéo source) : les six formats de sortie d'EDIVID (src/decoupe.rs).
@@ -50,7 +51,7 @@ def titre(largeur_max: int, taille_max: int, centre: bool) -> Image.Image:
     d = ImageDraw.Draw(img)
     for i, l in enumerate(LIGNES):
         x = (img.width - f.getlength(l)) / 2 if centre else 0
-        d.text((x, marge + i * interligne), l, font=f, fill=ENCRE)
+        d.text((x, marge + i * interligne), l, font=f, fill=FUCHSIA if i == len(LIGNES) - 1 else ENCRE)
     return img
 
 
