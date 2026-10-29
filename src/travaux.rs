@@ -272,14 +272,21 @@ async fn executer(etat: &EtatPartage, t: &Travail) -> Result<()> {
         Genre::Apercu | Genre::Rendu => {
             let apercu = t.genre == Genre::Apercu;
             let sortie = rendu::rendre(etat, projet, apercu).await?;
-            etat.modifier(projet, |p| {
-                if apercu {
-                    p.apercu = Some(sortie);
-                } else {
-                    p.rendu = Some(sortie);
-                }
-            })
-            .await?;
+            let ancien = etat
+                .modifier(projet, |p| {
+                    if apercu {
+                        p.apercu = Some(sortie);
+                        None
+                    } else {
+                        let ancien = p.rendu.replace(sortie).map(|s| s.fichier);
+                        // La nouvelle vidéo finale remplace l'ancienne, sauf si un export est ce fichier même.
+                        ancien.filter(|f| !p.exports.iter().any(|e| &e.fichier == f) && p.rendu.as_ref().is_some_and(|s| &s.fichier != f))
+                    }
+                })
+                .await?;
+            if let Some(f) = ancien {
+                let _ = tokio::fs::remove_file(etat.dossier_projet(projet).join("sorties").join(f)).await;
+            }
             etat.emettre(projet, "fini", json!({"genre": if apercu { "apercu" } else { "rendu" }}));
             let p = etat.projet(projet).await?;
             if apercu && p.notifier_montage {

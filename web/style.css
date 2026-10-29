@@ -355,6 +355,14 @@ select.champ { padding: 8px 10px; margin-top: 8px; }
 .grille-photos .image-photo { aspect-ratio: 3 / 4; display: block; background: var(--surface-3); }
 .grille-styles { display: grid; grid-template-columns: repeat(7, 1fr); gap: var(--space-1); margin-top: var(--space-2); }
 .grille-styles img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: var(--rayon-petit); display: block; }
+.qualites-finale { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.qualite-finale { display: flex; flex-direction: column; gap: var(--space-2); text-align: left; padding: var(--space-3); border-radius: var(--rayon-petit);
+  border: 1px solid var(--bord); background: var(--surface); cursor: pointer; color: var(--texte); }
+.qualite-finale:hover:not(:disabled) { border-color: var(--accent); }
+.qualite-finale.choisi { border-color: var(--accent); background: var(--accent-doux); }
+.qualite-finale:disabled { opacity: .6; cursor: default; }
+.qualite-finale ul { margin: 0; padding-left: var(--space-4); font-size: var(--text-xs); color: var(--texte-2); display: grid; gap: var(--space-1); }
+@media (max-width: 720px) { .qualites-finale { grid-template-columns: 1fr; } }
 
 .incrustation { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px; border-radius: 11px; background: var(--surface-2); margin-bottom: 8px; }
 

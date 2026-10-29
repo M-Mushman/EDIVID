@@ -3675,10 +3675,50 @@ const PRESETS_EXPORT = [
 // Réglages de la fenêtre « Fabriquer la vidéo finale », dans l'ordre où on les choisit.
 const REGLAGES_FINALE = ['definition', 'cadence', 'codec_final', 'plage_dynamique', 'nettete_ia'];
 
-/** Fenêtre « Fabriquer la vidéo finale » : ses réglages (ils ne servent qu'à elle), son état, son lancement. */
+/** Deux qualités prêtes à l'emploi pour la vidéo finale : chacune règle les cinq réglages avancés et lance le rendu. */
+const QUALITES_FINALE = [
+  { cle: 'max', titre: 'Qualité maximale — 4K pour YouTube',
+    reglages: { definition: '2160', cadence: 'source', codec_final: 'hevc', plage_dynamique: 'sdr', nettete_ia: 'non' },
+    pourquoi: ['YouTube donne bien plus de débit aux vidéos envoyées en 4K : même regardée en 1080p, l’image reste nette.',
+      'Cadence du rush (60 i/s pour un iPhone réglé en 60) : mouvements fluides. HEVC 10 bits : dégradés de ciel et de peau sans marches.',
+      'Couleurs de la PostProd appliquées. Fabrication longue (de l’ordre de quatre fois la durée de la vidéo) et fichier lourd.'] },
+  { cle: 'rapide', titre: 'Rapide et universelle — 1080p',
+    reglages: { definition: '1080', cadence: '30', codec_final: 'h264', plage_dynamique: 'sdr', nettete_ia: 'non' },
+    pourquoi: ['Se lit partout tel quel : WhatsApp, Instagram, courriel, n’importe quel navigateur.',
+      'Fichier léger, fabrication nettement plus courte : le bon choix pour une série de petites vidéos.',
+      'Couleurs de la PostProd appliquées. Moins de détails qu’en 4K sur un grand écran.'] },
+];
+
+/** Fenêtre « Fabriquer la vidéo finale » : deux qualités prêtes, les réglages avancés repliés, l'état du rendu. */
 function afficherVideoFinale() {
   fenetre('Fabriquer la vidéo finale', (fermer) => {
     const etat = h('div');
+    const avances = h('div');
+    const lancer = async (reglages) => {
+      try {
+        if (reglages) {
+          await api('POST', `/api/projets/${E.projetId}/reglages`, reglages);
+          Object.assign(E.vue.projet.reglages, reglages);
+          dessinerAvances();
+        }
+        await api('POST', `/api/projets/${E.projetId}/rendu`);
+        toast('Vidéo finale lancée. Vous pouvez continuer à travailler ; elle remplacera la précédente.');
+        await rafraichirEtat();
+      } catch (e) { toast(e.message, 'erreur'); }
+    };
+    const dessinerAvances = () => {
+      const p = E.vue.projet;
+      remplir(avances,
+        REGLAGES_FINALE.map((cle) => E.catalogue.find((x) => x.cle === cle)).filter(Boolean).map((r) => {
+          const enLigne = r.genre === 'interrupteur';
+          return h('div', { class: 'reglage' },
+            h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, r.titre), enLigne ? controleReglage(r, p.reglages[r.cle]) : null),
+            h('div', { class: 'reglage-aide' }, r.aide),
+            enLigne ? null : controleReglage(r, p.reglages[r.cle]));
+        }),
+        h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' } },
+          h('button', { class: 'btn', disabled: !p.montage, onclick: () => lancer(null) }, icone('film'), 'Fabriquer avec ces réglages')));
+    };
     const dessinerEtat = (initial) => {
       if (!initial && !etat.isConnected) { if (E.finaleVue === dessinerEtat) E.finaleVue = null; return; }
       const p = E.vue.projet;
@@ -3687,7 +3727,7 @@ function afficherVideoFinale() {
       const description = p.rendu ? [`${r.largeur}×${r.hauteur}`, r.ips ? `${fr(r.ips, 0)} i/s` : null,
         r.codec ? `${r.codec === 'hevc' ? 'HEVC' : 'H.264'}${r.bits ? ` ${r.bits} bits` : ''}` : null, r.hdr ? 'HDR' : null,
         minutes(r.duree_montage)].filter(Boolean).join(' · ') : '';
-      let carte;
+      let carte = null;
       if (travail?.en_cours) {
         const prog = E.progression;
         carte = h('div', { class: 'carte suivi-export' },
@@ -3702,37 +3742,23 @@ function afficherVideoFinale() {
           h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' } },
             h('a', { class: 'btn petit doux', href: `/api/projets/${E.projetId}/sorties/${p.rendu.fichier}`, download: `${p.nom}.mp4` }, icone('telecharger'), 'Télécharger'),
             h('button', { class: 'btn petit primaire', onclick: () => { fermer(); afficherExport(); } }, icone('televerser'), 'Exporter')));
-      } else if (p.rendu) {
-        carte = h('div', { class: 'aide', style: { background: 'var(--alerte-doux)' } }, icone('alerte'),
-          h('span', {}, `La vidéo finale du ${new Date(p.rendu.cree).toLocaleString('fr-FR')} (${description}) date d’avant vos derniers changements : refaites-la pour qu’elle et ses exports les contiennent.`));
-      } else {
-        carte = h('p', { class: 'petit muet', style: { margin: 0 } }, 'Pas encore de vidéo finale.');
       }
-      const aJour = p.rendu && E.vue.rendu_a_jour !== false;
-      remplir(etat, carte,
-        h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px' } },
-          h('button', { class: 'btn', onclick: fermer }, 'Fermer'),
-          h('button', { class: `btn ${aJour ? '' : 'primaire'}`, disabled: !p.montage || !!travail, onclick: async () => {
-            try {
-              await api('POST', `/api/projets/${E.projetId}/rendu`);
-              toast('Vidéo finale lancée. Vous pouvez continuer à travailler.');
-              await rafraichirEtat();
-            } catch (e) { toast(e.message, 'erreur'); }
-          } }, icone('film'), p.rendu ? 'Refaire la vidéo finale' : 'Fabriquer la vidéo finale')));
+      const actuelle = QUALITES_FINALE.find((q) => Object.entries(q.reglages).every(([k, v]) => String(p.reglages[k]) === v));
+      remplir(etat,
+        h('div', { class: 'qualites-finale' }, QUALITES_FINALE.map((q) => h('button', {
+          class: `qualite-finale ${actuelle === q ? 'choisi' : ''}`, disabled: !p.montage || !!travail, onclick: () => lancer(q.reglages) },
+          h('b', {}, q.titre), h('ul', {}, q.pourquoi.map((t) => h('li', {}, t)))))),
+        carte ? h('div', { style: { marginTop: 'var(--space-3)' } }, carte) : null);
     };
     E.finaleVue = dessinerEtat;
-    const p = E.vue.projet;
+    dessinerAvances();
     const zone = h('div', {},
       h('p', { class: 'petit muet', style: { marginTop: 0 } },
-        'La vidéo en pleine définition, image soignée et son prêt pour YouTube. C’est d’elle que partent les exports (YouTube, iPhone, archive). Les réglages ci-dessous ne servent qu’à elle : l’aperçu reste rapide.'),
-      REGLAGES_FINALE.map((cle) => E.catalogue.find((x) => x.cle === cle)).filter(Boolean).map((r) => {
-        const enLigne = r.genre === 'interrupteur';
-        return h('div', { class: 'reglage' },
-          h('div', { class: 'reglage-tete' }, h('span', { class: 'reglage-titre' }, r.titre), enLigne ? controleReglage(r, p.reglages[r.cle]) : null),
-          h('div', { class: 'reglage-aide' }, r.aide),
-          enLigne ? null : controleReglage(r, p.reglages[r.cle]));
-      }),
-      h('div', { style: { marginTop: '14px' } }, etat));
+        'La vidéo en pleine définition, image soignée et son prêt pour YouTube ; c’est d’elle que partent les exports. Choisissez une qualité : la fabrication démarre aussitôt et remplace la vidéo finale précédente.'),
+      etat,
+      blocOutil('finale_avances', { icone: 'engrenage', titre: 'Réglages avancés', famille: 'recettes',
+        resume: 'Définition, cadence, format du fichier, plage dynamique, netteté IA' }, avances),
+      h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-3)' } }, h('button', { class: 'btn', onclick: fermer }, 'Fermer')));
     dessinerEtat(true);
     return zone;
   }, { large: true });
