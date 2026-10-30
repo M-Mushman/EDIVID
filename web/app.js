@@ -3993,10 +3993,11 @@ function dialogueYoutube(x, P) {
         champ('Mots-clés', champTexte('mots_cles', { placeholder: 'séparés par des virgules' })),
         champ('Vignette', f.vignette ? h('img', { src: `/api/projets/${E.projetId}/vignettes/${f.vignette}`, alt: 'Vignette choisie', style: { width: '240px', borderRadius: '8px', display: 'block' } })
           : h('span', { class: 'petit muet' }, 'Aucune : YouTube en prendra une dans la vidéo.'), 'Elle se choisit dans « Fiche de la vidéo ». Une vignette personnalisée demande une chaîne validée par téléphone.'),
-        champ('Visibilité', visibilite, 'Commencez en « Privée » pour vérifier, puis passez-la en publique depuis YouTube Studio (une fois l’audit passé, voir ci-dessous).'),
+        champ('Visibilité', visibilite, 'Tant que l’audit n’est pas passé (voir ci-dessous), Google force « Privée », quel que soit ce choix.'),
         champ('Catégorie', categorie),
         h('div', { class: 'aide', style: { marginTop: '12px' } }, icone('info'),
-          h('span', {}, 'Tant que votre application Google n’a pas passé l’audit de l’API YouTube, Google garde en privé les vidéos envoyées par EDIVID. La demande d’audit se fait dans la console Google Cloud.')),
+          h('span', {}, 'Tant que votre application Google n’a pas passé l’audit de l’API YouTube, Google verrouille en privé les vidéos envoyées par EDIVID : elles ne pourront pas devenir publiques, même plus tard depuis YouTube Studio. '
+            + 'Pour une vidéo à rendre publique, téléchargez l’export YouTube et envoyez-le à la main depuis YouTube Studio. L’audit se demande par le formulaire « YouTube API Services – Audit and Quota Extension ».')),
         h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' } },
           h('button', { class: 'btn', onclick: fermer }, 'Annuler'),
           h('button', { class: 'btn primaire', onclick: async () => {
