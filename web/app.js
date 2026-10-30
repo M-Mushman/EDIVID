@@ -3873,7 +3873,9 @@ async function afficherExport() {
       return x ? h('div', { class: 'carte suivi-export pret' },
         h('div', { class: 'ligne' }, h('b', {}, `Export ${nom} prêt`), h('span', { class: 'muet' }, `${x.largeur}×${x.hauteur} · ${taille(x.taille)}`)),
         h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' } },
-          h('a', { class: 'btn petit primaire', href: `/api/projets/${E.projetId}/sorties/${x.fichier}`, download: `${E.vue.projet.nom} (${x.preset}).mp4` }, icone('telecharger'), 'Télécharger'),
+          // L'envoi sur YouTube part d'azoth : rien à télécharger d'abord.
+          h('button', { class: `btn petit ${x.preset === 'youtube' ? 'primaire' : 'doux'}`, onclick: () => { fermer(); dialogueYoutube(x, P); } }, icone('youtube'), 'Publier sur YouTube'),
+          h('a', { class: 'btn petit doux', href: `/api/projets/${E.projetId}/sorties/${x.fichier}`, download: `${E.vue.projet.nom} (${x.preset}).mp4` }, icone('telecharger'), 'Télécharger'),
           h('button', { class: 'btn petit doux', onclick: ouvrirDossier }, icone('dossier'), 'Ouvrir le dossier'))) : null;
     };
     const dessiner = () => {
