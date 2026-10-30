@@ -2,7 +2,10 @@
 //! compte : le jeton est confié à rclone, qui le renouvelle lui-même.
 //!
 //! - mode « connexion » : réservé aux comptes autorisés (Paramètres) ;
-//! - mode « liaison » : depuis une session déjà ouverte, autorise le compte et relie son Drive.
+//! - mode « liaison » : depuis une session déjà ouverte, autorise le compte et relie son Drive ;
+//! - mode « youtube » : depuis une session ouverte avec Google, choix de la chaîne où publier. Autorisation à part :
+//!   une chaîne de marque est un compte sans Drive, que Google refuse (« Service non disponible ») si la même
+//!   demande réclame aussi le Drive.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -23,10 +26,12 @@ use crate::parametres::{self, Compte};
 const AUTORISATION: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const JETON: &str = "https://oauth2.googleapis.com/token";
 const IDENTITE: &str = "https://openidconnect.googleapis.com/v1/userinfo";
-const PORTEES: &str = "openid email profile https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/youtube.upload";
+const PORTEES: &str = "openid email profile https://www.googleapis.com/auth/drive";
 
 pub struct Demande {
     mode: String,
+    /// Compte de la session, pour le mode « youtube » : la chaîne lui est rattachée.
+    email: String,
     cree: Instant,
 }
 
@@ -61,23 +66,34 @@ pub async fn aller(State(etat): State<EtatPartage>, entetes: HeaderMap, Query(m)
     if p.google.client_id.is_empty() || p.google.client_secret.is_empty() {
         return Redirect::to("/#/parametres?google=non_configure").into_response();
     }
-    let mode = if m.mode == "liaison" { "liaison" } else { "connexion" };
-    if mode == "liaison" && acces::session(&etat, &entetes).await.is_none() {
+    let mode = match m.mode.as_str() {
+        "liaison" | "youtube" => m.mode.as_str(),
+        _ => "connexion",
+    };
+    let session = acces::session(&etat, &entetes).await;
+    if mode == "liaison" && session.is_none() {
         return Redirect::to("/?google=session_requise").into_response();
+    }
+    let email = session.and_then(|s| s.email).unwrap_or_default();
+    if mode == "youtube" && email.is_empty() {
+        return Redirect::to("/?google=session_google#/parametres").into_response();
     }
     let jeton: String = uuid::Uuid::new_v4().simple().to_string();
     {
         let mut d = etat.google.0.lock().unwrap();
         d.retain(|_, v| v.cree.elapsed() < Duration::from_secs(900));
-        d.insert(jeton.clone(), Demande { mode: mode.into(), cree: Instant::now() });
+        d.insert(jeton.clone(), Demande { mode: mode.into(), email: email.clone(), cree: Instant::now() });
     }
+    // Pour la chaîne : Google montre toujours le choix des chaînes du compte.
+    let (portees, invite, indice) =
+        if mode == "youtube" { (crate::youtube::PORTEES_CHAINE, "select_account%20consent", email) } else { (PORTEES, "consent", m.compte) };
     let url = format!(
-        "{AUTORISATION}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent\
-         &include_granted_scopes=true&state={jeton}{}",
+        "{AUTORISATION}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt={invite}\
+         &state={jeton}{}",
         encoder(&p.google.client_id),
         encoder(&retour(&p.url_publique)),
-        encoder(PORTEES),
-        if m.compte.is_empty() { String::new() } else { format!("&login_hint={}", encoder(&m.compte)) }
+        encoder(portees),
+        if indice.is_empty() { String::new() } else { format!("&login_hint={}", encoder(&indice)) }
     );
     Redirect::to(&url).into_response()
 }
@@ -101,6 +117,15 @@ pub async fn revenir(State(etat): State<EtatPartage>, Query(r): Query<Retour>) -
     if !r.error.is_empty() {
         return Redirect::to("/?google=annule").into_response();
     }
+    if demande.mode == "youtube" {
+        return match traiter_chaine(&etat, &demande.email, &r.code).await {
+            Ok(()) => Redirect::to("/?google=youtube#/parametres").into_response(),
+            Err(e) => {
+                tracing::warn!("chaîne YouTube : {e:#}");
+                Redirect::to(&format!("/?google=erreur_youtube&detail={}#/parametres", encoder(&format!("{e:#}")))).into_response()
+            }
+        };
+    }
     match traiter(&etat, &demande.mode, &r.code).await {
         Ok((email, cible)) => {
             let temoin = acces::temoin_google(&etat, &email);
@@ -117,20 +142,18 @@ pub async fn revenir(State(etat): State<EtatPartage>, Query(r): Query<Retour>) -
     }
 }
 
-/// Accès accordés qui manquent : Google présente le Drive et YouTube en cases à cocher (décochées par défaut pour une
-/// application non validée) ; sans elles, la connexion réussit mais le Drive refuse tout (« insufficientPermissions »).
+/// Accès accordés qui manquent : Google présente le Drive en case à cocher (décochée par défaut pour une
+/// application non validée) ; sans elle, la connexion réussit mais le Drive refuse tout (« insufficientPermissions »).
 fn acces_manquants(portees: &str) -> Vec<&'static str> {
     let mut manque = Vec::new();
     if !portees.contains("auth/drive") {
         manque.push("drive");
     }
-    if !portees.contains("youtube") {
-        manque.push("youtube");
-    }
     manque
 }
 
-async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, String)> {
+/// Échange le code rendu par Google contre les jetons.
+async fn echanger(etat: &EtatPartage, code: &str) -> Result<Value> {
     let p = etat.parametres.read().await.clone();
     let jetons: Value = etat
         .http
@@ -147,6 +170,28 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
         .await?
         .json()
         .await?;
+    Ok(jetons)
+}
+
+/// Retour du choix de la chaîne : le jeton de la chaîne est rattaché au compte de la session.
+async fn traiter_chaine(etat: &EtatPartage, email: &str, code: &str) -> Result<()> {
+    let jetons = echanger(etat, code).await?;
+    if !jetons["scope"].as_str().unwrap_or("").contains(crate::youtube::PORTEE) {
+        bail!("Google n'a pas accordé l'envoi de vidéos : recommencez et cochez la case « YouTube »");
+    }
+    let rafraichir = jetons["refresh_token"].as_str().ok_or_else(|| anyhow!("Google n'a pas donné de jeton durable : recommencez"))?;
+    let acces_jeton = jetons["access_token"].as_str().ok_or_else(|| anyhow!("Google n'a pas donné de jeton : {jetons}"))?;
+    let chaine = crate::youtube::nom_chaine(etat, acces_jeton).await.unwrap_or_default();
+    crate::youtube::garder_chaine(etat, email, rafraichir)?;
+    let mut params = etat.parametres.write().await;
+    let c = params.comptes.iter_mut().find(|c| c.email.eq_ignore_ascii_case(email)).ok_or_else(|| anyhow!("compte {email} inconnu"))?;
+    c.chaine = chaine;
+    parametres::enregistrer(&etat.cfg.donnees, &params)
+}
+
+async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, String)> {
+    let p = etat.parametres.read().await.clone();
+    let jetons = echanger(etat, code).await?;
     let acces_jeton = jetons["access_token"].as_str().ok_or_else(|| anyhow!("Google n'a pas donné de jeton : {jetons}"))?;
     let identite: Value = etat.http.get(IDENTITE).bearer_auth(acces_jeton).timeout(Duration::from_secs(20)).send().await?.json().await?;
     let email = identite["email"].as_str().ok_or_else(|| anyhow!("adresse du compte introuvable"))?.to_lowercase();
@@ -160,10 +205,11 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
     let mut drive_relie = false;
     let drive_accorde = !acces_manquants(jetons["scope"].as_str().unwrap_or("")).contains(&"drive");
     if let Some(rafraichir) = jetons["refresh_token"].as_str() {
-        // Gardé aussi pour YouTube, que rclone ne sait pas servir.
+        // Gardé aussi sur azoth (portées accordées, et anciens comptes qui publiaient avec ce même jeton).
         crate::youtube::garder(etat, &email, crate::youtube::Jetons {
             refresh_token: rafraichir.to_string(),
             portees: jetons["scope"].as_str().unwrap_or("").to_string(),
+            ..Default::default()
         })?;
         let expire = chrono::Utc::now() + chrono::Duration::seconds(jetons["expires_in"].as_i64().unwrap_or(3600));
         let jeton_rclone = json!({"access_token": acces_jeton, "token_type": "Bearer", "refresh_token": rafraichir,
@@ -175,20 +221,16 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
             drive_relie = true;
         }
     }
-    // La chaîne YouTube, si l'accès a été accordé : la personne voit où partiront ses vidéos.
-    let chaine = if jetons["scope"].as_str().unwrap_or("").contains("youtube") {
-        crate::youtube::nom_chaine(etat, acces_jeton).await.unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // La chaîne YouTube se choisit à part ; si plus rien n'autorise l'envoi, son nom n'a plus lieu d'être affiché.
+    let youtube = crate::youtube::autorise(etat, &email);
     // Le compte est autorisé (liaison) ou mis à jour (connexion).
     let nouveau = {
         let mut params = etat.parametres.write().await;
         match params.comptes.iter_mut().find(|c| c.email.eq_ignore_ascii_case(&email)) {
             Some(c) => {
                 c.nom = nom.clone();
-                if !chaine.is_empty() {
-                    c.chaine = chaine.clone();
+                if !youtube {
+                    c.chaine.clear();
                 }
                 if drive_relie {
                     c.distant = format!("{distant}:");
@@ -199,7 +241,7 @@ async fn traiter(etat: &EtatPartage, mode: &str, code: &str) -> Result<(String, 
                 nom: nom.clone(),
                 distant: if drive_relie { format!("{distant}:") } else { String::new() },
                 veille: drive_relie,
-                chaine: chaine.clone(),
+                chaine: String::new(),
             }),
         }
         parametres::enregistrer(&etat.cfg.donnees, &params)?;

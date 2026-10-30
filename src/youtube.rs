@@ -17,11 +17,17 @@ use crate::llm;
 use crate::modele::{maintenant, Echange};
 
 pub const PORTEE: &str = "https://www.googleapis.com/auth/youtube.upload";
+/// Autorisation à part pour la chaîne : Google y fait choisir la chaîne, y compris une chaîne de marque (un compte
+/// sans Drive ni adresse, que la connexion principale ne peut donc pas viser). La lecture sert à afficher son nom.
+pub const PORTEES_CHAINE: &str = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly";
 
 #[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Jetons {
     pub refresh_token: String,
     pub portees: String,
+    /// Jeton de rafraîchissement de la chaîne choisie (autorisation à part) ; vide tant qu'aucune n'est choisie.
+    pub chaine: String,
 }
 
 fn chemin(etat: &EtatPartage) -> std::path::PathBuf {
@@ -32,9 +38,20 @@ pub fn charger(etat: &EtatPartage) -> HashMap<String, Jetons> {
     std::fs::read_to_string(chemin(etat)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
-pub fn garder(etat: &EtatPartage, email: &str, jetons: Jetons) -> Result<()> {
+/// Jetons de la connexion principale ; la chaîne déjà choisie est gardée.
+pub fn garder(etat: &EtatPartage, email: &str, mut jetons: Jetons) -> Result<()> {
     let mut tous = charger(etat);
+    if let Some(ancien) = tous.get(&email.to_lowercase()) {
+        jetons.chaine = ancien.chaine.clone();
+    }
     tous.insert(email.to_lowercase(), jetons);
+    crate::fichiers::ecrire(&chemin(etat), &serde_json::to_vec_pretty(&tous)?, true)
+}
+
+/// Jeton de la chaîne choisie pour ce compte EDIVID.
+pub fn garder_chaine(etat: &EtatPartage, email: &str, refresh_token: &str) -> Result<()> {
+    let mut tous = charger(etat);
+    tous.entry(email.to_lowercase()).or_default().chaine = refresh_token.to_string();
     crate::fichiers::ecrire(&chemin(etat), &serde_json::to_vec_pretty(&tous)?, true)
 }
 
@@ -68,19 +85,23 @@ pub async fn nom_chaine(etat: &EtatPartage, jeton_acces: &str) -> Option<String>
     v["items"][0]["snippet"]["title"].as_str().map(str::to_string)
 }
 
-/// Ce compte a-t-il autorisé l'envoi sur YouTube ?
+/// Ce compte a-t-il autorisé l'envoi sur YouTube ? (chaîne choisie, ou ancienne autorisation commune avec le Drive)
 pub fn autorise(etat: &EtatPartage, email: &str) -> bool {
-    charger(etat).get(&email.to_lowercase()).map(|j| j.portees.contains(PORTEE) && !j.refresh_token.is_empty()).unwrap_or(false)
+    charger(etat)
+        .get(&email.to_lowercase())
+        .map(|j| !j.chaine.is_empty() || (j.portees.contains(PORTEE) && !j.refresh_token.is_empty()))
+        .unwrap_or(false)
 }
 
 async fn jeton_acces(etat: &EtatPartage, email: &str) -> Result<String> {
     let j = charger(etat).get(&email.to_lowercase()).cloned().ok_or_else(|| anyhow!("compte Google non relié"))?;
+    let rafraichir = if j.chaine.is_empty() { &j.refresh_token } else { &j.chaine };
     let g = etat.parametres.read().await.google.clone();
     let v: Value = etat
         .http
         .post("https://oauth2.googleapis.com/token")
         .form(&[("client_id", g.client_id.as_str()), ("client_secret", g.client_secret.as_str()),
-                ("refresh_token", j.refresh_token.as_str()), ("grant_type", "refresh_token")])
+                ("refresh_token", rafraichir.as_str()), ("grant_type", "refresh_token")])
         .timeout(Duration::from_secs(20))
         .send()
         .await?

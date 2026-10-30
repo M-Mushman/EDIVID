@@ -122,7 +122,9 @@ Google, mot de passe SMTP, compte rclone) écrits de façon atomique en 600 ; t�
 - Rognage du haut de la source (logo CapCut ou TikTok) ; timbre de voix clair, chaud ou naturel ;
   look « Lumière cinéma ».
 - Export YouTube et archive (le rendu final, sans recompression), léger (720p, H.264, SDR) ; publication sur YouTube
-  (API Data v3, envoi reprenable) avec titre, description à chapitres et mots-clés proposés par le LLM.
+  (API Data v3, envoi reprenable) avec titre, description à chapitres et mots-clés proposés par le LLM. La chaîne
+  se choisit par une autorisation à part (Paramètres, « Choisir la chaîne YouTube ») : une chaîne de marque est un
+  compte sans Drive, que Google refuse (« Service non disponible ») si la même demande réclame aussi le Drive.
 - Transcription modifiable en place et « rechercher et remplacer » ; les sous-titres suivent.
 - Onglet PostProd (couleur, lissage du teint, diffusion, netteté, grain, vignette, bandes cinéma) et
   bibliothèque de looks mode et beauté (`bibliotheque/looks.json`) ; avant/après sur l'image affichée.

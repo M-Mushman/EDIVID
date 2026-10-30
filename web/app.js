@@ -335,8 +335,11 @@ function messageGoogle() {
     erreur: `Connexion avec Google impossible : ${q.get('detail') || 'erreur inconnue'}`,
     partiel: `Connecté, mais Google n’a pas accordé l’accès à ${(q.get('manque') || '').split(',').map((m) => ({ drive: 'Google Drive', youtube: 'YouTube' }[m] || m)).join(' ni à ')}. `
       + 'Reconnectez-vous et, sur l’écran de Google, cochez les cases correspondantes (elles peuvent être décochées par défaut).',
+    youtube: 'Chaîne YouTube reliée : « Exporter » publiera dessus.',
+    erreur_youtube: `Chaîne YouTube non reliée : ${q.get('detail') || 'erreur inconnue'}`,
+    session_google: 'Connectez-vous d’abord avec votre compte Google, puis choisissez la chaîne.',
   };
-  setTimeout(() => toast(messages[g] || 'Connexion avec Google : réponse inattendue.', g === 'annule' ? '' : 'erreur'), 300);
+  setTimeout(() => toast(messages[g] || 'Connexion avec Google : réponse inattendue.', g === 'annule' ? '' : g === 'youtube' ? 'ok' : 'erreur'), 300);
   if (g === 'partiel') setTimeout(() => toast(messages.partiel, 'erreur'), 6000);
   history.replaceState(null, '', location.pathname + location.hash);
 }
@@ -3430,7 +3433,7 @@ async function afficherParametres() {
 // ------------------------------------------------------------------ connexion avec Google (Paramètres)
 
 const CONSOLE_GOOGLE = 'https://console.cloud.google.com';
-const PORTEES_GOOGLE = 'https://www.googleapis.com/auth/drive, https://www.googleapis.com/auth/youtube.upload';
+const PORTEES_GOOGLE = 'https://www.googleapis.com/auth/drive, https://www.googleapis.com/auth/youtube.upload, https://www.googleapis.com/auth/youtube.readonly';
 
 /** Lien vers une page de la console Google, ouvert dans un nouvel onglet. */
 function lienConsole(chemin, libelle) {
@@ -3466,12 +3469,12 @@ function sectionGoogle(P) {
     h('li', {}, icone('youtube'), h('span', {}, 'Publiez sur votre chaîne YouTube depuis « Exporter ».')));
   const pastilles = (c) => h('div', { class: 'tres-petit', style: { marginTop: '4px', display: 'flex', gap: '6px', flexWrap: 'wrap' } },
     c.distant ? h('span', { class: 'pastille ok' }, 'Drive relié') : h('span', { class: 'pastille alerte' }, 'Drive non relié'),
-    c.chaine ? h('span', { class: 'pastille ok' }, `YouTube : ${c.chaine}`) : null);
+    c.youtube ? h('span', { class: 'pastille ok' }, `YouTube : ${c.chaine || 'chaîne reliée'}`) : null);
   const reautoriser = (c) => `/api/google/connexion?mode=liaison&compte=${encodeURIComponent(c.email)}`;
   const ligneCompte = (c) => h('div', { class: 'incrustation' },
     h('div', { style: { minWidth: 0 } }, h('b', { class: 'petit' }, c.nom || c.email), h('div', { class: 'tres-petit muet' }, c.email), pastilles(c)),
     h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-      h('a', { class: 'btn petit doux', href: reautoriser(c), title: 'Refaire l’autorisation de ce compte chez Google (Drive et YouTube)' }, icone('relancer'), 'Reconnecter'),
+      h('a', { class: 'btn petit doux', href: reautoriser(c), title: 'Refaire l’autorisation de ce compte chez Google (Drive)' }, icone('relancer'), 'Reconnecter'),
       c.distant ? h('label', { class: 'bascule', title: 'Surveiller le dossier d’entrée de ce Drive' },
         h('input', { type: 'checkbox', checked: c.veille, onchange: async (e) => {
           try { await api('POST', '/api/comptes', { email: c.email, veille: e.target.checked }); toast(e.target.checked ? 'Veille de ce Drive activée.' : 'Veille de ce Drive arrêtée.', 'ok'); }
@@ -3497,20 +3500,27 @@ function sectionGoogle(P) {
       carte.append(h('div', { class: 'compte-connecte' },
         h('span', { class: 'avatar grand' }, (moi.nom || moi.email).trim()[0]?.toUpperCase() || '?'),
         h('div', { style: { minWidth: 0 } }, h('b', {}, moi.nom || moi.email), h('div', { class: 'tres-petit muet' }, moi.email), pastilles(moi))));
-      // Drive ou YouTube pas accordé : on le dit, avec le bouton qui refait l'autorisation de ce compte.
-      if (!moi.distant || !moi.chaine) {
+      // Drive pas accordé : on le dit, avec le bouton qui refait l'autorisation de ce compte.
+      if (!moi.distant) {
         carte.append(h('div', { class: 'aide', style: { background: 'var(--alerte-doux)', marginTop: '12px' } }, icone('alerte'),
-          h('span', {}, `Google n’a pas encore accordé ${!moi.distant && !moi.chaine ? 'le Drive ni YouTube' : !moi.distant ? 'le Drive' : 'YouTube'} à EDIVID. `
-            + 'Cliquez ci-dessous ; sur l’écran de Google, cochez les cases « Google Drive » et « YouTube » (elles peuvent être décochées), puis Continuer.')),
-        h('a', { class: 'btn primaire', href: reautoriser(moi), style: { marginTop: '10px' } }, icone('google'), 'Autoriser le Drive et YouTube'));
+          h('span', {}, 'Google n’a pas encore accordé le Drive à EDIVID. '
+            + 'Cliquez ci-dessous ; sur l’écran de Google, cochez la case « Google Drive » (elle peut être décochée), puis Continuer.')),
+        h('a', { class: 'btn primaire', href: reautoriser(moi), style: { marginTop: '10px' } }, icone('google'), 'Autoriser le Drive'));
       }
+      // La chaîne YouTube se choisit à part : Google y propose toutes les chaînes du compte, chaînes de marque comprises.
+      carte.append(h('div', { class: 'aide', style: { marginTop: '12px' } }, icone('youtube'),
+          h('span', {}, moi.youtube
+            ? `Vos vidéos partent sur la chaîne « ${moi.chaine || 'reliée'} ». Pour en changer, choisissez-en une autre.`
+            : 'Choisissez la chaîne YouTube où publier : Google affiche toutes les chaînes de votre compte. Cochez ensuite les cases « YouTube », puis Continuer.')),
+        h('a', { class: moi.youtube ? 'btn doux' : 'btn primaire', href: '/api/google/connexion?mode=youtube', style: { marginTop: '10px' } },
+          icone('youtube'), moi.youtube ? 'Changer de chaîne YouTube' : 'Choisir la chaîne YouTube'));
     } else {
       carte.append(avantages);
     }
     carte.append(
       h('a', { class: 'btn bouton-google grand', href: '/api/google/connexion?mode=liaison', style: { marginTop: '14px' } }, icone('google'),
         moi ? 'Relier un autre compte Google' : 'Se connecter avec Google'),
-      h('p', { class: 'tres-petit muet' }, 'Google vous demande d’autoriser EDIVID à utiliser votre Drive et à publier sur YouTube : cochez les deux. Si un écran « Google n’a pas validé cette application » apparaît, cliquez « Continuer » (ou « Paramètres avancés », puis « Accéder à EDIVID »).'),
+      h('p', { class: 'tres-petit muet' }, 'Google vous demande d’autoriser EDIVID à utiliser votre Drive : cochez la case. La chaîne YouTube se choisit ensuite, ci-dessus. Si un écran « Google n’a pas validé cette application » apparaît, cliquez « Continuer » (ou « Paramètres avancés », puis « Accéder à EDIVID »).'),
       comptes.length ? h('details', { style: { marginTop: '10px' }, open: comptes.length > 0 && !moi },
         h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, `Comptes reliés à cet EDIVID (${comptes.length})`),
         comptes.map(ligneCompte)) : null);
@@ -3552,7 +3562,7 @@ function carteActivationGoogle(P) {
       h('span', { class: 'petit muet' }, '« Commencer » : nom de l’application EDIVID, votre adresse d’assistance, audience « Externe », votre adresse de contact, puis « Créer ».'),
       h('div', { style: { marginTop: '8px' } }, lienConsole('/auth/branding', 'Ouvrir « Branding »')))],
     ['Autoriser Drive et YouTube', h('div', {},
-      h('span', { class: 'petit muet' }, '« Ajouter ou supprimer des champs d’application », puis en bas « Ajouter manuellement » : collez ces deux champs, « Ajouter au tableau », « Mettre à jour », puis « Enregistrer ».'),
+      h('span', { class: 'petit muet' }, '« Ajouter ou supprimer des champs d’application », puis en bas « Ajouter manuellement » : collez ces trois champs, « Ajouter au tableau », « Mettre à jour », puis « Enregistrer ».'),
       blocCommande(PORTEES_GOOGLE, 'Champs copiés.'), h('div', { style: { marginTop: '8px' } }, lienConsole('/auth/scopes', 'Ouvrir « Accès aux données »')))],
     ['Ajouter les personnes', h('div', {},
       h('span', { class: 'petit muet' }, '« Utilisateurs test » → « Add users » : l’adresse Gmail de chaque personne qui se connectera (la vôtre d’abord).'),
@@ -3949,7 +3959,7 @@ function dialogueYoutube(x, P) {
     const dessiner = () => {
       if (!comptes.length) {
         remplir(zone, h('div', { class: 'aide', style: { background: 'var(--alerte-doux)' } }, icone('alerte'),
-          h('span', {}, 'Aucun compte Google n’a autorisé YouTube. Dans Paramètres, connectez votre compte avec Google (il demande aussi l’accès à YouTube), puis revenez ici.')),
+          h('span', {}, 'Aucune chaîne YouTube n’est reliée. Dans Paramètres, carte « Votre compte Google », cliquez « Choisir la chaîne YouTube », puis revenez ici.')),
           h('a', { class: 'btn primaire', href: '#/parametres', style: { marginTop: '12px' }, onclick: fermer }, 'Ouvrir les Paramètres'));
         return;
       }
@@ -3960,7 +3970,7 @@ function dialogueYoutube(x, P) {
       const categorie = h('select', { class: 'champ' }, [['26', 'Vie pratique et style'], ['22', 'Personnes et blogs'], ['27', 'Éducation'], ['17', 'Sport'], ['24', 'Divertissement']].map(([v, l]) =>
         h('option', { value: v, selected: f.categorie === v }, l)));
       categorie.addEventListener('change', () => { f.categorie = categorie.value; });
-      const compte = h('select', { class: 'champ' }, comptes.map((c) => h('option', { value: c.email, selected: f.compte === c.email }, `${c.nom} — ${c.email}`)));
+      const compte = h('select', { class: 'champ' }, comptes.map((c) => h('option', { value: c.email, selected: f.compte === c.email }, `${c.chaine || 'Chaîne YouTube'} — ${c.nom || c.email}`)));
       compte.addEventListener('change', () => { f.compte = compte.value; });
       const proposer = h('button', { class: 'btn petit doux', onclick: async () => {
         proposer.disabled = true;
