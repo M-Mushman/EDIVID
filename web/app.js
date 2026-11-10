@@ -501,7 +501,7 @@ function brancherFlux(source) {
       dessinerBarre();
       if (E.exportVue && /^Export/.test(E.progression?.etape || '')) E.exportVue.redessiner();
       E.finaleVue?.();
-      if (E.vue?.projet.rushs.some((r) => ['preparation', 'analyse'].includes(r.etat))) dessinerRushs();
+      dessinerProgressionRushs();
     });
     source.addEventListener('projet', () => rafraichirBientot());
     source.addEventListener('file', () => rafraichirEtat());
@@ -549,6 +549,8 @@ async function rafraichir() {
       api('GET', `/api/projets/${E.projetId}`),
       api('GET', `/api/projets/${E.projetId}/programme`).catch(() => null),
     ]);
+    // Un nouvel ordre des rushs part encore : cette réponse le précède, le rafraîchissement suivant le montrera.
+    if (ordresRushsEnAttente) return;
     E.vue = vue;
     E.programme = programme;
     // Le serveur sait si l'aperçu reflète l'état du projet : l'avertissement survit à un rechargement de la page.
@@ -792,20 +794,72 @@ function dessinerTeleversements() {
   }
 }
 
+let ordresRushsEnAttente = 0;
+let envoisOrdreRushs = Promise.resolve();
+
+/** Nouvel ordre des rushs : affiché tout de suite, puis enregistré dans l'ordre des clics. */
+function changerOrdreRushs(ids) {
+  const p = E.vue.projet;
+  const projet = E.projetId;
+  const parId = new Map(p.rushs.map((r) => [r.id, r]));
+  p.rushs = ids.map((id) => parId.get(id));
+  dessinerRushs();
+  ordresRushsEnAttente++;
+  envoisOrdreRushs = envoisOrdreRushs.then(async () => {
+    try { await api('POST', `/api/projets/${projet}/rushs/ordre`, { ids }); }
+    catch (e) { toast(`Ordre des rushs non enregistré : ${e.message}`, 'erreur'); }
+    if (--ordresRushsEnAttente === 0) rafraichir();
+  });
+}
+
+const parDureeRush = (sens) => (a, b) => {
+  const [x, y] = [a.source?.duree, b.source?.duree];
+  // Durée encore inconnue (rush en préparation) : en fin de liste dans les deux sens.
+  return x == null || y == null ? (x == null) - (y == null) : sens * (x - y);
+};
+const parNomRush = (sens) => (a, b) => sens * a.nom.localeCompare(b.nom, 'fr', { numeric: true, sensitivity: 'base' });
+const TRIS_RUSHS = [
+  ['Nom (A à Z)', parNomRush(1)],
+  ['Nom (Z à A)', parNomRush(-1)],
+  ['Plus courts d’abord', parDureeRush(1)],
+  ['Plus longs d’abord', parDureeRush(-1)],
+];
+
+const progressionRush = (r) => (E.progression && ['preparation', 'analyse'].includes(r.etat) && E.etat?.file?.some((t) => t.en_cours && t.projet === E.projetId))
+  ? E.progression : null;
+
+function contenuProgressionRush(r) {
+  const prog = progressionRush(r);
+  return prog ? [h('div', { class: 'tres-petit muet', style: { marginTop: '4px' } }, `${prog.etape} — ${fr(prog.pct, 0)} %`),
+    h('div', { class: 'jauge' }, h('div', { style: { width: `${prog.pct}%` } }))] : [];
+}
+
+// La progression arrive plusieurs fois par seconde : seule sa zone change, sinon les boutons de la ligne seraient
+// remplacés sous la souris et le clic perdu.
+function dessinerProgressionRushs() {
+  for (const r of E.vue?.projet.rushs || []) {
+    const zone = E.noeuds.progressionsRushs?.get(r.id);
+    if (zone) remplir(zone, contenuProgressionRush(r));
+  }
+}
+
 function dessinerRushs() {
   const p = E.vue.projet;
   E.noeuds.televersementsRushs = h('div', { class: 'liste-rushs' });
-  const deplacer = async (i, d) => {
+  E.noeuds.progressionsRushs = new Map();
+  const deplacer = (i, d) => {
     const ids = p.rushs.map((r) => r.id);
     [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
-    await api('POST', `/api/projets/${E.projetId}/rushs/ordre`, { ids });
+    changerOrdreRushs(ids);
   };
-  const progRush = (r) => (E.progression && ['preparation', 'analyse'].includes(r.etat) && E.etat?.file?.some((t) => t.en_cours && t.projet === E.projetId))
-    ? E.progression : null;
+  const trier = (compare) => changerOrdreRushs([...p.rushs].sort(compare).map((r) => r.id));
   appliquerReplie(E.noeuds.rushs, 'rushs');
   remplir(E.noeuds.rushs,
     enteteRepliable('rushs', '1. Vos rushs',
       p.rushs.length > 1 ? h('span', { class: 'tres-petit muet' }, 'Montés dans cet ordre') : null,
+      p.rushs.length > 1 ? h('select', { class: 'champ', style: { width: 'auto', marginTop: 0, padding: '5px 8px' }, 'aria-label': 'Trier les rushs',
+        onchange: (e) => { if (e.target.value) trier(TRIS_RUSHS[Number(e.target.value)][1]); } },
+        h('option', { value: '' }, 'Trier…'), TRIS_RUSHS.map(([nom], k) => h('option', { value: String(k) }, nom))) : null,
       estReplie('rushs') && p.rushs.length ? h('span', { class: 'tres-petit muet' }, `${p.rushs.length} rush${p.rushs.length > 1 ? 's' : ''}`) : null),
     h('div', { class: 'carte-corps' },
       p.rushs.length === 0 ? h('div', { class: 'aide', style: { marginBottom: '12px' } }, icone('info'),
@@ -814,8 +868,9 @@ function dessinerRushs() {
       h('button', { class: 'btn petit doux', style: { marginTop: '8px' }, onclick: () => choisirDepuisDrive('rushs') }, icone('google'), 'Choisir sur Google Drive'),
       h('div', { class: 'liste-rushs' }, p.rushs.map((r, i) => {
         const [libelle, classe] = ETATS_RUSH[r.etat] || [r.etat, 'pastille'];
-        const prog = progRush(r);
         const s = r.source;
+        const zoneProgression = h('div', {}, contenuProgressionRush(r));
+        E.noeuds.progressionsRushs.set(r.id, zoneProgression);
         return h('div', { class: 'rush' },
           h('div', { class: 'vignette' }, icone('film')),
           h('div', { style: { minWidth: 0 } },
@@ -824,8 +879,7 @@ function dessinerRushs() {
               h('span', { class: classe }, libelle),
               s ? `${minutes(s.duree)} · ${s.largeur}×${s.hauteur}${s.hdr ? ` · HDR ${s.hdr} converti` : ''}` : taille(r.taille)),
             r.erreur ? h('div', { class: 'tres-petit', style: { color: 'var(--erreur)', marginTop: '4px' } }, r.erreur) : null,
-            prog ? h('div', {}, h('div', { class: 'tres-petit muet', style: { marginTop: '4px' } }, `${prog.etape} — ${fr(prog.pct, 0)} %`),
-              h('div', { class: 'jauge' }, h('div', { style: { width: `${prog.pct}%` } }))) : null),
+            zoneProgression),
           h('div', { class: 'actions' },
             r.etat === 'erreur' ? h('button', { class: 'btn icone fantome', title: 'Relancer', onclick: () => api('POST', `/api/projets/${E.projetId}/rushs/${r.id}/relancer`) }, icone('relancer')) : null,
             i > 0 ? h('button', { class: 'btn icone fantome', title: 'Monter plus tôt', onclick: () => deplacer(i, -1) }, icone('haut')) : null,
