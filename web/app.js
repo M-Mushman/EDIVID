@@ -871,27 +871,114 @@ function dessinerRushs() {
         const s = r.source;
         const zoneProgression = h('div', {}, contenuProgressionRush(r));
         E.noeuds.progressionsRushs.set(r.id, zoneProgression);
-        return h('div', { class: 'rush' },
+        const resume = r.fiche ? resumeFicheRush(r.fiche) : '';
+        return h('div', { class: 'bloc-rush' }, h('div', { class: 'rush' },
           h('div', { class: 'vignette' }, icone('film')),
           h('div', { style: { minWidth: 0 } },
             h('div', { class: 'titre', title: r.nom }, r.nom),
             h('div', { class: 'tres-petit muet', style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '2px' } },
               h('span', { class: classe }, libelle),
               s ? `${minutes(s.duree)} · ${s.largeur}×${s.hauteur}${s.hdr ? ` · HDR ${s.hdr} converti` : ''}` : taille(r.taille)),
+            resume ? h('div', { class: 'tres-petit muet', style: { marginTop: '2px' } }, resume) : null,
             r.erreur ? h('div', { class: 'tres-petit', style: { color: 'var(--erreur)', marginTop: '4px' } }, r.erreur) : null,
             zoneProgression),
           h('div', { class: 'actions' },
             r.etat === 'erreur' ? h('button', { class: 'btn icone fantome', title: 'Relancer', onclick: () => api('POST', `/api/projets/${E.projetId}/rushs/${r.id}/relancer`) }, icone('relancer')) : null,
+            r.etat === 'pret' ? h('button', { class: `btn icone fantome${E.fichesOuvertes.has(r.id) ? ' actif' : ''}`, title: 'Réglages du rush : type, plage gardée, recadrage',
+              'aria-expanded': String(E.fichesOuvertes.has(r.id)), onclick: () => basculerFicheRush(r.id) }, icone('reglages')) : null,
             i > 0 ? h('button', { class: 'btn icone fantome', title: 'Monter plus tôt', onclick: () => deplacer(i, -1) }, icone('haut')) : null,
             i < p.rushs.length - 1 ? h('button', { class: 'btn icone fantome', title: 'Monter plus tard', onclick: () => deplacer(i, 1) }, icone('bas')) : null,
             h('button', { class: 'btn icone fantome danger', title: 'Retirer ce rush', onclick: async () => {
               if (await confirmer('Retirer ce rush ?', `« ${r.nom} » et son analyse seront effacés.`, 'Retirer')) {
                 try { await api('DELETE', `/api/projets/${E.projetId}/rushs/${r.id}`); } catch (e) { toast(e.message, 'erreur'); }
               }
-            } }, icone('corbeille'))));
+            } }, icone('corbeille')))),
+          E.fichesOuvertes.has(r.id) ? ficheRush(r) : null);
       })),
       E.noeuds.televersementsRushs));
   dessinerTeleversements();
+}
+
+// ------------------------------------------------------------------ fiche d'un rush
+
+E.fichesOuvertes = new Set();
+E.fichesRush = new Map();
+
+function resumeFicheRush(f) {
+  const morceaux = [];
+  if (f.seance) morceaux.push('Séance : plan fixe, sans coupe');
+  if (f.debut != null || f.fin != null) morceaux.push(`gardé ${f.debut != null ? `de ${minutes(f.debut)} ` : ''}${f.fin != null ? `jusqu’à ${minutes(f.fin)}` : 'jusqu’à la fin'}`);
+  const [g, d, ha, b] = f.rognage || [0, 0, 0, 0];
+  const rog = [[g, 'gauche'], [d, 'droite'], [ha, 'haut'], [b, 'bas']].filter(([v]) => v > 0).map(([v, n]) => `${n} ${fr(v * 100, 0)} %`);
+  if (rog.length) morceaux.push(`rogné ${rog.join(', ')}${f.centrer ? ', personne au centre' : ''}`);
+  return morceaux.join(' · ');
+}
+
+async function basculerFicheRush(rid) {
+  if (E.fichesOuvertes.has(rid)) E.fichesOuvertes.delete(rid);
+  else {
+    E.fichesOuvertes.add(rid);
+    try { E.fichesRush.set(rid, await api('GET', `/api/projets/${E.projetId}/rushs/${rid}/fiche`)); }
+    catch (e) { toast(e.message, 'erreur'); }
+  }
+  dessinerRushs();
+}
+
+/** « 6:32 », « 6.32 », « 392 » ou « 1:02,5 » → secondes ; vide → null (plage automatique). */
+function lireTemps(t) {
+  t = String(t || '').trim().replace(',', '.');
+  if (!t) return null;
+  const m = t.match(/^(\d+)[:.h'](\d{1,2}(?:\.\d+)?)$/);
+  const v = m ? Number(m[1]) * 60 + Number(m[2]) : Number(t);
+  if (!Number.isFinite(v) || v < 0) throw new Error(`temps illisible : « ${t} » (écrivez par exemple 6:32)`);
+  return v;
+}
+
+function ficheRush(r) {
+  const info = E.fichesRush.get(r.id);
+  if (!info) return h('div', { class: 'fiche-rush tres-petit muet' }, 'Chargement…');
+  const f = info.fiche;
+  const auto = info.auto;
+  const type = h('select', { class: 'champ' },
+    h('option', { value: 'parole', selected: !f.seance }, 'Parole : coupes et zooms permis'),
+    h('option', { value: 'seance', selected: f.seance }, 'Séance : plan large fixe, rien ne se coupe'));
+  const tempsChamp = (valeur, auto) => h('input', { class: 'champ', type: 'text', inputmode: 'decimal', value: valeur != null ? minutes(valeur) : '',
+    placeholder: auto != null ? `auto : ${minutes(auto)}` : 'auto' });
+  const debut = tempsChamp(f.debut, auto?.debut);
+  const fin = tempsChamp(f.fin, auto?.fin);
+  const noms = ['Gauche', 'Droite', 'Haut', 'Bas'];
+  const rognages = noms.map((_, k) => h('input', { class: 'champ', type: 'number', min: '0', max: '45', step: '1', value: String(Math.round((f.rognage?.[k] || 0) * 100)) }));
+  const centrer = h('input', { type: 'checkbox', checked: !!f.centrer });
+  const enregistrer = async () => {
+    let corps;
+    try {
+      corps = { seance: type.value === 'seance', debut: lireTemps(debut.value), fin: lireTemps(fin.value),
+        rognage: rognages.map((c) => Math.min(45, Math.max(0, Number(c.value) || 0)) / 100), centrer: centrer.checked };
+    } catch (e) { toast(e.message, 'erreur'); return; }
+    try {
+      await api('POST', `/api/projets/${E.projetId}/rushs/${r.id}/fiche`, corps);
+      E.fichesRush.set(r.id, await api('GET', `/api/projets/${E.projetId}/rushs/${r.id}/fiche`));
+      toast('Réglages du rush enregistrés : ils comptent au prochain montage et au prochain aperçu.');
+      rafraichir();
+    } catch (e) { toast(e.message, 'erreur'); }
+  };
+  const ligne = (libelle, ...champs) => h('label', { class: 'ligne-fiche' }, h('span', {}, libelle), ...champs);
+  return h('div', { class: 'fiche-rush' },
+    h('div', { class: 'aide' }, icone('info'), h('span', {},
+      'Ces réglages sont appliqués par EDIVID lui-même : ils priment sur le LLM. Temps en minutes:secondes du rush. ',
+      'Laissez vide pour la plage automatique, qui retire l’entrée et la sortie de champ (la personne qui allume puis éteint la caméra).')),
+    ligne('Type', type),
+    ligne('Garder à partir de', debut),
+    ligne('Jusqu’à', fin),
+    h('div', { class: 'ligne-fiche' }, h('span', {}, 'Rogner (%)'),
+      h('div', { class: 'rognages' }, noms.map((n, k) => h('label', {}, h('span', { class: 'tres-petit muet' }, n), rognages[k])))),
+    h('label', { class: 'ligne-fiche' }, h('span', {}, 'Personne au centre'),
+      h('span', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, centrer,
+        h('span', { class: 'tres-petit muet' }, 'Rogne aussi le côté opposé, pour que la personne reste au milieu de l’image (on perd plus d’image).'))),
+    h('div', { class: 'tres-petit muet' }, 'Le cadre garde le format de la vidéo.'),
+    info.effective ? h('div', { class: 'tres-petit muet' }, `Plage gardée actuellement : ${minutes(info.effective.debut)} → ${minutes(info.effective.fin)} sur ${minutes(info.duree)}.`) : null,
+    h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '8px' } },
+      h('button', { class: 'btn petit', onclick: enregistrer }, icone('ok'), 'Enregistrer')));
 }
 
 // ------------------------------------------------------------------ lecteur et timelines

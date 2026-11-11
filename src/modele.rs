@@ -192,6 +192,28 @@ pub struct Rush {
     pub erreur: Option<String>,
     #[serde(default)]
     pub source: Option<InfosSource>,
+    #[serde(default)]
+    pub fiche: FicheRush,
+}
+
+/// Réglages propres à un rush, appliqués par le code (ils priment sur le LLM).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FicheRush {
+    /// Séance de sport : plan large fixe, rien ne se coupe dans la plage gardée.
+    #[serde(default)]
+    pub seance: bool,
+    /// Plage gardée fixée à la main (secondes du rush) ; sinon, plage automatique (entrée et sortie de champ).
+    #[serde(default)]
+    pub debut: Option<f64>,
+    #[serde(default)]
+    pub fin: Option<f64>,
+    /// Bandes retirées de l'image : gauche, droite, haut, bas (part de la largeur ou de la hauteur).
+    #[serde(default)]
+    pub rognage: [f64; 4],
+    /// Garder la personne au centre : la partie gardée est rendue symétrique autour de sa position moyenne (on
+    /// rogne d'autant le côté opposé).
+    #[serde(default)]
+    pub centrer: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

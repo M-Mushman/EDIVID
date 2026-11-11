@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::modele::{Analyse, Decision, Mot, Phrase, Projet};
+use crate::modele::{Analyse, Decision, FicheRush, Mot, Phrase, Projet};
 use crate::reglages::{nombre, texte, vrai, Reglages};
 
 pub const IPS: f64 = 30.0;
@@ -121,7 +121,106 @@ pub fn phrases_projet(p: &Projet, analyses: &[(String, Arc<Analyse>)]) -> Vec<Ph
             corriger(ph, texte);
         }
     }
-    ps
+    // Plage gardée de chaque rush (fiche ou entrée/sortie de champ) : les mots hors plage disparaissent. Un rush en
+    // séance sans parole dans sa plage est représenté par une phrase vide, qui porte toute la plage.
+    let mut res: Vec<Phrase> = Vec::new();
+    for (rush, a) in analyses {
+        let fiche = fiche_rush(p, rush);
+        let (debut, fin) = plage(&fiche, a);
+        let avant = res.len();
+        for mut ph in ps.iter().filter(|ph| &ph.rush == rush).cloned() {
+            if ph.t1 > debut && ph.t0 < fin && !(ph.t0 >= debut && ph.t1 <= fin) {
+                ph.mots.retain(|m| m.t1 > debut + 0.02 && m.t0 < fin - 0.02);
+                if ph.mots.is_empty() {
+                    continue;
+                }
+                ph.t0 = ph.mots[0].t0;
+                ph.t1 = ph.mots[ph.mots.len() - 1].t1;
+                ph.texte = recoller(&ph.mots.iter().map(|m| m.mot.as_str()).collect::<Vec<_>>());
+            } else if ph.t1 <= debut || ph.t0 >= fin {
+                continue;
+            }
+            res.push(ph);
+        }
+        if fiche.seance && res.len() == avant {
+            res.push(Phrase {
+                cle: format!("{rush}:seance"),
+                rush: rush.clone(),
+                t0: debut,
+                t1: fin,
+                silence_avant: 0.0,
+                db: 0.0,
+                texte: "(séance sans parole)".into(),
+                mots: vec![],
+                fusionnees: vec![],
+            });
+        }
+    }
+    res
+}
+
+pub fn fiche_rush(p: &Projet, rush: &str) -> FicheRush {
+    p.rushs.iter().find(|r| r.id == rush).map(|r| r.fiche.clone()).unwrap_or_default()
+}
+
+/// Plage gardée d'un rush : celle de la fiche, sinon l'automatique.
+pub fn plage(fiche: &FicheRush, a: &Analyse) -> (f64, f64) {
+    let (d, f) = plage_auto(a);
+    let debut = fiche.debut.unwrap_or(d).clamp(0.0, a.duree);
+    let fin = fiche.fin.unwrap_or(f).clamp(debut, a.duree);
+    if fin - debut < 0.5 { (0.0, a.duree) } else { (debut, fin) }
+}
+
+/// Plage automatique : on retire l'entrée et la sortie de champ (la personne qui allume puis éteint la caméra).
+/// La personne est en place quand son visage garde une taille proche de la médiane du rush pendant 2 s. Prudent :
+/// début au plus tôt entre ce moment et le premier mot (− 0,5 s), fin au plus tard entre la fin du dernier visage
+/// stable et le dernier mot (+ 0,6 s) ; jamais une parole perdue.
+pub fn plage_auto(a: &Analyse) -> (f64, f64) {
+    let premier_mot = a.mots.first().map(|m| (m.t0 - 0.5).max(0.0));
+    let dernier_mot = a.mots.last().map(|m| (m.t1 + 0.6).min(a.duree));
+    let mut largeurs: Vec<f64> = a.visages.iter().map(|v| v.visage[2] - v.visage[0]).filter(|w| *w > 0.0).collect();
+    let (mut debut_v, mut fin_v) = (None, None);
+    if !largeurs.is_empty() {
+        largeurs.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        let mediane = largeurs[largeurs.len() / 2];
+        let stable: Vec<(f64, bool)> = a.visages.iter().map(|v| {
+            let w = v.visage[2] - v.visage[0];
+            (v.t, w >= 0.6 * mediane && w <= 1.6 * mediane)
+        }).collect();
+        // Suites de détections stables sans trou de plus de 0,5 s, d'au moins 2 s.
+        let mut suites: Vec<(f64, f64)> = Vec::new();
+        let mut cours: Option<(f64, f64)> = None;
+        for &(t, ok) in &stable {
+            cours = match (cours, ok) {
+                (Some((a0, a1)), true) if t - a1 <= 0.5 => Some((a0, t)),
+                (c, true) => {
+                    if let Some(c) = c { suites.push(c); }
+                    Some((t, t))
+                }
+                (c, false) => {
+                    if let Some(c) = c { suites.push(c); }
+                    None
+                }
+            };
+        }
+        if let Some(c) = cours { suites.push(c); }
+        suites.retain(|(a0, a1)| a1 - a0 >= 2.0);
+        debut_v = suites.first().map(|s| s.0);
+        fin_v = suites.last().map(|s| (s.1 + 0.2).min(a.duree));
+    }
+    let debut = match (debut_v, premier_mot) {
+        (Some(v), Some(m)) => v.min(m),
+        (Some(v), None) => v,
+        (None, Some(m)) => m,
+        (None, None) => 0.0,
+    };
+    let fin = match (fin_v, dernier_mot) {
+        (Some(v), Some(m)) => v.max(m),
+        (Some(v), None) => v,
+        (None, Some(m)) => m,
+        (None, None) => a.duree,
+    };
+    if fin - debut < 1.0 { (0.0, a.duree) } else { (debut, fin) }
 }
 
 /// Remplace les mots d'une phrase par le texte corrigé, en gardant le minutage d'origine : un mot
@@ -233,6 +332,8 @@ pub struct Plan {
     pub pousse: bool,
     /// Morceau d'une poussée répartie sur plusieurs plans : avance régulière, sans ralenti à la fin du plan.
     pub lineaire: bool,
+    /// Séance : plan large fixe, même cadre pour tout le rush.
+    pub fixe: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -403,19 +504,34 @@ fn hauteur_visage(z: f64) -> f64 {
 /// rognée) au plus serré que la source supporte sans perte, séparés d'un pas franc.
 struct Grille {
     source: (f64, f64),
-    haut: f64,
+    /// Partie utile de la source, une fois les bandes rognées retirées.
+    utile: Rect,
     base: (f64, f64),
     niveaux: Vec<f64>,
     plafond: f64,
 }
 
 impl Grille {
-    fn nouvelle(a: &Analyse, sortie: (u32, u32), rognage: f64, pas: f64) -> Grille {
+    /// `rognage` : bandes retirées (gauche, droite, haut, bas), en part de la largeur ou de la hauteur.
+    fn nouvelle(a: &Analyse, sortie: (u32, u32), rognage: [f64; 4], centre: Option<f64>, pas: f64) -> Grille {
         let source = (a.largeur as f64, a.hauteur as f64);
-        let haut = (source.1 * rognage.clamp(0.0, 0.3)).round();
-        let utile = (source.0, source.1 - haut);
+        let [g, d, h, b] = rognage.map(|v| v.clamp(0.0, 0.45));
+        let (g, d) = if g + d > 0.8 { (g * 0.8 / (g + d), d * 0.8 / (g + d)) } else { (g, d) };
+        let (h, b) = if h + b > 0.8 { (h * 0.8 / (h + b), b * 0.8 / (h + b)) } else { (h, b) };
+        let mut utile = Rect {
+            x: (source.0 * g).round(),
+            y: (source.1 * h).round(),
+            w: (source.0 * (1.0 - g - d)).round(),
+            h: (source.1 * (1.0 - h - b)).round(),
+        };
+        // Personne au centre : partie gardée symétrique autour d'elle (au moins 30 % de la largeur).
+        if let Some(cx) = centre {
+            let demi = (cx - utile.x).min(utile.x + utile.w - cx).max(0.15 * source.0).min(utile.w / 2.0);
+            let gauche = (cx - demi).clamp(utile.x, utile.x + utile.w - 2.0 * demi);
+            utile = Rect { x: gauche.round(), y: utile.y, w: (2.0 * demi).round(), h: utile.h };
+        }
         let aspect = sortie.0 as f64 / sortie.1 as f64;
-        let base = if utile.0 / utile.1 > aspect { (utile.1 * aspect, utile.1) } else { (utile.0, utile.0 / aspect) };
+        let base = if utile.w / utile.h > aspect { (utile.h * aspect, utile.h) } else { (utile.w, utile.w / aspect) };
         // Seule borne : l'agrandissement que la source supporte (une source 4K se resserre deux fois plus
         // qu'une source 1080p).
         let max = if sortie.0.min(sortie.1) >= 2160 { AGRANDISSEMENT_MAX_4K } else { AGRANDISSEMENT_MAX };
@@ -434,7 +550,7 @@ impl Grille {
             }
             None => vec![1.0],
         };
-        Grille { source, haut, base, niveaux, plafond }
+        Grille { source, utile, base, niveaux, plafond }
     }
 
     fn plus_serre(&self) -> usize {
@@ -451,8 +567,9 @@ impl Grille {
     fn cadre(&self, z: f64, ancre: (f64, f64)) -> Rect {
         let (w, h) = (self.base.0 / z, self.base.1 / z);
         let cy = ancre.1 + (0.5 - hauteur_visage(z)) * h;
-        let x = (ancre.0 - w / 2.0).clamp(0.0, (self.source.0 - w).max(0.0));
-        let y = (cy - h / 2.0).clamp(self.haut, (self.source.1 - h).max(self.haut));
+        let u = self.utile;
+        let x = (ancre.0 - w / 2.0).clamp(u.x, (u.x + u.w - w).max(u.x));
+        let y = (cy - h / 2.0).clamp(u.y, (u.y + u.h - h).max(u.y));
         Rect { x, y, w, h }
     }
 }
@@ -500,9 +617,17 @@ fn indice_cadre(cadre: &str) -> usize {
 /// qui précède : changer une phrase ne décale pas les cadres des suivantes. Les changements automatiques
 /// (punch d'une rafale, recentrage sur un visage qui s'est déplacé) attendent que le cadrage ait tenu
 /// MAINTIEN_MIN, et se font d'un cran entier, jamais d'un micro-recadrage. Une transition remet tout à plat.
-fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, r: &Reglages, finale: (u32, u32), sortie: (u32, u32)) {
+fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, p: &Projet, finale: (u32, u32), sortie: (u32, u32)) {
+    let r = &p.reglages;
     let pas = (1.0 + nombre(r, "ecart_cadrage") / 100.0).max(PAS_MIN);
-    let rognage = nombre(r, "rognage_haut") / 100.0;
+    let haut_global = nombre(r, "rognage_haut") / 100.0;
+    let rognage = |rush: &str| {
+        let mut v = fiche_rush(p, rush).rognage;
+        v[2] = v[2].max(haut_global);
+        v
+    };
+    // Séance : un seul ancrage pour tout le rush (visage médian sur toute la plage) : le cadre ne bouge jamais.
+    let mut ancres_fixes: HashMap<String, (f64, f64)> = HashMap::new();
     let intensite = match texte(r, "zooms").as_str() {
         "doux" => 0.8,
         "fort" => 1.2,
@@ -534,7 +659,28 @@ fn cadrer_plans(plans: &mut [Plan], analyses: &HashMap<&str, &Analyse>, r: &Regl
     let mut poussee: Option<(usize, (f64, f64))> = None;
     for (i, pl) in plans.iter_mut().enumerate() {
         let Some(a) = analyses.get(pl.rush.as_str()) else { continue };
-        let g = grilles.entry(pl.rush.clone()).or_insert_with(|| Grille::nouvelle(a, finale, rognage, pas));
+        let g = grilles.entry(pl.rush.clone()).or_insert_with(|| {
+            let fiche = fiche_rush(p, &pl.rush);
+            let (debut, fin) = plage(&fiche, a);
+            let centre = if fiche.centrer { visage_plan(a, debut, fin, false).map(|(x, _, _)| x) } else { None };
+            Grille::nouvelle(a, finale, rognage(&pl.rush), centre, pas)
+        });
+        if pl.fixe {
+            let ancre = *ancres_fixes.entry(pl.rush.clone()).or_insert_with(|| {
+                visage_plan(a, 0.0, a.duree, false).map(|(x, y, _)| (x, y))
+                    .unwrap_or((g.utile.x + g.utile.w / 2.0, g.utile.y + g.utile.h / 2.0))
+            });
+            pl.zone = g.cadre(1.0, ancre);
+            pl.z_fin = 1.0;
+            pl.centre_serre = (0.5, 0.5);
+            pl.lineaire = false;
+            pl.agrandissement = sortie.0 as f64 / pl.zone.w;
+            pl.visage_debut = 0.0;
+            pl.visage_fin = 0.0;
+            courant = None;
+            poussee = None;
+            continue;
+        }
         let serre_max = g.plus_serre();
         let (fx, fy, fw) = visage_plan(a, pl.t0, pl.t0 + pl.duree, pl.cadre == "yeux")
             .unwrap_or((g.source.0 / 2.0, g.source.1 / 2.0, 0.0));
@@ -613,6 +759,26 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
     let decisions: HashMap<&str, &Decision> =
         montage.map(|m| m.phrases.iter().map(|d| (d.cle.as_str(), d)).collect()).unwrap_or_default();
     let (largeur, hauteur) = dimensions(r, analyses.first().map(|(_, a)| a.as_ref()), apercu);
+    // Séances : chaque phrase couvre la plage jusqu'à la suivante (limite au milieu du silence), la première depuis
+    // le début de la plage, la dernière jusqu'à sa fin : la séance passe en continu, silences compris.
+    let mut bornes_seance: HashMap<&str, (f64, f64)> = HashMap::new();
+    let mut premieres_seance: HashSet<&str> = HashSet::new();
+    for (rush, a) in analyses {
+        let fiche = fiche_rush(p, rush);
+        if !fiche.seance {
+            continue;
+        }
+        let (debut, fin) = plage(&fiche, a);
+        let siennes: Vec<&Phrase> = ps.iter().filter(|ph| &ph.rush == rush).collect();
+        if let Some(premiere) = siennes.first() {
+            premieres_seance.insert(premiere.cle.as_str());
+        }
+        for (k, ph) in siennes.iter().enumerate() {
+            let a0 = if k == 0 { debut } else { (siennes[k - 1].t1 + ph.t0) / 2.0 };
+            let a1 = siennes.get(k + 1).map(|n| (ph.t1 + n.t0) / 2.0).unwrap_or(fin);
+            bornes_seance.insert(ph.cle.as_str(), (a0, a1.max(a0)));
+        }
+    }
     let zooms = texte(r, "zooms");
     let style = texte(r, "transition");
     let nettete = texte(r, "nettete_ia");
@@ -636,7 +802,7 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
     // Corps : phrases gardées, dans l'ordre.
     let corps: Vec<&Phrase> = ps
         .iter()
-        .filter(|ph| decisions.get(ph.cle.as_str()).map(|d| d.garder).unwrap_or(true))
+        .filter(|ph| bornes_seance.contains_key(ph.cle.as_str()) || decisions.get(ph.cle.as_str()).map(|d| d.garder).unwrap_or(true))
         .collect();
     let debut_corps: HashSet<&str> = corps.iter().take(3).map(|ph| ph.cle.as_str()).collect();
     let mut entrees: Vec<Entree> = Vec::new();
@@ -645,7 +811,7 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         let mut duree = 0.0;
         for cle in montage.map(|m| m.accroche.clone()).unwrap_or_default() {
             // Garde : l'accroche du LLM ne redit pas l'introduction (celle choisie à la main est prise telle quelle).
-            if debut_corps.contains(cle.as_str()) && !choisie {
+            if (debut_corps.contains(cle.as_str()) && !choisie) || bornes_seance.contains_key(cle.as_str()) {
                 continue;
             }
             if let Some(ph) = par_cle.get(cle.as_str()) {
@@ -667,6 +833,7 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
             let mut candidates: Vec<&&Phrase> = corps
                 .iter()
                 .filter(|ph| ph.t0 > 60.0 && ph.t1 - ph.t0 <= 6.0 && !debut_corps.contains(ph.cle.as_str()))
+                .filter(|ph| !bornes_seance.contains_key(ph.cle.as_str()))
                 .filter(|ph| decisions.get(ph.cle.as_str()).map(|d| d.regime == "impact").unwrap_or(false))
                 .collect();
             candidates.sort_by(|a, b| b.db.partial_cmp(&a.db).unwrap_or(std::cmp::Ordering::Equal));
@@ -698,7 +865,8 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         if let Some(t) = chapitres.get(&ph.cle) {
             en_attente.push(t.clone());
         }
-        if decisions.get(ph.cle.as_str()).map(|d| d.garder).unwrap_or(true) && !en_attente.is_empty() {
+        let gardee = bornes_seance.contains_key(ph.cle.as_str()) || decisions.get(ph.cle.as_str()).map(|d| d.garder).unwrap_or(true);
+        if gardee && !en_attente.is_empty() {
             debut_partie.insert(ph.cle.clone(), en_attente.remove(0));
             en_attente.clear();
         }
@@ -727,6 +895,17 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         }
         let son = &sons[ph.rush.as_str()];
         let mut d = e.decision.clone();
+        let seance_bornes = if e.accroche { None } else { bornes_seance.get(ph.cle.as_str()).copied() };
+        let seance = seance_bornes.is_some();
+        if seance {
+            d.cadre = "large".into();
+            d.regime = "respiration".into();
+            d.mouvement = Some("aucun".into());
+            d.transition = None;
+            if !premieres_seance.contains(ph.cle.as_str()) {
+                d.transition_choisie = Some("coupe".into());
+            }
+        }
         if zooms == "aucun" {
             d.cadre = "large".into();
         } else if d.cadre == "yeux" && !vrai(r, "yeux") {
@@ -737,7 +916,8 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         let partie = (!e.accroche).then(|| debut_partie.get(&ph.cle)).flatten();
         let veut = !e.accroche
             && !plans.is_empty()
-            && (premier_du_corps || partie.is_some() || d.transition.is_some() || d.transition_choisie.is_some());
+            && (premier_du_corps || partie.is_some() || d.transition.is_some() || d.transition_choisie.is_some())
+            && !(seance && !premieres_seance.contains(ph.cle.as_str()));
         if veut {
             // Le choix fait à la main prime ; « coupe » = aucune transition.
             transition = match d.transition_choisie.as_deref() {
@@ -766,6 +946,10 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
         let silence_max = if respiration { (rythme_max * 2.0f64).min(1.0) } else { rythme_max };
         let traine = if respiration { 0.18 } else { 0.08 };
         let mut segments: Vec<(f64, f64)> = Vec::new();
+        if let Some(b) = seance_bornes {
+            segments.push(b);
+            series.clear();
+        }
         for (k, s) in series.iter().enumerate() {
             let mut debut = son.debut(s[0].t0) - 0.03;
             let fin = son.fin(s[s.len() - 1].t1) + traine;
@@ -793,7 +977,13 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
                 }
             }
         }
-        segments.retain(|(a0, a1)| a1 - a0 >= DUREE_MIN_PLAN * 0.7);
+        // En séance, les bornes se suivent à l'image près : seul un morceau nul une fois arrondi est retiré (le filtre
+        // des morceaux trop courts laisserait un trou d'une image).
+        if seance {
+            segments.retain(|(a0, a1)| arrondi_image(*a1) > arrondi_image(*a0));
+        } else {
+            segments.retain(|(a0, a1)| a1 - a0 >= DUREE_MIN_PLAN * 0.7);
+        }
 
         // Chaque mot va au morceau gardé qu'il recouvre le plus, s'il le recouvre vraiment (50 ms, ou 20 % de sa
         // durée) : les instants de la transcription débordent souvent de quelques dixièmes sur les coupes, et un
@@ -820,7 +1010,8 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
             .collect();
         for (k, (s0, s1)) in segments.iter().enumerate() {
             let t0 = arrondi_image(*s0);
-            let duree = arrondi_image(s1 - s0).max(1.0 / IPS);
+            // Séance : bornes arrondies chacune à l'image, pour que les plans se suivent sans image perdue ni doublée.
+            let duree = if seance { arrondi_image(*s1) - t0 } else { arrondi_image(s1 - s0).max(1.0 / IPS) };
             // Mouvement choisi à la main, sinon celui du rythme (si le réglage général le permet).
             let (punch, pousse) = match d.mouvement.as_deref() {
                 _ if zooms == "aucun" => (false, false),
@@ -889,6 +1080,7 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
                 punch,
                 pousse,
                 lineaire: false,
+                fixe: seance,
             });
             sortie_t += duree;
         }
@@ -896,7 +1088,7 @@ pub fn programme(p: &Projet, analyses: &[(String, Arc<Analyse>)], ps: &[Phrase],
 
     // Cadrage d'ensemble, sur la grille de la définition finale : l'aperçu montre les mêmes cadres.
     let finale = dimensions(r, analyses.first().map(|(_, a)| a.as_ref()), false);
-    cadrer_plans(&mut plans, &analyses_par_rush, r, finale, (largeur, hauteur));
+    cadrer_plans(&mut plans, &analyses_par_rush, p, finale, (largeur, hauteur));
     let veut_nettete = !apercu && nettete != "non";
     for pl in plans.iter_mut() {
         pl.nettete = veut_nettete && pl.agrandissement > SEUIL_NETTETE;

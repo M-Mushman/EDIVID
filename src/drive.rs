@@ -355,7 +355,7 @@ async fn prendre(etat: &EtatPartage, d: &Drive, compte: &str, groupe: &str, fich
         let local = dossier_rushs.join(&fichier);
         let source = chemin(&d.distant, &format!("{}/{}", d.entree, f.chemin));
         rclone_cmd(&["copyto", &source, &local.to_string_lossy()]).await.with_context(|| format!("téléchargement de {nom}"))?;
-        p.rushs.push(Rush { id: rid, nom, fichier, taille: f.taille, etat: EtatRush::Televerse, erreur: None, source: None });
+        p.rushs.push(Rush { id: rid, nom, fichier, taille: f.taille, etat: EtatRush::Televerse, erreur: None, source: None, fiche: Default::default() });
     }
     // Le projet existe ; les fichiers du Drive sont rangés pour ne jamais être repris.
     etat.enregistrer(&p).await?;

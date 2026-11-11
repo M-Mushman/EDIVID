@@ -1657,6 +1657,85 @@ pub fn resume_son(r: &crate::reglages::Reglages) -> String {
     morceaux.join(" · ")
 }
 
+/// Écart d'exposition le plus fort qu'apporte la lumière stable (en diaphragmes) : au-delà, les hautes lumières
+/// brûlent ou les ombres bouchent.
+const LUMIERE_MAX_IL: f64 = 0.4;
+
+/// Luminance moyenne d'un rush (Y, 0–255), deux mesures par seconde, prise sur son proxy (tiré du fichier de travail
+/// en SDR) : quelques secondes de processeur, la carte graphique n'est pas sollicitée. Gardée dans lumiere.json.
+async fn lumiere_rush(etat: &EtatPartage, projet: &str, rush: &str) -> Result<Vec<f64>> {
+    let dossier = etat.dossier_travail(projet, rush);
+    let cache = dossier.join("lumiere.json");
+    if let Ok(t) = tokio::fs::read_to_string(&cache).await {
+        if let Ok(v) = serde_json::from_str::<Vec<f64>>(&t) {
+            return Ok(v);
+        }
+    }
+    let proxy = dossier.join("proxy.mp4");
+    let brut = dossier.join("lumiere.txt");
+    ffmpeg_simple(vec![
+        "-i".into(), proxy.to_string_lossy().into(), "-an".into(),
+        "-vf".into(), format!("fps=2,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file={}", brut.to_string_lossy()),
+        "-f".into(), "null".into(), "-".into(),
+    ]).await?;
+    let texte = tokio::fs::read_to_string(&brut).await?;
+    let valeurs: Vec<f64> = texte.lines()
+        .filter_map(|l| l.strip_prefix("lavfi.signalstats.YAVG="))
+        .filter_map(|v| v.trim().parse().ok())
+        .collect();
+    let _ = tokio::fs::remove_file(&brut).await;
+    if valeurs.is_empty() {
+        bail!("mesure de la lumière vide pour le rush {rush}");
+    }
+    tokio::fs::write(&cache, serde_json::to_string(&valeurs)?).await?;
+    Ok(valeurs)
+}
+
+/// Commandes d'exposition de la lumière stable, sur le temps du montage : toutes les demi-secondes (et à chaque
+/// plan), l'écart entre la luminosité du moment (moyenne glissante sur 3 s du rush) et la médiane du montage. Dans
+/// une séance, les plans se suivent dans le rush : la correction y reste continue.
+async fn commandes_lumiere(etat: &EtatPartage, p: &Projet, prog: &Programme) -> Result<PathBuf> {
+    let mut courbes: HashMap<String, Vec<f64>> = HashMap::new();
+    for pl in &prog.plans {
+        if !courbes.contains_key(&pl.rush) {
+            let v = lumiere_rush(etat, &p.id, &pl.rush).await?;
+            let n = v.len();
+            let lisse: Vec<f64> = (0..n).map(|i| {
+                let (a, b) = (i.saturating_sub(3), (i + 4).min(n));
+                (v[a..b].iter().sum::<f64>() / (b - a) as f64 - 16.0).max(2.0)
+            }).collect();
+            courbes.insert(pl.rush.clone(), lisse);
+        }
+    }
+    let niveau = |rush: &str, t: f64| -> f64 {
+        let c = &courbes[rush];
+        c[((t * 2.0).round().max(0.0) as usize).min(c.len() - 1)]
+    };
+    let mut releves: Vec<f64> = Vec::new();
+    for pl in &prog.plans {
+        let mut t = pl.t0;
+        while t < pl.t0 + pl.duree {
+            releves.push(niveau(&pl.rush, t));
+            t += 0.5;
+        }
+    }
+    releves.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let cible = releves.get(releves.len() / 2).copied().ok_or_else(|| anyhow!("montage vide"))?;
+    let max = 2f64.powf(LUMIERE_MAX_IL);
+    let mut lignes = String::new();
+    for pl in &prog.plans {
+        let mut u = 0.0;
+        while u < pl.duree {
+            let k = (cible / niveau(&pl.rush, pl.t0 + u)).clamp(1.0 / max, max);
+            lignes.push_str(&format!("{:.3} exposure@lum exposure {:.4};\n", pl.sortie_t0 + u, k.log2()));
+            u += 0.5;
+        }
+    }
+    let fichier = etat.dossier_projet(&p.id).join("travail").join("lumiere.cmd");
+    tokio::fs::write(&fichier, lignes).await?;
+    Ok(fichier)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Path, ass: &Path, sortie: &Path,
                    passe: Passe, nvenc: bool) -> Result<()> {
@@ -1669,8 +1748,24 @@ async fn assembler(etat: &EtatPartage, p: &Projet, prog: &Programme, liste: &Pat
     let mut entree = 1usize;
     let mut fc: Vec<String> = Vec::new();
 
-    // Image : cadence fixe, puis PostProd (couleur, teint, diffusion, netteté, grain…), puis les effets ponctuels.
-    fc.push(format!("[0:v]setpts=N/({ips}*TB)[ppe]"));
+    // Image : cadence fixe, lumière stabilisée (si demandée), puis PostProd (couleur, teint, diffusion, netteté,
+    // grain…), puis les effets ponctuels.
+    let lumiere = if vrai(r, "lumiere_stable") && !passe.hdr {
+        match commandes_lumiere(etat, p, prog).await {
+            Ok(f) => Some(f),
+            Err(e) => {
+                tracing::warn!("lumière stable non appliquée : {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    fc.push(match &lumiere {
+        Some(f) => format!("[0:v]setpts=N/({ips}*TB),sendcmd=f={},format=gbrpf32le,exposure@lum=exposure=0,format={}[ppe]",
+                           f.to_string_lossy(), passe.format()),
+        None => format!("[0:v]setpts=N/({ips}*TB)[ppe]"),
+    });
     // L'aperçu sort sans PostProd : le navigateur l'applique en direct, chaque réglage se voit aussitôt. Le rendu
     // final, lui, l'inscrit dans l'image.
     // Au rendu final, la couleur passe par sa table en 16 bits (la même que l'aperçu en direct) : les filtres de

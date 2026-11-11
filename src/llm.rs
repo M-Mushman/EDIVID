@@ -119,12 +119,20 @@ pub fn consigne_monteur(p: &Projet, plusieurs_rushs: bool) -> String {
     } else {
         ""
     };
+    let seances = if p.rushs.iter().any(|r| r.fiche.seance) {
+        "\nLes phrases marquées « séance » appartiennent à une séance de sport filmée en plan fixe : elles sont toutes gardées, \
+         en continu, silences compris, et le logiciel les monte lui-même. Pour elles : garder true, regime \"respiration\", cadre \
+         \"large\", transition null, mots_forts au choix ; ne les prends jamais pour l'accroche. Tu peux y placer des chapitres \
+         (un par exercice, par exemple). Tes choix portent sur les autres phrases."
+    } else {
+        ""
+    };
     format!(
         "Tu es monteur vidéo pour YouTube. Tu montes une vidéo face caméra (une personne qui parle) pour la rendre rythmée et \
 captivante, comme les meilleurs créateurs : coupes sèches, zooms, variations de rythme.
 
 Tu reçois la transcription en phrases numérotées : début et fin en secondes, silence qui précède, énergie de la voix (dB par \
-rapport à la moyenne ; positif = voix plus engagée).{rushs}
+rapport à la moyenne ; positif = voix plus engagée).{rushs}{seances}
 
 Phrase par phrase, tu décides :
 - garder : true ou false. Coupe les répétitions, faux départs, phrases ratées ou reprises, digressions sans valeur, formules \
@@ -168,16 +176,19 @@ Vérifie :
 - les \"respiration\" tombent-elles sur les vrais moments d'émotion ou de récit ?
 - a-t-on coupé une idée essentielle, un souvenir personnel, une phrase forte ? A-t-on gardé des répétitions ou faux départs ?
 - les chapitres découpent-ils bien la vidéo ?
-Respecte les mêmes règles que le monteur (valeurs permises, réglages).
+Respecte les mêmes règles que le monteur (valeurs permises, réglages, phrases de séance). Si les réglages se terminent \
+par des CONSIGNES DE LA PERSONNE QUI MONTE, elles priment sur cette liste de vérifications : ne défais jamais ce qu'elles \
+demandent.
 
 Rends le montage corrigé complet, au même format JSON. Dans \"notes\", trois à cinq phrases courtes : ce que tu as changé et pourquoi.";
 
-fn transcription(ps: &[Phrase], rangs: &HashMap<String, usize>) -> String {
+fn transcription(ps: &[Phrase], rangs: &HashMap<String, usize>, seances: &std::collections::HashSet<String>) -> String {
     ps.iter()
         .enumerate()
         .map(|(i, p)| {
             let rush = if rangs.len() > 1 { format!(" | rush {}", rangs[&p.rush] + 1) } else { String::new() };
-            format!("[{i}] {:.1}–{:.1}s | silence {:.1}s | {:+.0} dB{rush} | {}", p.t0, p.t1, p.silence_avant, p.db, p.texte)
+            let seance = if seances.contains(&p.rush) { " | séance" } else { "" };
+            format!("[{i}] {:.1}–{:.1}s | silence {:.1}s | {:+.0} dB{rush}{seance} | {}", p.t0, p.t1, p.silence_avant, p.db, p.texte)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -245,7 +256,8 @@ fn vers_json(m: &Montage, ps: &[Phrase]) -> Value {
 /// Montage complet : proposition puis relecture critique.
 pub async fn monter(etat: &EtatPartage, p: &Projet, ps: &[Phrase]) -> Result<Montage> {
     let rangs: HashMap<String, usize> = p.rushs.iter().enumerate().map(|(i, r)| (r.id.clone(), i)).collect();
-    let texte_ps = transcription(ps, &rangs);
+    let seances = p.rushs.iter().filter(|r| r.fiche.seance).map(|r| r.id.clone()).collect();
+    let texte_ps = transcription(ps, &rangs, &seances);
     let consigne = consigne_monteur(p, rangs.len() > 1);
     let schema = schema_montage();
     etat.signaler(&p.id, "Le LLM monte la vidéo", 10.0);

@@ -212,6 +212,14 @@ pub const CATALOGUE: &[Reglage] = &[
         defaut: || json!("non"),
     },
     Reglage {
+        section: "Vidéo finale",
+        cle: "lumiere_stable",
+        titre: "Lumière stable",
+        aide: "Quand la lumière de la pièce varie (nuages, lampe, exposition automatique de l'iPhone), EDIVID mesure la luminosité tout au long du montage et la corrige en douceur vers un niveau commun (au plus ±0,4 diaphragme, sans à-coup). Sans effet en sortie HDR.",
+        genre: Genre::Interrupteur,
+        defaut: || json!(false),
+    },
+    Reglage {
         section: "Cadrage et format",
         cle: "rognage_haut",
         titre: "Rogner le haut de la source",

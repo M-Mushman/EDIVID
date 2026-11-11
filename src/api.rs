@@ -78,6 +78,7 @@ pub fn routes(etat: EtatPartage) -> Router {
         .route("/api/projets/{id}/rushs/ordre", post(ordonner_rushs))
         .route("/api/projets/{id}/rushs/{rid}", delete(supprimer_rush))
         .route("/api/projets/{id}/rushs/{rid}/relancer", post(relancer_rush))
+        .route("/api/projets/{id}/rushs/{rid}/fiche", get(voir_fiche_rush).post(changer_fiche_rush))
         .route("/api/projets/{id}/medias/{mid}", get(fichier_media).put(remplacer_media).delete(supprimer_media))
         .route("/api/projets/{id}/reglages", post(changer_reglages))
         .route("/api/projets/{id}/phrase", post(changer_phrase))
@@ -403,7 +404,7 @@ async fn televerser_rush(State(etat): State<EtatPartage>, Path(id): Path<String>
         }
     };
     let rush = Rush { id: rid.clone(), nom: q.nom.chars().take(120).collect(), fichier, taille, etat: EtatRush::Televerse,
-                      erreur: None, source: None };
+                      erreur: None, source: None, fiche: Default::default() };
     etat.modifier(&id, |p| p.rushs.push(rush)).await?;
     etat.file.ajouter(&etat, &id, Genre::Preparer(rid.clone()));
     Ok(Json(json!({"id": rid})))
@@ -419,6 +420,49 @@ async fn ordonner_rushs(State(etat): State<EtatPartage>, Path(id): Path<String>,
         p.rushs.sort_by_key(|r| o.ids.iter().position(|x| x == &r.id).unwrap_or(usize::MAX));
     })
     .await?;
+    Ok(Json(json!({})))
+}
+
+/// Fiche d'un rush, avec la plage automatique (entrée et sortie de champ retirées) et la plage effective.
+async fn voir_fiche_rush(State(etat): State<EtatPartage>, Path((id, rid)): Path<(String, String)>) -> Reponse {
+    let p = etat.projet(&id).await?;
+    let r = p.rushs.iter().find(|r| r.id == rid).ok_or_else(|| anyhow!("rush introuvable"))?;
+    let analyses = etat.analyses_du_projet(&p).await?;
+    let a = analyses.iter().find(|(x, _)| x == &rid).map(|(_, a)| a.clone());
+    let (auto, effective) = match &a {
+        Some(a) => (Some(decoupe::plage_auto(a)), Some(decoupe::plage(&r.fiche, a))),
+        None => (None, None),
+    };
+    Ok(Json(json!({
+        "fiche": r.fiche,
+        "auto": auto.map(|(d, f)| json!({"debut": d, "fin": f})),
+        "effective": effective.map(|(d, f)| json!({"debut": d, "fin": f})),
+        "duree": a.as_ref().map(|a| a.duree),
+    })))
+}
+
+async fn changer_fiche_rush(State(etat): State<EtatPartage>, Path((id, rid)): Path<(String, String)>,
+                            Json(mut f): Json<crate::modele::FicheRush>) -> Reponse {
+    for v in f.rognage.iter_mut() {
+        if !v.is_finite() {
+            return Err(refus("rognage invalide"));
+        }
+        *v = v.clamp(0.0, 0.45);
+    }
+    let propre = |t: Option<f64>| t.filter(|t| t.is_finite() && *t >= 0.0);
+    f.debut = propre(f.debut);
+    f.fin = propre(f.fin);
+    if let (Some(d), Some(e)) = (f.debut, f.fin) {
+        if e <= d + 0.5 {
+            return Err(refus("la fin doit venir après le début"));
+        }
+    }
+    let trouve = etat.modifier(&id, |p| {
+        p.rushs.iter_mut().find(|r| r.id == rid).map(|r| r.fiche = f).is_some()
+    }).await?;
+    if !trouve {
+        return Err(refus("rush introuvable"));
+    }
     Ok(Json(json!({})))
 }
 
@@ -1648,7 +1692,7 @@ async fn importer_drive(State(etat): State<EtatPartage>, Path(id): Path<String>,
     if rushs {
         let nouveaux: Vec<Rush> = a_faire.iter().map(|(fid, fichier, _, nom, taille)| Rush {
             id: fid.clone(), nom: nom.clone(), fichier: fichier.clone(), taille: *taille, etat: EtatRush::Telechargement,
-            erreur: None, source: None }).collect();
+            erreur: None, source: None, fiche: Default::default() }).collect();
         etat.modifier(&id, |p| p.rushs.extend(nouveaux)).await?;
     }
     let n = a_faire.len();

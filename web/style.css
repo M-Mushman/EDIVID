@@ -204,6 +204,13 @@ h3 { font-size: 14px; font-weight: 650; }
 .rush .vignette svg { width: 18px; height: 18px; }
 .rush .titre { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rush .actions { display: flex; gap: 2px; }
+.bloc-rush { display: flex; flex-direction: column; gap: 6px; }
+.fiche-rush { border: 1px solid var(--bord, var(--surface-3)); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.fiche-rush .ligne-fiche { display: grid; grid-template-columns: 9.5rem 1fr; gap: 8px; align-items: center; font-size: 13px; }
+.fiche-rush .ligne-fiche .champ { margin-top: 0; }
+.fiche-rush .rognages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.fiche-rush .rognages label { display: flex; flex-direction: column; gap: 2px; }
+@media (max-width: 520px) { .fiche-rush .ligne-fiche { grid-template-columns: 1fr; } .fiche-rush .rognages { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .jauge { height: 5px; background: var(--surface-3); border-radius: 99px; overflow: hidden; margin-top: 5px; }
 .jauge > div { height: 100%; background: var(--accent); border-radius: 99px; transition: width .3s; }
 
