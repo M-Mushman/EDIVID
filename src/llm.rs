@@ -20,13 +20,14 @@ const POSITIONS: &[&str] = &["plein", "centre", "haut", "bas", "haut_gauche", "h
 pub async fn appeler(etat: &EtatPartage, projet: &str, systeme: &str, contenu: &str, schema: &Value,
                      reflexion: bool) -> Result<Value> {
     etat.carte.llm_debut(etat, projet).await?;
+    let num_ctx = fenetre(systeme, contenu);
     let reponse = etat
         .http
         .post(format!("{}/api/chat", etat.cfg.ollama))
         .json(&json!({
             "model": etat.cfg.modele_llm, "stream": false, "think": reflexion, "format": schema,
             "keep_alive": "10m",
-            "options": {"num_ctx": 32768, "temperature": 0.4},
+            "options": {"num_ctx": num_ctx, "temperature": 0.4},
             "messages": [{"role": "system", "content": systeme}, {"role": "user", "content": contenu}]
         }))
         .timeout(Duration::from_secs(3600))
@@ -38,7 +39,20 @@ pub async fn appeler(etat: &EtatPartage, projet: &str, systeme: &str, contenu: &
         return Err(anyhow!("Ollama : {e}"));
     }
     let message = corps["message"]["content"].as_str().unwrap_or_default();
+    if corps["done_reason"].as_str() == Some("length") {
+        return Err(anyhow!("réponse du LLM coupée : fenêtre de {num_ctx} jetons pleine (entrée trop longue)"));
+    }
     serde_json::from_str(message).with_context(|| format!("réponse du LLM illisible : {}", court(message)))
+}
+
+/// Fenêtre de contexte taillée sur l'entrée : la réponse d'un montage (une entrée par phrase) et la
+/// réflexion croissent avec la transcription. 32 768 fixes coupaient un projet de 22 min (2026-11-11 :
+/// ~12 000 jetons d'entrée, réponse tronquée). Estimation prudente : 3 caractères par jeton, entrée ×3
+/// (entrée + réponse + réflexion) + 16 384 de marge, arrondi à 8 192, entre 32 768 et 131 072.
+fn fenetre(systeme: &str, contenu: &str) -> usize {
+    let entree = (systeme.chars().count() + contenu.chars().count()) / 3;
+    let voulu = entree * 3 + 16_384;
+    (voulu.div_ceil(8_192) * 8_192).clamp(32_768, 131_072)
 }
 
 fn schema_montage() -> Value {
