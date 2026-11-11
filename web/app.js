@@ -1579,13 +1579,29 @@ function suivreLecture() {
     const el = cle ? E.noeuds.listePhrases?.querySelector(`[data-cle="${CSS.escape(cle)}"]`) : null;
     if (el) {
       el.classList.add('joue');
-      const liste = E.noeuds.listePhrases;
-      if (el.offsetTop < liste.scrollTop + 20 || el.offsetTop + el.offsetHeight > liste.scrollTop + liste.clientHeight - 20) {
-        liste.scrollTo({ top: el.offsetTop - liste.clientHeight / 3, behavior: 'smooth' });
-      }
+      alignerSurVideo(el);
     }
   }
   if (cle && srcT !== null) marquerMot(cle, srcT);
+}
+
+/**
+ * La phrase lue se place en face de la vidéo : son milieu à la hauteur du milieu de l'image (dans la limite de la
+ * liste), pour lire l'image et le texte d'un même regard. Si la vidéo est hors de l'écran, la phrase va au tiers
+ * haut de la liste.
+ */
+function alignerSurVideo(el) {
+  const liste = E.noeuds.listePhrases;
+  if (!liste || !liste.isConnected) return;
+  const rl = liste.getBoundingClientRect();
+  const re = el.getBoundingClientRect();
+  const rv = E.noeuds.video?.getBoundingClientRect();
+  const visible = rv && rv.height > 0 && rv.bottom > 0 && rv.top < window.innerHeight;
+  const demi = Math.min(re.height, rl.height) / 2;
+  const voulu = visible ? (rv.top + rv.bottom) / 2 : rl.top + rl.height / 3;
+  const cible = Math.min(Math.max(voulu, rl.top + demi), rl.bottom - demi);
+  const ecart = (re.top + re.bottom) / 2 - cible;
+  if (Math.abs(ecart) > 4) liste.scrollTo({ top: liste.scrollTop + ecart, behavior: 'smooth' });
 }
 
 /** Dans la phrase jouée, le mot prononcé à l'instant srcT (temps du rush) est mis en évidence. */
